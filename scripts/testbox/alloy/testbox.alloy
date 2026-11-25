@@ -1,8 +1,9 @@
-// Alloy — the test box's forwarder (Raspberry Pi 5, tailnet `blinkytest`).
+// Alloy — the test box's forwarder (Raspberry Pi 5).
 //
-// PRODUCER ONLY, the same shape as my-spark's spark-1dd6.alloy and homelab-stacks' devtop.alloy:
-// read this box's journal and local exporters and PUSH over Tailscale to the central LGTM stack on
-// bignasty (Josh-Wentworth/observability). No backend or UI here.
+// PRODUCER ONLY, the same shape as the forwarders in my-spark and homelab-stacks: read this box's
+// journal and local exporters and PUSH over the tailnet to the central LGTM stack
+// (Josh-Wentworth/observability). No backend or UI here. This repo is public, so the file names no
+// host: the endpoints come from /etc/default/alloy and the host label is the box's own hostname.
 //
 // Installed to /etc/alloy/config.alloy by scripts/testbox/deploy.py whenever it changes (then
 // `systemctl reload alloy`); setup.sh installs the package and /etc/default/alloy, which supplies the
@@ -10,7 +11,7 @@
 // URL at load, so a missing endpoint fails loudly instead of silently dropping signals.
 //
 // Labels stay low-cardinality (host, env, unit, service, level). Job, device and trace IDs go to
-// structured metadata. Validate with: alloy fmt scripts/testbox/alloy/blinkytest.alloy
+// structured metadata. Validate with: alloy fmt scripts/testbox/alloy/testbox.alloy
 
 // ============================================================ systemd journal → Loki
 discovery.relabel "journal" {
@@ -44,7 +45,7 @@ loki.source.journal "box" {
 	relabel_rules = discovery.relabel.journal.rules
 	forward_to    = [loki.process.box.receiver]
 	labels        = {
-		host = "blinkytest",
+		host = constants.hostname,
 		env  = "test",
 	}
 }
@@ -104,10 +105,10 @@ loki.process "box" {
 		}
 	}
 
-	forward_to = [loki.write.bignasty.receiver]
+	forward_to = [loki.write.central.receiver]
 }
 
-loki.write "bignasty" {
+loki.write "central" {
 	endpoint {
 		url = sys.env("LOKI_PUSH_URL")
 	}
@@ -127,9 +128,9 @@ prometheus.scrape "node" {
 }
 
 // The unix exporter's targets carry job="integrations/unix", which job_name doesn't override; pin
-// job="node" so the stack's NodeExporterAbsent-style checks match (the same fix as spark-1dd6.alloy).
+// job="node" so the stack's NodeExporterAbsent-style checks match (the same fix as the Spark's forwarder).
 prometheus.relabel "node_job" {
-	forward_to = [prometheus.remote_write.bignasty.receiver]
+	forward_to = [prometheus.remote_write.central.receiver]
 
 	rule {
 		target_label = "job"
@@ -141,12 +142,12 @@ prometheus.relabel "node_job" {
 // step and staging-suite metrics. job="blinky-server" is what dashboards and alerts key on.
 prometheus.scrape "blinky_server" {
 	targets         = [{__address__ = "127.0.0.1:8420"}]
-	forward_to      = [prometheus.remote_write.bignasty.receiver]
+	forward_to      = [prometheus.remote_write.central.receiver]
 	job_name        = "blinky-server"
 	scrape_interval = "15s"
 }
 
-// Alloy's own health (dropped samples, queue backlog), as on devtop.
+// Alloy's own health (dropped samples, queue backlog), as on the platform's other forwarders.
 prometheus.exporter.self "alloy" { }
 
 prometheus.scrape "alloy" {
@@ -157,7 +158,7 @@ prometheus.scrape "alloy" {
 
 // Same default-label override as node: the self exporter tags job="integrations/self".
 prometheus.relabel "alloy_job" {
-	forward_to = [prometheus.remote_write.bignasty.receiver]
+	forward_to = [prometheus.remote_write.central.receiver]
 
 	rule {
 		target_label = "job"
@@ -165,13 +166,13 @@ prometheus.relabel "alloy_job" {
 	}
 }
 
-prometheus.remote_write "bignasty" {
+prometheus.remote_write "central" {
 	endpoint {
 		url = sys.env("PROM_RW_URL")
 	}
 
 	external_labels = {
-		host = "blinkytest",
+		host = constants.hostname,
 		env  = "test",
 	}
 }

@@ -96,9 +96,9 @@ for (let r = 0; r < dsdMatrix.length; r++) {
   console.log(line);
 }
 
-// Generate shell commands for running on blinkyhost
+// Generate shell commands for running on the test box
 console.log(`\n${'='.repeat(80)}`);
-console.log('EXECUTION COMMANDS (run from blinky-test-player/ on blinkyhost):');
+console.log('EXECUTION COMMANDS (run from blinky-test-player/ on the test box):');
 console.log('='.repeat(80));
 console.log('# Each run plays all 18 tracks with the given parameter config.');
 console.log('# Total time: ~2.6 hours. Run sequentially.\n');

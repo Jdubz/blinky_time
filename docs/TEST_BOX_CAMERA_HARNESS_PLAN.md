@@ -1,6 +1,6 @@
 # Test box camera harness: plan
 
-**Status:** rollout steps 1-2 under way (2026-11-24). Built (`scripts/testbox/camera/`): the capture helper, region discovery, visual onsets, matching against serial detections, the timing budget, and `camera_review.py`, which records a validation run and reports on it. Not built: the follow test against drum labels, sound-to-light timing, a review attached to staging reports. Camera facts were measured on the box's Pi 5 (`blinkytest`) on 2026-10-27 and 2026-11-24. Part of the test box (`TEST_BOX.md`).
+**Status:** rollout steps 1-2 under way (2026-11-24). Built (`scripts/testbox/camera/`): the capture helper, region discovery, visual onsets, matching against serial detections, the timing budget, and `camera_review.py`, which records a validation run and reports on it. Not built: the follow test against drum labels, sound-to-light timing, a review attached to staging reports. Camera facts were measured on the box's Pi 5 on 2026-10-27 and 2026-11-24. Part of the test box (`TEST_BOX.md`).
 
 The box has one test chip driving an 8x8 WS2812 grid, and the camera sees the grid (hardware: `TEST_BOX.md`, "Hardware as built"). This plan adds the camera to the validation harness, so a run judges what a person at a show sees, not only what the firmware reports over serial.
 

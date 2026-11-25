@@ -12,7 +12,7 @@ Metrics per (gain, volume, track) combination:
   - Transient AUC: same for the ensemble transient output
   - Signal level: mean mic level (presence check)
 
-Designed to run on blinkyhost where devices and speakers are connected.
+Designed to run on the test box, where its chip and speaker are connected.
 Uses all available devices in parallel (3 gains per audio playback).
 
 Usage:

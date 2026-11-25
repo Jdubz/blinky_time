@@ -68,6 +68,14 @@ scratch/
 /reports/
 /research_notes/
 
-# The test box's private config (setup.sh reads ~/.config/blinky/observability.env; a copy next to
-# setup.sh seeds it on first boot). Only the .example template is tracked.
-scripts/testbox/observability.env
+# Private config: host endpoints, addresses and secrets live in ~/.config/blinky/ (dir 700, files
+# 600), never in this public repo. setup.sh seeds observability.env and hosts.env from copies next
+# to it on first boot. Only the *.example templates are tracked; scripts/check_topology.py (CI)
+# fails on topology that slips in anyway.
+observability.env
+hosts.env
+build.env
+spark.env
+# Vite's private overrides (blinky-console/.env.example is the template)
+.env.local
+.env.*.local

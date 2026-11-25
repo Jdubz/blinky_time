@@ -23,10 +23,10 @@ the **Corpus** dropdown at the top of the page; no restart:
 | `training` | `${BLINKY_DATA}/audio/combined` | `labels/onsets_consensus/` | `labels/onsets_human/` (under `${BLINKY_DATA}`, not in git) |
 | `edm` | `corpus/edm/` | same dir (`*.onsets_consensus.json`) | same dir (`*.onsets_human.json`, **commits to git**) |
 
-Edits to the `edm` corpus ride with `git pull` to blinkyhost, where the
+Edits to the `edm` corpus ride with `git pull` to the test box, where the
 validation harness applies them on the next test run. Edits to `training` stay
 wherever `${BLINKY_DATA}` points and are picked up by the next `prepare_dataset.py`
-run. The training corpus is archived on bignasty, not on devtop
+run. The training corpus is archived on the NAS, not on the build host
 (`docs/ML_STORAGE_LAYOUT.md`); work on a local copy and never write to the archive.
 
 ## Adding more corpora
@@ -205,7 +205,7 @@ when reading auto onsets — it works against either filename convention.
 
 ## How edits flow into training and validation
 
-**Validation (blinkyhost).** The blinky-server validation harness's
+**Validation (the test box).** The blinky-server validation harness's
 `track_discovery.discover_tracks()` looks for a sibling `<stem>.onsets_human.json`
 next to each audio file. If present, `load_ground_truth()` merges it via
 `apply_human_edits()` (in `blinky_scoring/onset_label_merge.py`, blinky-corpus). The

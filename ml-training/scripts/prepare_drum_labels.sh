@@ -12,7 +12,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Storage roots as the configs name them (#286); unset, the old devtop layout.
+# Storage roots as the configs name them (#286); unset, the old build-host layout.
 DATA="${BLINKY_DATA:-/mnt/storage/blinky-ml-data}"
 ALGORITHM="${ALGORITHM:-adtof}"
 # Which tracks to label: those with full-mix onset consensus (the clean step needs it).

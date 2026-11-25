@@ -22,9 +22,12 @@
 #      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. Grafana Alloy, shipping the box's journal, host metrics and traces to the central LGTM
-#      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy). Its push endpoints come from
+#      stack (scripts/testbox/alloy/testbox.alloy). Its push endpoints come from
 #      the private ~/.config/blinky/observability.env (template: observability.env.example);
 #      this step fails, naming the file and keys, until it exists
+#  9b. the private host config ~/.config/blinky/hosts.env (template: ../hosts.env.example):
+#      BLINKY_TESTBOX_URL, the box's URL as the home network reaches it, for the staging
+#      runner's report links. This step fails, naming the file and key, until it's set
 #  10. development tooling for this repo: ~/.local/bin on PATH (a managed ~/.profile block),
 #      blinky-serial-mcp, git hooks, Claude Code (with Linux MCP servers: blinky-serial on this
 #      box, playwright + its Chromium). No dev venv: ml analysis runs on CI or the Spark, and
@@ -247,7 +250,7 @@ install_service() {
 # toolchain is blinky-firmware's to set up (the header says how).
 
 # Grafana Alloy: the box's telemetry forwarder (logs, host metrics, traces) to the central LGTM
-# stack on bignasty (Josh-Wentworth/observability). Pinned to the version the central stack and the
+# stack (Josh-Wentworth/observability). Pinned to the version the central stack and the
 # Spark's forwarder run. deploy.py keeps /etc/alloy/config.alloy in step with the live slot.
 ALLOY_VERSION="1.16.0-1"
 # The stack's push endpoints are topology, and this repo is public: they live only in a private
@@ -300,6 +303,28 @@ read_observability_env() {
   fi
 }
 
+# host_config: ~/.config/blinky/hosts.env (the repo is public, so host endpoints live only there).
+# First boot: a copy next to this script (the card's blinky-testbox/hosts.env) seeds it.
+# staging.py refuses to run without BLINKY_TESTBOX_URL, so say now which file and key it needs.
+HOSTS_ENV="$HOME_DIR/.config/blinky/hosts.env"
+host_config() {
+  if [[ ! -f "$HOSTS_ENV" && -f "$HERE/hosts.env" ]]; then
+    as_user install -d -m 0700 "$(dirname "$HOSTS_ENV")" &&
+      install -m 0600 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" \
+        "$HERE/hosts.env" "$HOSTS_ENV" || return 1
+    log "seeded $HOSTS_ENV from $HERE/hosts.env (delete that copy from the card)"
+  fi
+  local v=""
+  [[ -f "$HOSTS_ENV" ]] && v=$(sed -n 's/^[[:space:]]*BLINKY_TESTBOX_URL[[:space:]]*=[[:space:]]*//p' "$HOSTS_ENV" | tail -n 1)
+  if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
+  if [[ ! $v =~ ^https?://[^[:space:]\<\>]+$ ]]; then
+    echo "$HOSTS_ENV: BLINKY_TESTBOX_URL missing or a placeholder. Copy the repo's" >&2
+    echo "scripts/hosts.env.example there (mode 600), set BLINKY_TESTBOX_URL=http://<this box>:8420" >&2
+    echo "(the owner's private notes), and re-run setup.sh. The staging runner won't run until then." >&2
+    return 1
+  fi
+}
+
 install_alloy() {
   read_observability_env || return 1
   install -d -m 0755 /etc/apt/keyrings || return 1
@@ -325,8 +350,8 @@ LOKI_PUSH_URL="$LOKI_PUSH_URL"
 PROM_RW_URL="$PROM_RW_URL"
 TEMPO_OTLP_ENDPOINT="$TEMPO_OTLP_ENDPOINT"
 ENV
-  local src="$DEPLOY_DIR/scripts/testbox/alloy/blinkytest.alloy"
-  [[ -f "$src" ]] || src="$HERE/alloy/blinkytest.alloy"
+  local src="$DEPLOY_DIR/scripts/testbox/alloy/testbox.alloy"
+  [[ -f "$src" ]] || src="$HERE/alloy/testbox.alloy"
   install -m 0644 "$src" /etc/alloy/config.alloy || return 1
   systemctl enable alloy || return 1
   systemctl restart alloy
@@ -392,7 +417,7 @@ claude_code() {
   if [[ ! -x "$claude" ]]; then
     as_user bash -o pipefail -c 'curl -fsSL https://claude.ai/install.sh | bash' || return 1
   fi
-  # The repo's .mcp.json reaches blinky-serial over ssh to blinkyhost. On the box it
+  # The repo's .mcp.json reaches blinky-serial over ssh to the fleet server. On the box it
   # runs locally against this box's own blinky-server; local scope overrides project
   # scope for this checkout only.
   # Each `remove` only clears an earlier run's entry (absent on the first run, so its
@@ -424,6 +449,7 @@ step "user ssh key"       user_ssh_key
 step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
 step "alloy (telemetry)"  install_alloy
+step "host config"        host_config
 step "user profile"       user_profile
 step "blinky-serial-mcp"  serial_mcp
 step "git hooks"          git_hooks

@@ -61,7 +61,7 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 
 **Bare-chip recovery only:** blinky-firmware's `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 
-**Device on THIS machine's USB (not blinkyhost's):** blinky-firmware's `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
+**Device on THIS machine's USB (not the fleet server's):** blinky-firmware's `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
 - **Explicit target:** `json info` `device.id` must match `--device-id`.
 - **Pre-flight:** the device must be configured, with ≥ 75 s uptime if its `json info` reports `resetReason` (its reboot counter counts only fault resets), else ≥ 5 min 15 s (older firmware counts every boot until 5 min of uptime).
 - **Firmware:** the latest stable release by default (downloaded, sha256-verified). `--release bN` selects a specific release, and `--dev` a local build of a clean tree (test devices only). Then the server's hex/UF2 validators run.
@@ -85,7 +85,7 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 
 ## Bootloader and firmware builds
 
-Bootloader changes (`deploy-bootloader.sh`, the verifier, SWD recovery) and firmware builds (`scripts/build.sh`, the pinned toolchain) live in blinky-firmware with their rules. SWD recovery (the test box's XIAO Debug Mate, `docs/SWD_RECOVERY.md`) is described there; it is the only SWD path (the `swd-flash.local` Pi is retired).
+Bootloader changes (`deploy-bootloader.sh`, the verifier, SWD recovery) and firmware builds (`scripts/build.sh`, the pinned toolchain) live in blinky-firmware with their rules. SWD recovery (the test box's XIAO Debug Mate, `docs/SWD_RECOVERY.md`) is described there; it is the only SWD path (the old SWD Pi is retired).
 
 ## CRITICAL: Single Flash Entry Point (blinky-server)
 
@@ -201,7 +201,7 @@ Always use tmux:
 ```bash
 # Paths come from the storage roots (docs/ML_STORAGE_LAYOUT.md): set
 # BLINKY_DATA / BLINKY_WORK to wherever your local copy lives.
-OUT="${BLINKY_WORK:-/mnt/nvme}/outputs"
+OUT="${BLINKY_WORK:?set BLINKY_WORK (docs/ML_STORAGE_LAYOUT.md)}/outputs"
 tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir $OUT/<experiment> 2>&1 | tee $OUT/<experiment>/training.log"
 ```
 
@@ -214,6 +214,21 @@ tmux new-session -d -s training "cd ml-training && source venv/bin/activate && P
 - Don't ad-hoc flash or reconfigure devices; use scripted workflows.
 - Validation resets devices to defaults before each run — device settings persist across flashes and can corrupt tests otherwise.
 - `run_test` / `run_validation_suite` / `check_test_result` MCP tools submit jobs to blinky-server; no direct port management needed.
+
+## CRITICAL: No network topology in the repos
+
+blinky_time, blinky-firmware and blinky-corpus are public. Nothing in them names a host, a private or tailnet address, an mDNS name or a real machine's mount: name machines by role (the fleet server, the test box, the build host, the NAS, the Spark), use `192.0.2.x` and `example.invalid` in examples and tests, and say "ssh to the build host (an alias in your ssh config)" rather than an alias. Code reads endpoints from private config and never defaults to a real host (localhost defaults are fine where the tool really is local); a missing key fails, naming the file and the key.
+
+Private config lives in `~/.config/blinky/` (dir 700, files 600; `KEY=value`, parsed, never sourced; the environment overrides the file). Keys only; values are in the owner's private notes:
+
+| File | Keys |
+|---|---|
+| `hosts.env` (template `scripts/hosts.env.example`) | `BLINKY_SERVER_URL` (fleet server; `deploy.sh`), `BLINKY_TESTBOX_URL` (the test box; staging report links), `BLINKY_SERIAL_SSH` (fleet server ssh target; `.mcp.json` expands it from the environment, so export it) |
+| `observability.env` (template `scripts/testbox/observability.env.example`) | `LOKI_PUSH_URL`, `PROM_RW_URL`, `TEMPO_OTLP_ENDPOINT` (test box Alloy) |
+| `spark.env` | `SPARK_JOB_API`, `SPARK_API_KEY`, `SPARK_WEBHOOK_SECRET` |
+| `build.env` | `BLINKY_BUILD_URL`, `BLINKY_BUILD_TOKEN` (build service, `docs/DEV_LOOP.md`) |
+
+blinky-console's dev proxy target is `BLINKY_DEV_PROXY_TARGET` in its gitignored `.env.local` (template `blinky-console/.env.example`; unset, localhost). `scripts/check_topology.py` runs in CI (Documentation Check) in all three repos; a justified exception goes in `.topology-allowlist` with its reason.
 
 ## Documentation Guidelines
 
@@ -231,7 +246,7 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 
 | Document | Purpose |
 |----------|---------|
-| `docs/ML_STORAGE_LAYOUT.md` | Where the ML data is (bignasty archive, the Spark's object store) and the `${BLINKY_DATA}`/`${BLINKY_WORK}` storage roots |
+| `docs/ML_STORAGE_LAYOUT.md` | Where the ML data is (the NAS archive, the Spark's object store) and the `${BLINKY_DATA}`/`${BLINKY_WORK}` storage roots |
 | `docs/ROADMAP.md` | **Priorities across all three repos** (P0 tooling, P1 audio, P2 smoothness, P3 ESP32-S3), quality bars, parked work and open owner decisions. GitHub issues, labelled `P0-tooling` / `P1-audio` / `P2-smoothness` / `P3-esp32` / `parked`, are the system of record. |
 | `docs/ML_IMPROVEMENT_PLAN.md` | ML status: NN shelved on the nRF52840 and why, the gate to turn it back on, ESP32-S3 feasibility (P3), paused items |
 | `docs/TEST_BOX.md` | The test box: hosts and roles, hardware as built (Pi 5, one XIAO Sense Plus in a Debug Mate, 8x8 grid), hands-off recovery chain, setup, blue/green deployer, staging runner |

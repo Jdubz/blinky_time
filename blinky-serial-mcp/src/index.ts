@@ -23,7 +23,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Default track directory for validation suites.
-// When the blinky-server runs on a different machine (e.g., blinkyhost),
+// When the blinky-server runs on a different machine (e.g., the fleet server),
 // the track directory must be a path on THAT machine, not the MCP host.
 // Set BLINKY_TRACK_DIR to override (e.g., /home/blinkytime/blinky_time/corpus/edm).
 const DEFAULT_TRACK_DIR = process.env.BLINKY_TRACK_DIR

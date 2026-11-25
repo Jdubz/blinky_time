@@ -109,7 +109,7 @@ def _default_corpora() -> list[Corpus]:
             audio_dir=_EDM_DIR,
             onset_dir=_EDM_DIR,
             human_edits_dir=_EDM_DIR,
-            description="In-repo validation corpus. Edits commit to git and ride to blinkyhost via pull.",
+            description="In-repo validation corpus. Edits commit to git and ride to the test box via pull.",
         ),
     ]
 

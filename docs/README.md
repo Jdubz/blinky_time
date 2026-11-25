@@ -19,7 +19,7 @@ Each plan carries a status header; check it before treating the plan as outstand
 | [`TEST_BOX.md`](TEST_BOX.md) | The test box: hosts and roles, hardware as built, hands-off recovery chain, setup, blue/green deployer, staging runner, per-server device ownership. |
 | [`TESTING_METHODOLOGY.md`](TESTING_METHODOLOGY.md) | Tiered testing, from blinky-firmware's host harness up to full validation on the box chip; drum metrics; removed metrics. |
 | [`BLE_REFERENCE.md`](BLE_REFERENCE.md) | BLE today: NUS connections, fleet broadcast, the BLE-DFU protocol, known limitations. |
-| [`ML_STORAGE_LAYOUT.md`](ML_STORAGE_LAYOUT.md) | Where the ML data is (bignasty archive, the Spark's object store) and the storage roots. |
+| [`ML_STORAGE_LAYOUT.md`](ML_STORAGE_LAYOUT.md) | Where the ML data is (the NAS archive, the Spark's object store) and the storage roots. |
 
 ## Plans (each has a status header)
 

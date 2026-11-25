@@ -1,12 +1,12 @@
 # Test box
 
-The test box is a Raspberry Pi 5 (`blinkytest`) with one test chip, a speaker and a camera. It runs blinky-server from merged master, hardware-tests blinky-firmware's `staging` head, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
+The test box is a Raspberry Pi 5 with one test chip, a speaker and a camera. It runs blinky-server from merged master, hardware-tests blinky-firmware's `staging` head, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
 
 The box routes data and captures tests. Heavy work (training, stem separation, label generation, long analysis) goes to CI or to the DGX Spark through its job API, not to the Pi.
 
 ## Two hosts, two roles
 
-| | blinkyhost (production) | Test box (`blinkytest`) |
+| | Fleet server (production) | Test box |
 |---|---|---|
 | Runs | lemon-cart (sibling repo): WiFi AP, Caddy, Hub UI, station-api, blinky-server | blinky-server only (`--no-ble --staging`), including its Spark client (#288): it submits GPU jobs and receives the Spark's webhooks. Large assets stay in the Spark's object store; the box keeps only data it collects and test files. |
 | Manages | Finished devices in the fleet | Its own test chip |
@@ -16,10 +16,10 @@ The box routes data and captures tests. Heavy work (training, stem separation, l
 
 Rules that follow:
 
-- **The two servers never share devices.** A finished device is never plugged into the box, and a box chip is never enrolled on blinkyhost.
+- **The two servers never share devices.** A finished device is never plugged into the box, and a box chip is never enrolled on the fleet server.
 - **No BLE on the box server.** It runs with `--no-ble`, and `setup.sh` turns Bluetooth off at the OS level (`dtoverlay=disable-bt`). blinky-server has no discovery allowlist, so with BLE on it could adopt a production device in radio range, and its auto-recovery could flash it.
-- **No validation on blinkyhost.** A validation run plays music through the host's audio output, which on blinkyhost is the station's sound system.
-- **`deploy.sh` stays production-only.** It targets `blinkyhost.local:8420` and ships only stable releases.
+- **No validation on the fleet server.** A validation run plays music through the host's audio output, which on the fleet server is the station's sound system.
+- **`deploy.sh` stays production-only.** It targets the fleet server (`BLINKY_SERVER_URL`, private config below) and ships only stable releases.
 - **Every chip on a `--staging` server is a test chip** (#382). `device upload`, `reboot` and the rest of the gated list go straight to one chip through `/api/devices/{id}/command`, with no `X-Deploy-Tool` header; fleet-wide broadcasts stay gated. Staging builds go to any configured chip on the box, with no test-device list. The 60-second rule between resets still applies (CLAUDE.md).
 
 ## Hardware as built
@@ -28,7 +28,7 @@ Owner-stated and checked on 2026-11-23. Don't change this section from guesses; 
 
 | Part | As built |
 |------|----------|
-| Host | Raspberry Pi 5, hostname `blinkytest`. |
+| Host | Raspberry Pi 5. Its hostname is in the owner's private notes; Alloy labels the box's telemetry with it (`host`). |
 | Test chip | One XIAO nRF52840 **Sense Plus**, USB serial `87DE9B58C90AFE2D`, device config `testbox_grid_v1` (listed in blinky-firmware's `devices/test_devices.json`). All XIAO pins are soldered. Every bootloader and firmware build must run on both the Sense Plus and the fleet's plain Sense. |
 | Second chip | A **XIAO ESP32-S3**, attached by the owner on 2026-11-24 (USB cables replaced the same day). Measured: native USB Serial/JTAG, MAC `90:70:69:11:F8:10`, `/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_90:70:69:11:F8:10-if00`; it runs an old blinky build (`1.0.1`), **unconfigured, in safe mode**; blinky-server connects to it (`esp32s3`) and `json info` answers in ~2-16 ms. LED data on **D0** (owner, 2026-11-24); the rest of its LED wiring (LED type, count, layout, power) and its device config are not recorded yet: ask the owner. The box has no ESP32 flash path yet (P3). |
 | SWD probe | Seeed **XIAO Debug Mate**, the chip seated in it. CMSIS-DAP driven with OpenOCD, used for SWD recovery only. |
@@ -82,9 +82,15 @@ Two behaviours to expect: the server doesn't auto-recover a device within 30 min
 
 ## Software setup
 
-1. **Provisioning.** Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager (hostname `blinkytest`, user `jdubz`). Copy `scripts/testbox/` to the card's boot partition as `blinky-testbox/`, add your SSH key under `user:` → `ssh_authorized_keys`, and append `- [ bash, /boot/firmware/blinky-testbox/setup.sh, --user, jdubz ]` to `runcmd` in `user-data`. On first boot cloud-init runs `setup.sh` (log: `/var/log/blinky-testbox-setup.log`; result: `/var/lib/blinky-testbox/setup-ok` or `setup-failed`). It is idempotent: `sudo ~/blinky_time/scripts/testbox/setup.sh` re-runs it.
+1. **Provisioning.** Flash Raspberry Pi OS Lite 64-bit with Raspberry Pi Imager (the box's hostname from the owner's private notes, user `jdubz`). Copy `scripts/testbox/` to the card's boot partition as `blinky-testbox/`, add your SSH key under `user:` → `ssh_authorized_keys`, and append `- [ bash, /boot/firmware/blinky-testbox/setup.sh, --user, jdubz ]` to `runcmd` in `user-data`. On first boot cloud-init runs `setup.sh` (log: `/var/log/blinky-testbox-setup.log`; result: `/var/lib/blinky-testbox/setup-ok` or `setup-failed`). It is idempotent: `sudo ~/blinky_time/scripts/testbox/setup.sh` re-runs it.
 
-   **Private config.** This repo is public, so the box's addresses and keys live in `~/.config/blinky/` (the directory mode 700, its files mode 600), never in git. `observability.env` holds the LGTM stack's push endpoints (`LOKI_PUSH_URL`, `PROM_RW_URL`, `TEMPO_OTLP_ENDPOINT`). The template is `scripts/testbox/observability.env.example` and the values are in the owner's private notes. Until the file exists, setup.sh's Alloy step fails and names the file and keys. On first boot, an `observability.env` next to `setup.sh` on the card seeds it; delete that copy afterwards. `spark.env` holds the Spark Job API's URL and keys (`blinky_server/spark/service.py`).
+   **Private config.** This repo is public, so host names, addresses and keys live in `~/.config/blinky/` (the directory mode 700, its files mode 600), never in git. Each file is `KEY=value`, parsed and never sourced; an environment variable of the same name overrides the file, and a tool that needs a missing key fails, naming the file and the key. The values are in the owner's private notes. The files and their keys:
+   - `hosts.env` (template `scripts/hosts.env.example`): `BLINKY_SERVER_URL` (the fleet server, for `deploy.sh`), `BLINKY_TESTBOX_URL` (this box as the home network reaches it, for the staging report's links; setup.sh's host config step and `staging.py` stop, naming it, until it's set), `BLINKY_SERIAL_SSH` (the fleet server's ssh target for `.mcp.json`; export it in your shell, because Claude Code reads only the environment).
+   - `observability.env` (template `scripts/testbox/observability.env.example`): `LOKI_PUSH_URL`, `PROM_RW_URL`, `TEMPO_OTLP_ENDPOINT`, the LGTM stack's push endpoints. Until the file exists, setup.sh's Alloy step fails and names the file and keys.
+   - `spark.env`: `SPARK_JOB_API`, `SPARK_API_KEY`, `SPARK_WEBHOOK_SECRET` (`blinky_server/spark/service.py`).
+   - `build.env`: `BLINKY_BUILD_URL`, `BLINKY_BUILD_TOKEN` (the build service, `DEV_LOOP.md`).
+
+   On first boot, an `observability.env` or `hosts.env` next to `setup.sh` on the card seeds the file; delete the copy afterwards. `scripts/check_topology.py` (CI's Documentation Check) fails on a host name or private address in the repo; a justified exception goes in `.topology-allowlist` with its reason.
 2. **What `setup.sh` installs** (its header lists every step): the packages (Python, `ffmpeg` for `ffplay`, `uhubctl`, `udisks2`, `gh`, Node, OpenOCD); the repo clone with its `corpus` submodule; blinky-server with the `firmware` and `ble` extras (the server imports bleak at startup; BLE stays off through `--no-ble` and the overlay); the console build; passwordless sudo for the user (`sudoers.in`: the box is a dedicated dev/test machine administered by the Claude session that develops on it); Bluetooth off (`dtoverlay=disable-bt`); a udev rule for the Debug Mate; the deploy worktrees and units (step 3); and this repo's development tooling (blinky-server's `dev` extra in its own venv, a managed `~/.profile` block that puts `~/.local/bin` on PATH and nothing else, blinky-serial-mcp registered with Claude Code against the box's server, git hooks, Claude Code). No dev venv and no `ml-training/requirements.txt`: ml analysis and training run on CI or the Spark, not the box, and nothing here compiles C++. blinky-server's tests run in its venv (`blinky-server/venv`). No firmware toolchain (arduino-cli, the pinned core, cppcheck, GCC 13, adafruit-nrfutil): the box flashes published images with blinky-server's own host tools (`blinky-server/hosttools/`). To develop firmware on the box, clone blinky-firmware and follow its [BUILD_GUIDE.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/BUILD_GUIDE.md) (arduino-cli at the pinned version, then `bash scripts/setup_toolchain.sh`). The server creates its API key in `~/.blinky-api-key` on first use. Manual afterwards: `gh auth login`, `gh auth setup-git`, your git `user.name`/`user.email`, and sign in to Claude Code.
 3. **Deploys come from master only (blue/green).** blinky-server runs from `~/blinky-deploy`, a symlink to one of two worktrees of the clone, `~/blinky-deploy-a` and `~/blinky-deploy-b`. Each is detached at a master commit, with its own venv and console build. The clone `~/blinky_time` is for development; the server never runs from it.
 

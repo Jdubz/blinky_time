@@ -8,7 +8,7 @@
 
 **Exceptions still in the tree:**
 - `tools/serial_lock.py` still exists; `tools/uf2_upload.py` imports it and still has `_request_server_release()` for its standalone path. Deleting both is the only open item from Phase 2/6.
-- **Deliberate, not a gap:** tools that work on a device plugged into *this* workstation's USB open the serial port themselves: `tools/deploy_local.py`, `tools/release_gate.py`, `tools/uf2_upload_win.py`. They never run against blinkyhost's ports, which blinky-server owns.
+- **Deliberate, not a gap:** tools that work on a device plugged into *this* workstation's USB open the serial port themselves: `tools/deploy_local.py`, `tools/release_gate.py`, `tools/uf2_upload_win.py`. They never run against the fleet server's ports, which blinky-server owns.
 
 ## Problem
 
@@ -385,7 +385,7 @@ This script has flashed hundreds of devices without failure. The migration strat
 2. **Update** the server's subprocess call path (one line change in `firmware/uf2_upload.py` wrapper)
 3. **Remove** the `_request_server_release()` HTTP call path — when invoked by the server, the transport is already disconnected. The script's standalone lock acquisition code becomes a no-op (no lock file to contend with).
 4. **Test** by flashing a bare test chip via POST /api/devices/{id}/flash. Verify identical behavior.
-5. **Test** fleet flash via POST /api/fleet/flash on all blinkyhost devices.
+5. **Test** fleet flash via POST /api/fleet/flash on all the fleet server's devices.
 6. **Only then** delete `tools/uf2_upload.py` and `tools/fleet_flash.sh`.
 
 The script retains its `if __name__ == "__main__"` entry point. The server calls it as:

@@ -2,7 +2,7 @@
 """On-device onset accuracy from a workstation: play corpus tracks through this
 machine's speakers, record a USB-connected device's onsets, and score them.
 
-blinky-server runs the same evaluation on blinkyhost (`POST /api/test/validate`),
+blinky-server runs the same evaluation on the test box (`POST /api/test/validate`),
 but its serial transport is Linux-only. This runner covers a device on a
 Windows (or any) workstation's USB port. It reuses the server's code, so the
 numbers are directly comparable:

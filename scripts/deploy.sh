@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy firmware to blinkyhost devices.
+# Deploy firmware to the fleet server's devices.
 #
 # Single command: select firmware → upload → flash → verify.
 # The server handles everything after receiving the binary.
@@ -16,7 +16,9 @@
 #   ./scripts/deploy.sh --devices=all                  # latest stable to every device
 #   ./scripts/deploy.sh --devices=ID --release b214    # a specific stable release
 #
-# Requires: blinky-server running on blinkyhost.local:8420
+# Requires: blinky-server running on the fleet server. Its URL is private config, never in this
+#   public repo: BLINKY_SERVER_URL from the environment, else from ~/.config/blinky/hosts.env
+#   (template: scripts/hosts.env.example).
 # API key: reads from ~/.blinky-api-key or BLINKY_API_KEY env var
 #
 # Exit codes:
@@ -30,11 +32,12 @@
 #       almost always a host-side problem, not firmware brick. The script
 #       prints recovery steps before exiting; see also
 #       memory: feedback_brick_diagnosis_first_rule.md)
+#   6 = a removed flag (--dev, --skip-compile, --no-bump)
+#   7 = no fleet server URL (BLINKY_SERVER_URL in ~/.config/blinky/hosts.env)
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-BLINKY_SERVER="http://blinkyhost.local:8420"
 HEX="/tmp/blinky-build/blinky-things.ino.hex"
 RELEASE=""
 # How long to wait after flashing before reading back fps via json info.
@@ -80,6 +83,28 @@ EOF
 done
 
 fail() { echo "DEPLOY FAILED: $1" >&2; exit "$2"; }
+
+# The fleet server's URL: the environment's BLINKY_SERVER_URL, else the private hosts file's.
+# Parsed, never sourced. No default: a real host never goes in this public repo.
+HOSTS_ENV="${BLINKY_HOSTS_ENV:-$HOME/.config/blinky/hosts.env}"
+hosts_value() {  # hosts_value KEY: KEY=value or KEY="value" from $HOSTS_ENV, the last one wins
+    local v
+    [[ -f "$HOSTS_ENV" ]] || return 0
+    v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$HOSTS_ENV" | tail -n 1)
+    v="${v%$'\r'}"                           # a file saved on Windows
+    v="${v%"${v##*[![:space:]]}"}"            # trailing whitespace
+    if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
+    printf '%s' "$v"
+}
+BLINKY_SERVER="${BLINKY_SERVER_URL:-$(hosts_value BLINKY_SERVER_URL)}"
+BLINKY_SERVER="${BLINKY_SERVER%/}"
+if [[ ! $BLINKY_SERVER =~ ^https?://[^[:space:]\<\>]+$ ]]; then
+    echo "deploy.sh: no fleet server URL (got '${BLINKY_SERVER}')." >&2
+    echo "  Set BLINKY_SERVER_URL=http://<fleet-server>:8420 in $HOSTS_ENV" >&2
+    echo "  (mkdir -m 700 ~/.config/blinky; copy scripts/hosts.env.example there as hosts.env," >&2
+    echo "  chmod 600; the value is in the owner's private notes), or export BLINKY_SERVER_URL." >&2
+    exit 7
+fi
 
 # ─── Load API key ────────────────────────────────────────────────────
 
@@ -145,7 +170,7 @@ echo "  Firmware: ${EXPECTED_VERSION} [${CHANNEL}] (${HEX_SIZE} bytes)"
 # ─── Step 2: Upload firmware ─────────────────────────────────────────
 
 echo ""
-echo "=== Uploading firmware to blinkyhost ==="
+echo "=== Uploading firmware to the fleet server (${BLINKY_SERVER}) ==="
 
 # Path translation for Windows: mingw64 curl can't resolve /tmp/... unix
 # paths because it's a native Windows binary. cygpath -w converts to the
@@ -599,16 +624,18 @@ if [ "$ASSERT_RC" -ne 0 ]; then
         echo "  Could not reach blinky-server to diagnose post-deploy state."
         echo "  Either the server crashed mid-deploy, the network is down, or the"
         echo "  X-API-Key was rejected. Check:"
-        echo "    1. ssh blinkyhost.local sudo systemctl status blinky-server"
-        echo "    2. ssh blinkyhost.local sudo journalctl -u blinky-server -n 50"
+        echo "    On the fleet server (ssh to it; an alias in your ssh config):"
+        echo "    1. sudo systemctl status blinky-server"
+        echo "    2. sudo journalctl -u blinky-server -n 50"
         fail "Could not reach server to diagnose post-deploy state — server may be down." 5
     elif [[ "$TOTAL" -gt 0 && "$OFF" == "$TOTAL" ]]; then
         echo ""
         echo "  All $TOTAL targeted device(s) off the bus simultaneously — this pattern"
         echo "  almost always means the HOST USB stack is stuck (kernel/udev), not"
         echo "  firmware bricks. Try:"
-        echo "    1. ssh blinkyhost.local sudo systemctl restart systemd-udevd"
-        echo "    2. If that doesn't help, ssh blinkyhost.local sudo reboot"
+        echo "    On the fleet server (ssh to it; an alias in your ssh config):"
+        echo "    1. sudo systemctl restart systemd-udevd"
+        echo "    2. If that doesn't help, sudo reboot"
         echo "    3. Then re-run this deploy with --skip-compile"
         echo "  See memory: feedback_brick_diagnosis_first_rule.md"
         fail "All targeted devices off the bus — likely host USB stack, not firmware. Recovery steps printed above." 5

@@ -13,7 +13,7 @@ sys.path.insert(0, str(ML))
 from scripts.audio import STORAGE_ROOT_DEFAULTS, expand_roots, load_config  # noqa: E402
 
 
-def test_defaults_are_the_devtop_layout(monkeypatch):
+def test_defaults_are_the_old_build_host_layout(monkeypatch):
     monkeypatch.delenv("BLINKY_DATA", raising=False)
     monkeypatch.delenv("BLINKY_WORK", raising=False)
     cfg = expand_roots({"a": "${BLINKY_DATA}/labels", "b": ["${BLINKY_WORK}/processed", 3], "c": "plain"})

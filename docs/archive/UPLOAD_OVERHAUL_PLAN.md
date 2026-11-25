@@ -64,7 +64,7 @@ The custom bootloader modification removes this pin-reset requirement for our ma
 
 ## Implementation (Completed April 3, 2026)
 
-All phases completed. Custom bootloader deployed to all 4 blinkyhost devices via UF2 self-update (no SWD needed). Firmware updated to use RAM magic on all bootloader entry paths.
+All phases completed. Custom bootloader deployed to all 4 of the fleet server's devices via UF2 self-update (no SWD needed). Firmware updated to use RAM magic on all bootloader entry paths.
 
 **Bootloader changes** (`Adafruit_nRF52_Bootloader/src/main.c`):
 - Added `DFU_RAM_MAGIC_UF2` (0xBEEF0057), `DFU_RAM_MAGIC_BLE` (0xBEEF00A8), `DFU_RAM_MAGIC_QSPI` (0xBEEF00CC)
@@ -92,7 +92,7 @@ make BOARD=xiao_nrf52840_sense all
 
 **SWD Flash via Pi GPIO:**
 ```bash
-# On blinkyhost, connect:
+# On the fleet server, connect:
 #   Pi GPIO24 → SWDIO pad on nRF52840
 #   Pi GPIO25 → SWDCLK pad on nRF52840
 #   Pi GND    → GND pad on nRF52840

@@ -78,7 +78,7 @@ UNITS = (
 # is installed verbatim when it differs, then Alloy reloads (SIGHUP). setup.sh installs Alloy itself
 # and /etc/default/alloy (the push endpoints, from the box's private
 # ~/.config/blinky/observability.env; the config reads them with sys.env()).
-ALLOY_CONFIG_SRC = Path("scripts/testbox/alloy/blinkytest.alloy")
+ALLOY_CONFIG_SRC = Path("scripts/testbox/alloy/testbox.alloy")
 ALLOY_CONFIG = Path("/etc/alloy/config.alloy")
 MARKER = ".deploy-installed.json"  # in each slot: what its venv and console were built from
 

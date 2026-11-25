@@ -18,7 +18,7 @@ SHELL := /bin/bash
 #             processed_v*, mel_cache, training outputs. Single mount point so
 #             prep peak (~370 GB shards+final during merge) doesn't surprise us.
 # Same roots the configs use (${BLINKY_DATA} / ${BLINKY_WORK}, scripts/audio.py
-# STORAGE_ROOT_DEFAULTS): the environment wins, else the devtop layout (#286).
+# STORAGE_ROOT_DEFAULTS): the environment wins, else the old build-host layout (#286).
 BLINKY_DATA   ?= /mnt/storage/blinky-ml-data
 BLINKY_WORK   ?= /mnt/nvme
 STORAGE       := $(BLINKY_DATA)
@@ -182,7 +182,7 @@ calibrate-generate:
 	$(PYTHON) scripts/calibrate_mic.py generate --output-dir data/calibration
 
 calibrate-capture:
-	@echo "Run on blinkyhost with speakers connected:"
+	@echo "Run on the test box (speaker connected):"
 	@echo "  python3 scripts/calibrate_mic.py capture-all --ports /dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2"
 
 calibrate-analyze:
@@ -191,7 +191,7 @@ calibrate-analyze:
 		--output data/calibration/mic_profile.npz
 
 calibrate: calibrate-generate
-	@echo "Next: run 'make calibrate-capture' on blinkyhost, then 'make calibrate-analyze'"
+	@echo "Next: run 'make calibrate-capture' on the test box, then 'make calibrate-analyze'"
 
 status:
 	@echo "=== Dataset Status ==="
@@ -213,9 +213,9 @@ REVIEWER_PORT  := 8765
 # restart needed. Pass --corpus name=audio,onset,human to add more.
 #
 # Edits land in:
-#   training corpus -> /mnt/storage/.../labels/onsets_human/  (devtop-local)
+#   training corpus -> /mnt/storage/.../labels/onsets_human/  (local disk)
 #   edm corpus      -> corpus/edm/          (commits via git
-#                                                              -> blinkyhost)
+#                                                              -> the servers)
 reviewer:
 	$(REVIEWER) --port $(REVIEWER_PORT)
 
