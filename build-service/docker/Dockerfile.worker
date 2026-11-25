@@ -28,7 +28,8 @@ RUN curl -fsSL -o /tmp/arduino-cli.tgz \
  && arduino-cli version
 
 COPY requirements-worker.txt /opt/blinky/requirements-worker.txt
-RUN pip install --no-cache-dir --require-hashes -r /opt/blinky/requirements-worker.txt
+RUN pip install --no-cache-dir --require-hashes -r /opt/blinky/requirements-worker.txt \
+ && adafruit-nrfutil version
 
 RUN useradd --uid 10001 --user-group --create-home --home-dir /home/builder \
         --shell /usr/sbin/nologin builder \

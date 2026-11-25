@@ -54,7 +54,10 @@ BUILD_SH = """#!/bin/bash
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 [ "${1:-}" = "--dev" ] || { echo "want --dev"; exit 2; }
-[ -f FAIL_BUILD ] && { echo "error: build broken on purpose"; exit 1; }
+if [ -f FAIL_BUILD ]; then
+  mkdir -p "@OUT@"; printf 'g++ -Werror=return-type x.cpp\nx.cpp:1: the real error\n' > "@OUT@/compile.log"
+  echo "error: build broken on purpose"; exit 1
+fi
 N=$(tr -d '[:space:]' < blinky-things/BUILD_NUMBER)
 SHA=$(git rev-parse --short=8 HEAD)
 printf '#define FIRMWARE_VERSION "b%s-dev-%s"\\n' "$N" "$SHA" > blinky-things/types/Version.h

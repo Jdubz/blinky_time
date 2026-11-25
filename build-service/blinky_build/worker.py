@@ -269,9 +269,14 @@ class Worker:
         }
         out = self.cfg.output
         shutil.rmtree(out, ignore_errors=True)
-        self._run(logf, ["bash", "scripts/build.sh", "--dev"], env, "scripts/build.sh --dev")
-        if (out / "compile.log").is_file():
-            shutil.copyfile(out / "compile.log", d / "compile.log")
+        try:
+            self._run(logf, ["bash", "scripts/build.sh", "--dev"], env, "scripts/build.sh --dev")
+        except BuildFailed:
+            # build.sh shows only `grep error | head -40` of its compile log, which the
+            # compiler's -Werror flags can fill: the log's own tail has the real error.
+            self._keep_compile_log(out, d, logf, tail=True)
+            raise
+        self._keep_compile_log(out, d, logf, tail=False)
 
         # staging-build.yml "Package and validate", step for step.
         n = (src / "blinky-things/BUILD_NUMBER").read_text(encoding="utf-8").strip()
@@ -310,6 +315,17 @@ class Worker:
         shutil.rmtree(d / "package", ignore_errors=True)
         os.replace(partial, d / "package")
         return version
+
+    @staticmethod
+    def _keep_compile_log(out, d, logf, tail):
+        log_path = out / "compile.log"
+        if not log_path.is_file():
+            return
+        shutil.copyfile(log_path, d / "compile.log")
+        if tail:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            logf.write(f"\n=== compile.log, last {min(len(lines), 40)} lines:\n")
+            logf.write("\n".join(line[:400] for line in lines[-40:]) + "\n")
 
     @staticmethod
     def _check_package(pkg, sha, n, version):

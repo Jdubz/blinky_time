@@ -68,6 +68,8 @@ def test_build_failure_reports_log(client, service, remote, worker_env):
     view = client.req("GET", f"/v1/builds/{b['id']}")[1]
     assert view["state"] == "failed" and "scripts/build.sh --dev failed" in view["error"]
     assert "build broken on purpose" in view["log_tail"]
+    assert "x.cpp:1: the real error" in view["log_tail"]  # compile.log's tail, not build.sh's grep
+    assert (service.cfg.jobs / b["id"] / "compile.log").is_file()
 
 
 def test_incremental_tree_keeps_unchanged_mtimes(client, service, remote, worker_env, tmp_path):
