@@ -29,13 +29,29 @@ SETTLE_MS = 12000  # ACF convergence time — skip early readings
 
 
 CLOCK_SYNC_SAMPLES = 5  # json info round trips per sync; the one with the shortest RTT is kept
+# Loop timing the sync's json info carries (last closed 5 s window): kept with the clock so a run
+# records how fast the chip was looping DURING it. Validation streams `debug`+`fast`, which halves
+# the loop rate (~130 -> ~60 fps on the box chip), so a reading taken outside the run understates
+# the chip-frame term of any timing budget (the box camera's detection-to-light review).
+LOOP_FIELDS = (
+    "fps",
+    "minFrameMs",
+    "maxFrameMs",
+    "onsetUs",
+    "onsetMaxUs",
+    "acfUs",
+    "acfMaxUs",
+    "plpUs",
+    "plpMaxUs",
+)
 
 
 async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict[str, Any] | None:
     """The firmware-to-host clock offset from the best of ``samples`` round trips: the one with
     the shortest RTT, whose midpoint estimate is tightest (its error is at most RTT/2).
-    Returns {offset_ms, rtt_ms, samples}, or None if no sample succeeded (each failure is
-    logged by ``_sync_clock_sample``)."""
+    Returns {offset_ms, rtt_ms, samples, loop}, or None if no sample succeeded (each failure is
+    logged by ``_sync_clock_sample``). ``loop`` is the newest sample's LOOP_FIELDS that the
+    firmware reports (older builds lack the ACF/PLP ones)."""
     got = []
     for _ in range(samples):
         one = await _sync_clock_sample(device)
@@ -43,7 +59,8 @@ async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict
             got.append(one)
     if not got:
         return None
-    offset, rtt = min(got, key=lambda o: o[1])
+    offset, rtt, _ = min(got, key=lambda o: o[1])
+    loop = {k: got[-1][2][k] for k in LOOP_FIELDS if k in got[-1][2]}
     log.debug(
         "Clock sync %s: offset=%.1fms rtt=%.1fms (best of %d)",
         device.id[:12],
@@ -51,15 +68,16 @@ async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict
         rtt,
         len(got),
     )
-    return {"offset_ms": offset, "rtt_ms": rtt, "samples": len(got)}
+    return {"offset_ms": offset, "rtt_ms": rtt, "samples": len(got), "loop": loop}
 
 
-async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
-    """Measure clock offset between server and firmware: (offset_ms, rtt_ms).
+async def _sync_clock_sample(device: Device) -> tuple[float, float, dict[str, Any]] | None:
+    """Measure clock offset between server and firmware: (offset_ms, rtt_ms, info), where
+    info is the parsed json info reply.
 
     Sends `json info` (which includes `millis` field) and measures
     round-trip time. Returns (offset_ms = server_epoch_ms - firmware_millis,
-    rtt_ms), or None if sync fails.
+    rtt_ms, info), or None if sync fails.
 
     The round trip runs from writing the command line to the arrival of the reply line
     that carries `millis` (``send_command_timed``), not to ``send_command``'s return: that
@@ -158,7 +176,7 @@ async def _sync_clock_sample(device: Device) -> tuple[float, float] | None:
     rtt = t_recv - t_send
     server_midpoint = t_send + rtt / 2
     offset = server_midpoint - fw_millis
-    return offset, rtt
+    return offset, rtt, info
 
 
 async def _configure_device(device: Device, commands: list[str] | None = None) -> None:
@@ -291,6 +309,8 @@ async def _record_and_play(
             after_offset_ms=after["offset_ms"],
             after_rtt_ms=after["rtt_ms"],
             drift_ms=after["offset_ms"] - clock[device.id]["offset_ms"],
+            # Read right after the music, streaming still on: the loop timing of the run itself.
+            after_loop=after["loop"],
         )
     playback.clock = clock
     return playback, results

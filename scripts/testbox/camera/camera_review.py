@@ -190,6 +190,30 @@ def detections_epoch_s(raw: dict[str, Any], duration_s: float) -> np.ndarray | N
     return start / 1000.0 + t + drift_s * np.clip(t / duration_s, 0, 1)
 
 
+def _budget(
+    raw: dict[str, Any], fps_outside: list[float | None], period_ns: float, summary: dict[str, Any]
+) -> dict[str, Any]:
+    """The run's timing budget. The chip's loop rate comes from the run itself when the raw
+    capture has it (the server's post-run clock sync reads json info while streaming is still
+    on); otherwise the lower of the readings before and after the run, which streaming-off
+    reads overstate (validation's streaming halves the loop rate)."""
+    clock = raw.get("clock") or None
+    during = (clock or {}).get("after_loop") or {}
+    if during.get("fps"):
+        fps, source = float(during["fps"]), "during the run"
+    else:
+        fps = min((f for f in fps_outside if f), default=None)
+        source = "outside the run (streaming off: overstates the loop rate)" if fps else None
+    return ca.timing_budget(
+        frame_ns=period_ns,
+        exposure_us=summary["settings"]["exposure_us"],
+        chip_fps=fps,
+        clock=clock,
+        chip_max_frame_ms=during.get("maxFrameMs"),
+        chip_fps_source=source,
+    )
+
+
 def review_run(
     run: dict[str, Any],
     capture: dict[str, np.ndarray],
@@ -282,12 +306,7 @@ def review_run(
                 for k in range(lum.shape[1])
                 if recall[k] >= RESPONSIVE and k not in mine
             ],
-            "budget": ca.timing_budget(
-                frame_ns=period_ns,
-                exposure_us=summary["settings"]["exposure_us"],
-                chip_fps=min((f for f in fps.get(dev, []) if f), default=None),
-                clock=(raws[dev].get("clock") or None),
-            ),
+            "budget": _budget(raws[dev], fps.get(dev, []), period_ns, summary),
         }
         if profile["events"] and mine:
             sig = lum_w[:, mine].sum(axis=1)

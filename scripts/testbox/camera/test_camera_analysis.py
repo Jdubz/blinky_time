@@ -287,3 +287,17 @@ def test_line_time_comes_from_how_often_the_bottom_row_sees_a_flash_first() -> N
     assert r["inconsistent"] == 0
     assert r["line_time_ns"] == pytest.approx(line, rel=0.1)
     assert r["line_time_se_ns"] < 1000
+
+
+def test_the_budget_carries_the_longest_chip_frame_and_where_the_fps_came_from() -> None:
+    b = ca.timing_budget(
+        frame_ns=14.816e6,
+        exposure_us=1000,
+        chip_fps=60.0,
+        clock=None,
+        chip_max_frame_ms=37,
+        chip_fps_source="during the run",
+    )
+    assert b["chip_frame_ms"]["spread"] == pytest.approx(16.67, abs=0.01)
+    assert b["chip_frame_ms"]["longest"] == 37
+    assert b["chip_frame_ms"]["source"] == "during the run"
