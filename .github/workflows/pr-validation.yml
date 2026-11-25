@@ -1,8 +1,16 @@
 name: PR Validation
 
 on:
+  # Draft PRs run only the cheap checks (changed paths, docs); the heavy jobs (server, console,
+  # ML trainer contract, ADTOF labeler, camera analysis, feature parity) wait until the PR is
+  # ready for review: marking it ready (ready_for_review) starts a run with all of them
+  # (docs/DEV_LOOP.md, section 4). A heavy job skipped on a draft reports "skipped", which a
+  # required check accepts; GitHub never merges a draft, and the ready run's results replace
+  # the skipped ones on the same head. Re-running a run made while the PR was a draft replays
+  # its event and skips them again: mark the PR ready instead.
   pull_request:
     branches: [ master ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
   # Also validate master itself: two PRs that each pass alone can still break
   # together once both are merged. (blinky_time has no staging branch since the
   # repo split; firmware staging lives in blinky-firmware.)
@@ -93,10 +101,10 @@ jobs:
   blinky-server-tests:
     name: Blinky Server Tests
     runs-on: ubuntu-latest
-    # Skipped unless server changed (job `changes`); runs if that job failed, so a broken
-    # diff can never skip it silently.
+    # Heavy: skipped on a draft PR (see `on:`). Otherwise skipped unless server changed (job
+    # `changes`); runs if that job failed, so a broken diff can never skip it silently.
     needs: changes
-    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.server == 'true') }}
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.server == 'true') }}
 
     defaults:
       run:
@@ -156,6 +164,8 @@ jobs:
   testbox-camera:
     name: Test box camera analysis
     runs-on: ubuntu-latest
+    # Heavy: skipped on a draft PR (see `on:`).
+    if: ${{ github.event.pull_request.draft != true }}
 
     steps:
     - name: Checkout repository
@@ -178,6 +188,8 @@ jobs:
     # publishes (ml-training/spec/), not its source: no firmware checkout here.
     name: Feature Parity (Python ↔ firmware)
     runs-on: ubuntu-latest
+    # Heavy: skipped on a draft PR (see `on:`).
+    if: ${{ github.event.pull_request.draft != true }}
 
     steps:
     - name: Checkout repository
@@ -246,10 +258,10 @@ jobs:
     # Quoted: unquoted, YAML reads ` #305)` as a comment and the check is named "...(#304,".
     name: "Trainer meets the Spark gpu_task contract (#304, #305)"
     runs-on: ubuntu-latest
-    # Skipped unless ml changed (job `changes`); runs if that job failed, so a broken
-    # diff can never skip it silently.
+    # Heavy: skipped on a draft PR (see `on:`). Otherwise skipped unless ml changed (job
+    # `changes`); runs if that job failed, so a broken diff can never skip it silently.
     needs: changes
-    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
 
     steps:
     - name: Checkout repository
@@ -301,10 +313,10 @@ jobs:
     # committed evidence (drum_label_adtof.json) must be what it produces.
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Skipped unless ml changed (job `changes`); runs if that job failed, so a broken
-    # diff can never skip it silently.
+    # Heavy: skipped on a draft PR (see `on:`). Otherwise skipped unless ml changed (job
+    # `changes`); runs if that job failed, so a broken diff can never skip it silently.
     needs: changes
-    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.ml == 'true') }}
 
     steps:
     - name: Checkout repository
@@ -350,10 +362,10 @@ jobs:
   blinky-console-tests:
     name: Blinky Console Tests
     runs-on: ubuntu-latest
-    # Skipped unless console changed (job `changes`); runs if that job failed, so a broken
-    # diff can never skip it silently.
+    # Heavy: skipped on a draft PR (see `on:`). Otherwise skipped unless console changed (job
+    # `changes`); runs if that job failed, so a broken diff can never skip it silently.
     needs: changes
-    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.console == 'true') }}
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.console == 'true') }}
 
     defaults:
       run:
