@@ -11,10 +11,9 @@ mechanism.
 
 Modules in this package:
 
-  - ``compile``: builds the ``.hex`` (and the DFU ``.zip`` adafruit-nrfutil
-    expects for BLE-DFU) from the Arduino-CLI command, in a worker
-    thread.
-  - ``uf2_upload``: launches and watches the ``tools/uf2_upload.py``
+  - ``compile``: builds the DFU ``.zip`` adafruit-nrfutil expects for BLE-DFU
+    from a released ``.hex`` (the server never compiles firmware).
+  - ``uf2_upload``: launches and watches the ``hosttools/uf2_upload.py``
     subprocess that writes a UF2 image to the device's bootloader MSC.
   - ``ble_dfu``: implements the Nordic Legacy DFU protocol over BLE
     using bleak.

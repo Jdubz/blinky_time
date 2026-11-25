@@ -8,7 +8,7 @@ whitelisted devices, and nothing checked that it was a stable release.
 Now every image is stored once under its sha256 (``images/<sha256>.hex``) and
 never rewritten, with a small metadata file beside it. An image is
 *stable* only when this server verified it: its bytes match the hex of a
-promoted stable GitHub release (``tools/firmware_release.py download``, the
+promoted stable GitHub release (``hosttools/firmware_release.py download``, the
 check deploy.sh and the deploy pipeline use). Only stable images can arm
 auto-recovery (``FleetManager.set_recovery_firmware``), and the binding
 records the sha256, which is re-checked before any recovery flash.
@@ -159,7 +159,7 @@ def _prune(keep: set[Path]) -> None:
 def verify_stable(content: bytes, tag: str, download_dir: Path) -> tuple[bool, str]:
     """Is ``content`` exactly the hex of stable release ``tag``?
 
-    Downloads and verifies the release with ``tools/firmware_release.py``
+    Downloads and verifies the release with ``hosttools/firmware_release.py``
     (deploy_pipeline.fetch_stable_release), then compares sha256. Returns
     (ok, reason); never raises for a non-match or an unreachable GitHub.
     """

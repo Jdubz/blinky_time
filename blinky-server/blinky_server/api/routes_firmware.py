@@ -413,7 +413,7 @@ async def fleet_deploy_staging(body: StagingDeployRequest) -> dict[str, Any]:
     """Deploy commit ``sha``'s staging build to explicitly named TEST devices (#349).
 
     The same pipeline as /fleet/deploy (deploy_pipeline.run_deploy), with the staging build
-    (tools/firmware_release.py download-staging: a successful staging-build.yml artifact of
+    (hosttools/firmware_release.py download-staging: a successful staging-build.yml artifact of
     exactly that commit, every file checked against its manifest) in place of a release.
     Refused unless the server was started with --staging (the test box's unit) and every
     target is a configured chip on the box. The image is stored as non-stable, so

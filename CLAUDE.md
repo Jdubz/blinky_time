@@ -5,7 +5,7 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 ## Repositories (#357)
 
 - **blinky_time** (this repo): the tooling: blinky-server (fleet, flashing, validation, the test box's staging suite), blinky-console (web UI, web flasher), ml-training, blinky-serial-mcp, the test box scripts (`scripts/testbox/`), fleet deploys (`scripts/deploy.sh`), device configs (`devices/registry/`). PRs go to `master` with CI green and the review addressed.
-- **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)**: the firmware (`blinky-things/`), bootloader, its tests, and its approval and release flow: `staging`, the box's hardware test, then `master` and a candidate, promoted to stable by the owner. Its `CLAUDE.md` holds the firmware rules (bootloader changes, build workflow, audio changes in firmware). It's pinned here as the **`firmware/` submodule**. The server, `deploy.sh` and the console's mirror run its `tools/` (release client, hex/UF2 validators, test-device list) at that commit, so a change there reaches the server only through a submodule bump.
+- **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)**: the firmware (`blinky-things/`), bootloader, its tests, and its approval and release flow: `staging`, the box's hardware test, then `master` and a candidate, promoted to stable by the owner. Its `CLAUDE.md` holds the firmware rules (bootloader changes, build workflow, audio changes in firmware). It's pinned here as the **`firmware/` submodule**, which is being removed (owner, 2026-11-24: the repos are to be completely decoupled; `docs/ROADMAP.md`). The server and `deploy.sh` no longer run anything from it: their release client and UF2 flash tool are blinky_time's own, in `blinky-server/hosttools/` (vendored from blinky-firmware's `tools/` at `33e0059`; a fix to one copy doesn't reach the other). The console's mirror still runs its `tools/firmware_release.py mirror` until a later step.
 - **[blinky-corpus](https://github.com/Jdubz/blinky-corpus)**: the validation corpus (`edm/`) and its scorers (`blinky_scoring`), pinned here as the **`corpus/` submodule**. blinky-server imports `blinky_scoring` from it (`blinky_server/__init__.py`).
 - **Firmware artifacts are the contract.** Releases (`bN`) and staging builds (`staging-firmware-<sha>`) live in blinky-firmware; the tooling consumes them. Wire protocols (`json info`, BLE, record, OTA) are mirrored in blinky-server and blinky-console: a protocol change is a firmware PR plus a PR here. Model headers from ml-training ship as a PR to blinky-firmware (`firmware/blinky-things/audio/`).
 
@@ -14,7 +14,7 @@ This file contains **critical behavior rules only**. Architecture, status, and h
 **NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840.** The DFU serial protocol has race conditions that can brick devices, requiring SWD hardware to recover.
 
 **Flashing connected devices: every deploy must run deploy.sh's hardened pipeline.** What's required is the mechanisms, not the script's name:
-- a **stable release only**, downloaded and sha256-verified (`firmware/tools/firmware_release.py download`);
+- a **stable release only**, downloaded and sha256-verified (`blinky-server/hosttools/firmware_release.py download`);
 - an **explicit target list** (or `all`), with every ID validated;
 - the **single flash path** (`FleetManager.flash_device` / `flash_fleet`), with auto-recovery armed for exactly the targets;
 - `restore_runtime_settings` + `save`;

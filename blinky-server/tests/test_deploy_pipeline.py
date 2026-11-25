@@ -26,6 +26,7 @@ from blinky_server.device.device import DeviceState
 from blinky_server.device.manager import FleetManager
 from blinky_server.firmware import deploy_pipeline as dp
 from blinky_server.firmware.deploy_pipeline import DeployError
+from blinky_server.paths import hosttools_dir
 
 STABLE_VERSION = "b215-39df3912"
 
@@ -141,12 +142,15 @@ def test_bad_scope_fails_loudly(ids: Any, match: str) -> None:
 
 def _fake_run(stdout: str = "", returncode: int = 0, stderr: str = "") -> Any:
     calls: list[list[str]] = []
+    kwargs: list[dict[str, Any]] = []
 
-    def run(args: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         calls.append(args)
+        kwargs.append(kw)
         return subprocess.CompletedProcess(args, returncode, stdout, stderr)
 
     run.calls = calls  # type: ignore[attr-defined]
+    run.kwargs = kwargs  # type: ignore[attr-defined]
     return run
 
 
@@ -167,9 +171,9 @@ def test_release_runs_firmware_release_download_like_deploy_sh(
     rel = dp.fetch_stable_release("b215", tmp_path)
     assert rel["version"] == STABLE_VERSION
     args = run.calls[0]
-    assert args[1].endswith("tools/firmware_release.py") or args[1].endswith(
-        "tools\\firmware_release.py"
-    )
+    # blinky-server's own release client, run outside any firmware checkout (decoupling).
+    assert args[1] == str(hosttools_dir() / "firmware_release.py")
+    assert run.kwargs[0]["cwd"] == hosttools_dir()
     assert args[2:] == ["download", "--out", str(tmp_path), "--tag", "b215"]
 
 
