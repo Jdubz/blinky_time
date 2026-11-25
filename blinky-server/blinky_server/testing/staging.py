@@ -18,6 +18,9 @@ puts a staging build on the test chips and tests it on real hardware.
    firmware [ASSERT] / [FALLBACK] line from the flash on (the server's alert record,
    device.alerts_since, which survives a restart).
 
+The chips' LEDs are lit from the deploy's end to the job's end, however it ends: the box's
+chips idle dark (testing/leds.py). Nothing here needs the light.
+
 The whole job holds the audio lock (workflows.reserve): no other test job plays or measures
 the chips while it deploys and measures them. Fleet deploys refuse to start while it runs
 (routes_firmware._deploy_active) and it refuses to start during one.
@@ -44,7 +47,16 @@ from ..firmware import deploy_pipeline
 from ..paths import data_dir
 from ..work import durable, jobs
 from .audio_player import play_audio, stop_audio
-from .workflows import _connected, _fleet, plan, reserve, session, track_seconds, validation_run
+from .workflows import (
+    _connected,
+    _fleet,
+    lit,
+    plan,
+    reserve,
+    session,
+    track_seconds,
+    validation_run,
+)
 
 log = logging.getLogger(__name__)
 
@@ -426,7 +438,22 @@ async def _suite(
     version = deploy["version"]
     report["version"] = version
     start = await uptimes(device_ids, float(deploy["steps"]["store"]["flash_t"]))
+    # The deploy rebooted the chips (dark: the box's config brightness is 0). Lit from here to
+    # the end, failure or cancel included (testing/leds.py); nothing here needs the light.
+    async with lit(device_ids, needs_light=False, purpose="the staging suite"):
+        return await _measure(sha, device_ids, req, limits, report, version, start)
 
+
+async def _measure(
+    sha: str,
+    device_ids: list[str],
+    req: dict[str, Any],
+    limits: dict[str, float],
+    report: dict[str, Any],
+    version: str,
+    start: dict[str, Any],
+) -> dict[str, Any]:
+    """Health, validation with music and beat pace, and the final state, on the deployed build."""
     jobs.report(10, f"health: {limits['stable_minutes']:.0f} min of json info")
     report["health"] = await health(device_ids, limits)
 

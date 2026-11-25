@@ -3,7 +3,9 @@
 (blinky-firmware render/TestPattern.h; docs/TEST_BOX_CAMERA_HARNESS_PLAN.md, "Calibration").
 
 Drives one chip through blinky-server's command API (per-chip commands are allowed on the
-box) and the camera in-process. Always ends with ``testpattern off``. A secondary check like
+box) and the camera in-process. The box's chips idle dark (config brightness 0): it lights the
+chip with ``leds <brightness>`` first (firmware without ``leds`` is refused: calibration needs
+light), and always ends with ``testpattern off`` and ``leds config`` (dark again). A secondary check like
 the rest of the camera tooling: it reports, it never gates.
 
   walk    light each logical pixel alone; which camera region lights: the LED map,
@@ -37,6 +39,9 @@ from camera_review import api
 
 OUT_ROOT = Path.home() / ".local" / "share" / "blinky-camera" / "calibration"
 SYNC_SAMPLES = 9
+# blinky-server's TEST_BRIGHTNESS (blinky_server/testing/leds.py): what test runs light the grid
+# at, and what the camera's levels were set for. A server test keeps the two equal.
+TEST_BRIGHTNESS = 40
 
 
 def command(device: str, text: str) -> str:
@@ -58,6 +63,13 @@ def json_line(resp: str, key: str) -> dict[str, Any]:
             except ValueError:
                 continue
     raise SystemExit(f"no JSON line with {key!r} in the reply: {resp[:200]!r}")
+
+
+def light(device: str, brightness: int) -> None:
+    """The chip's runtime LED brightness override (``leds``); refuses firmware without it."""
+    status = json_line(command(device, f"leds {brightness}"), "override")
+    if status.get("brightness") != brightness or status.get("override") is not True:
+        raise SystemExit(f"{device}: 'leds {brightness}' left {status}")
 
 
 def info(device: str) -> dict[str, Any]:
@@ -326,6 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--exposure-us", type=int, default=1000)
     p.add_argument("--gain", type=float, default=1.0)
     p.add_argument("--level", type=int, default=80, help="pattern colour 0-255 (white)")
+    p.add_argument(
+        "--brightness",
+        type=int,
+        default=TEST_BRIGHTNESS,
+        choices=range(1, 256),
+        metavar="1-255",
+        help="LED brightness while calibrating (default: the test runs' %(default)s)",
+    )
     p.add_argument("--on-ms", type=int, default=40)
     p.add_argument("--period-ms", type=int, default=250)
     p.add_argument("--count", type=int, default=200)
@@ -348,20 +368,27 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     dev = info(args.device)
-    cam = Camera(args.regions, args.exposure_us, args.gain)
+    cam: Camera | None = None
     try:
+        light(args.device, args.brightness)
+        cam = Camera(args.regions, args.exposure_us, args.gain)
         fn = {"walk": do_walk, "timing": do_timing, "pwm": do_pwm}[args.mode]
         report = fn(args, cam, dev)
     finally:
         # The chip first, whatever happened to the camera: a pattern left on would hide the
-        # generator until a reboot.
+        # generator until a reboot, and the box's chips idle dark.
         try:
-            command(args.device, "testpattern off")
-        except (OSError, SystemExit) as e:
-            print(f"WARNING: testpattern off failed on {args.device}: {e}", file=sys.stderr)
+            for text in ("testpattern off", "leds config"):
+                try:
+                    command(args.device, text)
+                except (OSError, SystemExit) as e:
+                    print(f"WARNING: {text} failed on {args.device}: {e}", file=sys.stderr)
         finally:
-            cam.close()
-    report.update(mode=args.mode, device=args.device, version=dev.get("version"))
+            if cam is not None:
+                cam.close()
+    report.update(
+        mode=args.mode, device=args.device, version=dev.get("version"), brightness=args.brightness
+    )
     (out_dir / "report.json").write_text(json.dumps(report, indent=2, default=float))
     print(
         json.dumps(

@@ -362,6 +362,7 @@ async def test_per_device_commands_add_to_the_shared_ones(monkeypatch: pytest.Mo
     monkeypatch.setattr(wf, "_start_streaming", nothing)
     monkeypatch.setattr(wf, "_stop_streaming", nothing)
     monkeypatch.setattr(wf, "_connected", connected)
+    monkeypatch.setattr(wf.leds, "on_box", lambda: False)  # test_testbox_leds covers the box
     async with wf.session(["a", "b"], ["set x 1"], {"b": ["set y 2"]}):
         pass
     assert sent == {

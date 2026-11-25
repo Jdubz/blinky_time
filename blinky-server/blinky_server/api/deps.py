@@ -154,6 +154,22 @@ def is_deploy_gated_command(cmd: str) -> bool:
     )
 
 
+# Test-box-only commands: refused on any server not started with --staging, and in fleet
+# broadcasts everywhere. `leds` overrides the LED brightness at runtime (testing/leds.py); only
+# the box's chips, whose config brightness is 0, are lit and darkened with it. Every other
+# device keeps its configured brightness (owner, 2026-11-24).
+_TEST_BOX_ONLY_PREFIXES = ("leds",)
+
+
+def is_test_box_only_command(cmd: str) -> bool:
+    """True if `cmd` may only go to a test box chip (see _TEST_BOX_ONLY_PREFIXES)."""
+    cmd_normalized = _WHITESPACE_RE.sub(" ", cmd.strip().lower())
+    return any(
+        cmd_normalized == prefix or cmd_normalized.startswith(prefix + " ")
+        for prefix in _TEST_BOX_ONLY_PREFIXES
+    )
+
+
 def assert_command_allowed(cmd: str, x_deploy_tool: str | None, *, test_box: bool = False) -> None:
     """Raise 403 if `cmd` is deploy-gated and X-Deploy-Tool is missing/invalid.
 
@@ -165,8 +181,15 @@ def assert_command_allowed(cmd: str, x_deploy_tool: str | None, *, test_box: boo
     ``test_box``: the command targets one chip on the test box (a server started
     with --staging). Every chip there is a test chip, iterated on directly, so
     the deploy.sh gate (which protects the fleet) doesn't apply. The firmware's
-    60 s rule between resets still does: that is on the caller.
+    60 s rule between resets still does: that is on the caller. Test-box-only
+    commands (``leds``) are refused unless ``test_box``.
     """
+    if not test_box and is_test_box_only_command(cmd):
+        raise HTTPException(
+            403,
+            f"Command '{cmd.strip()[:60]}' is for the test box's chips only (a server started "
+            "with --staging); it is never sent to fleet devices.",
+        )
     if test_box or not is_deploy_gated_command(cmd):
         return
     if x_deploy_tool is None or not x_deploy_tool.startswith(_DEPLOY_TOOL_PREFIX):

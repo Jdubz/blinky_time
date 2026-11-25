@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import time as _time
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -120,6 +121,11 @@ class Device:
         self.alert_count = 0
         self.alerts: collections.deque[str] = collections.deque(maxlen=ALERTS_KEEP)
 
+        # Run by connect() once the device's info is in, before it counts as connected: the
+        # fleet manager's box-only LED reconcile (testing/leds.py). Its errors never fail a
+        # connect.
+        self.post_connect: Callable[[Device], Awaitable[None]] | None = None
+
         # Wire up streaming data routing
         self.protocol.on_stream_line(self._route_stream_line)
         self.protocol.on_raw_line(self._on_raw_line)
@@ -145,6 +151,11 @@ class Device:
                 info = await self.protocol.get_info()
             self.apply_info(info)
             self.last_seen = _time.monotonic()
+            if self.post_connect is not None:
+                try:
+                    await self.post_connect(self)
+                except Exception as e:
+                    log.error("post-connect hook failed for %s: %s", self.id[:12], e)
             self.state = DeviceState.CONNECTED
             log.info(
                 "Device connected: %s (%s) on %s - %s",

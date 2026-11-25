@@ -8,7 +8,8 @@ their LEDs, and how late.
 
 1. Starts ``camera_capture.py record`` (pinned to a core away from ffplay and the server).
 2. Submits a validation job to the local blinky-server (``POST /api/test/validate`` with
-   ``persist_raw`` and ``gen <generator>``), then puts each chip back on the generator it had
+   ``persist_raw``, ``needs_light`` (the job lights the chips, which idle dark, and fails if
+   it can't) and ``gen <generator>``), then puts each chip back on the generator it had
    (``gen`` is runtime state, never saved; without the restore it would stay until a reboot).
 3. Stops the capture when the job ends, then for each run and device:
    - puts the chip's detections and the camera frames on the host's wall clock (absolute,
@@ -142,6 +143,9 @@ def run_capture(args: argparse.Namespace, out_dir: Path) -> tuple[dict[str, Any]
                 "num_runs": args.runs,
                 "commands": [f"gen {args.generator}"],
                 "persist_raw": True,
+                # The box's chips idle dark: the job lights them for the run, and fails
+                # instead of running dark if one can't be (blinky_server/testing/leds.py).
+                "needs_light": True,
             },
         )
         job_id = job["job_id"]

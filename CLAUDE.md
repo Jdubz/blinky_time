@@ -52,6 +52,7 @@ deploy.sh runs the full pipeline (select firmware → upload → flash → versi
 **The test box is the exception** (owner, 2026-11-23: "This is a test box, not strictly a validation CI box"). On a server started with `--staging`, every chip is a test chip (a fleet device is never plugged into the box), so:
 - `device upload`, `reboot` and the rest of the gated list go straight to one chip through `/api/devices/{id}/command`, with no `X-Deploy-Tool` header. Never forge that header anywhere. Fleet-wide broadcasts (`/api/fleet/command`) stay gated on the box too.
 - Staging builds go to any configured chip on the box, with no test-device list (`deploy_pipeline.require_test_devices`, `scripts/testbox/staging.py`).
+- The box's chip idles dark (config brightness 0) and test runs light it with the firmware's runtime-only `leds` override (`blinky_server/testing/leds.py`, `docs/TEST_BOX.md`). `leds` is box-only: the server refuses it on any other server and in fleet broadcasts, so fleet devices always keep their configured brightness.
 - Stable deploys still go through `POST /api/fleet/deploy`. The firmware's 60-second rule between resets (below) still applies to every chip: space resets in any script that reconfigures one.
 
 **Bare-chip recovery only:** blinky-firmware's `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).

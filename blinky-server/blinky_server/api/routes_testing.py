@@ -51,6 +51,10 @@ class ValidateRequest(BaseModel):
     # Adds ~20-50 KB per device per track to the result payload -- don't
     # enable for routine validation runs. See ml-training/analysis/run_gate_b.py.
     persist_raw: bool = False
+    # On the test box, the chips are lit for every run (testing/leds.py). True: the run needs
+    # the light (a camera review), so it fails if a chip can't be lit (firmware without
+    # `leds`) instead of going on dark.
+    needs_light: bool = False
 
 
 class StagingSuiteRequest(BaseModel):

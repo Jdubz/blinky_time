@@ -86,7 +86,7 @@ Expected detection→light: roughly 3–15 ms of render plus the camera's quanti
 
 The harness finds the LEDs instead of being told where they are:
 
-1. A survey (`camera_capture.py survey`) runs while the LEDs animate. It records each pixel's brightness mean, variance and max over time. LEDs vary; the background should not (keep ambient light constant and low).
+1. A survey (`camera_capture.py survey`) runs while the LEDs animate (the box's chip idles dark: light it first with `leds 40`, and `leds config` after; `TEST_BOX.md`, "LEDs: dark unless a test runs"). It records each pixel's brightness mean, variance and max over time. LEDs vary; the background should not (keep ambient light constant and low).
 2. Find each LED as a local peak of the standard-deviation map, judged against its own neighbourhood (`camera_analysis.find_regions`). A single global threshold doesn't work: generators light some LEDs far more often than others (fire rarely reaches the top rows), and light reflected off the foam varies too. Each LED's region is the pixels near its peak above a fraction of its own level. On the box's grid this finds all 64 LEDs, 69-81 px each, and nothing else.
 3. Check the region follows the chip: correlate its brightness series with the chip's serial `TRANSIENT` train. That needs no device commands and no resets (60-second rule).
 4. Segments come for free: a region per LED, so the whole grid, a row or one LED are sums of regions. Generators with spatial effects (e.g. hit height) can use them.
@@ -151,7 +151,7 @@ Repeat whenever the camera or the grid moves.
    A few toggles at the start of every run re-check the offset. If it drifted beyond tolerance, the run is INVALID.
 2. **Rolling-shutter line time**, from step 1: 31.75 µs (`camera_analysis.LINE_NS`).
 3. **LED PWM.** WS2812-class LEDs dim with PWM at a few hundred Hz to a few kHz. A short exposure makes that PWM show as brightness ripple, and with a rolling shutter as bands. Measure the PWM period once (with a short exposure, the band spacing in rows × line time gives it). Then set the exposure to the largest whole number of PWM periods that fits in the frame period, which averages the PWM out. Tried 2026-11-24 with an exposure sweep (0.2-4 ms) on fire's base row: fire's own flicker (frame-to-frame CV 0.2-0.4) swamps any PWM ripple, and no generator holds still. Done 2026-11-24 with `testpattern solid` (blinky-firmware#53, `camera_calibrate.py pwm`): ripple falls steadily with exposure (16% at 0.35 ms, 1.2% at 1 ms, 0.3% at 4 ms) with no periodic minima, so the LEDs' PWM is short enough to average out at the 1 ms used; no exposure change needed.
-4. **Levels.** Set LED brightness for test runs and the analog gain so the brightest flash stays below ~80% of full scale. Saturated pixels hide the rise and the brightness. A region with saturated pixels makes the run INVALID.
+4. **Levels.** Set LED brightness for test runs and the analog gain so the brightest flash stays below ~80% of full scale. Test runs light the grid at brightness 40 (blinky-server's `TEST_BRIGHTNESS`; the chip's config brightness is 0, so it is dark outside runs), the level the camera's 1 ms exposure and gain 1.0 were set for (The camera, Levels); a change to one means re-checking the other. Saturated pixels hide the rise and the brightness. A region with saturated pixels makes the run INVALID.
 5. **Region map** (How it works, step 1).
 6. **Baseline.** Current stable firmware, both profiles, 5 runs on the `edm/` corpus: the usual spread a review compares against.
 

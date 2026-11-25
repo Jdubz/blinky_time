@@ -98,7 +98,14 @@ devices = {
     )
     for d in DEVICES
 }
-set_fleet(SimpleNamespace(get_device=devices.get, get_all_devices=lambda: list(devices.values())))
+# Not the test box: no LED lifecycle here (tests/test_testbox_leds.py covers it).
+set_fleet(
+    SimpleNamespace(
+        get_device=devices.get,
+        get_all_devices=lambda: list(devices.values()),
+        staging_enabled=False,
+    )
+)
 
 plays = 0
 setup_drain = False
