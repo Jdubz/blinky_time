@@ -633,3 +633,25 @@ async def test_a_dev_deploy_rechecks_the_mode_under_the_deploy_lock(
         await box_mode.set_mode("queue")
     r = await req
     assert r.status_code == 409 and "queue mode" in r.json()["detail"] and submitted == []
+
+
+async def test_the_info_check_waits_out_a_metrics_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dev run starts right after a deploy, whose settings save stalls the loop (~100 ms,
+    blinky-firmware#49): the info check must read a 5 s metrics window that began after it."""
+    from blinky_server.testing import dev_run
+
+    events: list[Any] = []
+
+    async def fake_sleep(s: float) -> None:
+        events.append(("sleep", s))
+
+    async def fake_info(device_id: str) -> dict[str, Any]:
+        events.append(("info", device_id))
+        return {"version": "b1-dev-x", "maxFrameMs": 15}
+
+    monkeypatch.setattr(dev_run.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(dev_run.staging, "_info", fake_info)
+    fn = getattr(dev_run.info, "__wrapped__", dev_run.info)
+    out = await fn(["grid"])
+    assert events[0] == ("sleep", dev_run.INFO_SETTLE_S) and dev_run.INFO_SETTLE_S > 5
+    assert events[1] == ("info", "grid") and out["grid"]["version"] == "b1-dev-x"
