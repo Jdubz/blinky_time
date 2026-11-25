@@ -40,7 +40,7 @@ def main() -> None:
         "--wifi-device",
         action="append",
         metavar="HOST:PORT",
-        help="Add a WiFi device (e.g., 192.168.86.238:3333). Repeatable.",
+        help="Add a WiFi device (e.g., 192.0.2.10:3333). Repeatable.",
     )
     args = parser.parse_args()
 

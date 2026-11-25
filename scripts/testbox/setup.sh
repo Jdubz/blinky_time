@@ -22,7 +22,9 @@
 #      blinky-server.service running from it with --no-ble; blinky-deploy.timer keeps it at
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. Grafana Alloy, shipping the box's journal, host metrics and traces to the central LGTM
-#      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy; Grafana: grafana.joshwentworth.com)
+#      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy). Its push endpoints come from
+#      the private ~/.config/blinky/observability.env (template: observability.env.example);
+#      this step fails, naming the file and keys, until it exists
 #  10. development tooling for this repo: ~/.local/bin on PATH (a managed ~/.profile block),
 #      blinky-serial-mcp, git hooks, Claude Code (with Linux MCP servers: blinky-serial on this
 #      box, playwright + its Chromium). No dev venv: ml analysis runs on CI or the Spark, and
@@ -248,7 +250,58 @@ install_service() {
 # stack on bignasty (Josh-Wentworth/observability). Pinned to the version the central stack and the
 # Spark's forwarder run. deploy.py keeps /etc/alloy/config.alloy in step with the live slot.
 ALLOY_VERSION="1.16.0-1"
+# The stack's push endpoints are topology, and this repo is public: they live only in a private
+# file on the box (mode 600), never here. observability.env.example is the template.
+OBS_ENV="$HOME_DIR/.config/blinky/observability.env"
+OBS_KEYS=(LOKI_PUSH_URL PROM_RW_URL TEMPO_OTLP_ENDPOINT)
+
+# obs_value <key>: the key's value from $OBS_ENV (KEY=value or KEY="value"; the last one wins).
+# Parsed, never sourced: this runs as root and the file is the user's.
+obs_value() {
+  local v
+  v=$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$OBS_ENV" | tail -n 1) || return 1
+  v="${v%"${v##*[![:space:]]}"}"            # trailing whitespace
+  if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
+  printf '%s' "$v"
+}
+
+# read_observability_env: set the OBS_KEYS from $OBS_ENV, or say which file and keys to supply.
+# First boot: a copy next to this script (the card's blinky-testbox/observability.env) seeds it.
+read_observability_env() {
+  if [[ ! -f "$OBS_ENV" && -f "$HERE/observability.env" ]]; then
+    # As the user, so a ~/.config that doesn't exist yet isn't created root-owned.
+    as_user install -d -m 0700 "$(dirname "$OBS_ENV")" &&
+      install -m 0600 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" \
+        "$HERE/observability.env" "$OBS_ENV" || return 1
+    log "seeded $OBS_ENV from $HERE/observability.env (delete that copy from the card)"
+  fi
+  if [[ ! -f "$OBS_ENV" ]]; then
+    echo "missing $OBS_ENV: it holds the LGTM stack's push endpoints (${OBS_KEYS[*]})." >&2
+    echo "Copy $HERE/observability.env.example there, fill in the values (the owner's private" >&2
+    echo "notes, or /etc/default/alloy on a provisioned box), chmod 600, and re-run setup.sh." >&2
+    return 1
+  fi
+  local key val bad=()
+  # URLs for Loki and Prometheus, host:port for Tempo's OTLP/gRPC. No quotes, spaces, $ or `,
+  # which /etc/default/alloy (a systemd EnvironmentFile) would read differently.
+  local url='^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[^[:space:]"$`\\]*)?$' hostport='^[A-Za-z0-9.-]+:[0-9]+$'
+  for key in "${OBS_KEYS[@]}"; do
+    val=$(obs_value "$key") || return 1
+    case "$key" in
+      TEMPO_OTLP_ENDPOINT) [[ $val =~ $hostport ]] || bad+=("$key") ;;
+      *)                   [[ $val =~ $url ]] || bad+=("$key") ;;
+    esac
+    printf -v "$key" '%s' "$val"
+  done
+  if [[ ${#bad[@]} -gt 0 ]]; then
+    echo "$OBS_ENV: missing, empty or malformed: ${bad[*]} (URLs for LOKI_PUSH_URL and" >&2
+    echo "PROM_RW_URL, host:port for TEMPO_OTLP_ENDPOINT; see observability.env.example)." >&2
+    return 1
+  fi
+}
+
 install_alloy() {
+  read_observability_env || return 1
   install -d -m 0755 /etc/apt/keyrings || return 1
   if [[ ! -s /etc/apt/keyrings/grafana.gpg ]]; then
     curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg || return 1
@@ -260,18 +313,17 @@ install_alloy() {
   "${APT[@]}" install --allow-downgrades "alloy=$ALLOY_VERSION" || return 1
   apt-mark hold alloy >/dev/null || return 1
   usermod -aG systemd-journal alloy || return 1   # loki.source.journal reads the system journal
-  cat > /etc/default/alloy <<'ENV'
+  cat > /etc/default/alloy <<ENV
 # Grafana Alloy on the test box. Written by blinky_time scripts/testbox/setup.sh (install_alloy);
 # re-run setup.sh rather than editing by hand. The config itself is installed by deploy.py.
 CONFIG_FILE="/etc/alloy/config.alloy"
 # UI and /metrics on loopback only (the central stack is reached by push, never scraped).
 CUSTOM_ARGS="--server.http.listen-addr=127.0.0.1:12345 --disable-reporting"
 RESTART_ON_UPGRADE=true
-# The central LGTM stack on bignasty (Josh-Wentworth/observability), tailnet-only, no auth.
-# The same canonical values my-spark's deploy-common.sh supplies to the Spark's forwarder.
-LOKI_PUSH_URL="http://100.127.99.111:3100/loki/api/v1/push"
-PROM_RW_URL="http://100.127.99.111:9090/api/v1/write"
-TEMPO_OTLP_ENDPOINT="100.127.99.111:4317"
+# The central LGTM stack's push endpoints (tailnet-only, no auth), from $OBS_ENV.
+LOKI_PUSH_URL="$LOKI_PUSH_URL"
+PROM_RW_URL="$PROM_RW_URL"
+TEMPO_OTLP_ENDPOINT="$TEMPO_OTLP_ENDPOINT"
 ENV
   local src="$DEPLOY_DIR/scripts/testbox/alloy/blinkytest.alloy"
   [[ -f "$src" ]] || src="$HERE/alloy/blinkytest.alloy"
