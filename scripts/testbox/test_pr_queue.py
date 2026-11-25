@@ -306,7 +306,7 @@ def test_a_pass_posts_success_and_one_comment_per_head() -> None:
     body = c["body"]
     assert body.startswith(f"## Hardware test (PR) — {A1}\n") and "**PASSED**" in body
     assert "reported, not gated (corpus `ffffffffffff`)" in body
-    assert "| techno-machine-drum | 87DE9B58 | 0.9 | – | – | 0.71 | – |" in body
+    assert "| techno-machine-drum | 87DE9B58 | 0.9 | - | - | 0.71 | - |" in body
     assert "| garage-uk-2step | | not played |" in body
     assert "Info timers (87DE9B58): acfUs=700, heapPeak=9" in body
     assert "| 87DE9B58 | no_reboot | ✅ |" in body
@@ -566,3 +566,36 @@ def test_a_github_failure_mid_pass_still_reports_the_queue() -> None:
     assert [w["sha"] for w in srv.queue[-1]] == [A1]
     run(g, srv, b)  # GitHub back: the status goes out
     assert g.on(A1)[-1][1].startswith("queued: box in dev mode since")
+
+
+def test_turn_taking_compares_the_longest_wait_so_the_runners_never_deadlock() -> None:
+    """PR #5 got a new head (newer wait) while PR #9 has waited long; the staging head's wait
+    is between them. The staging runner yields to #9 (older than it), so this runner must not
+    yield to staging: it submits (#5, the oldest PR) instead of both waiting for good."""
+    g, srv, b = GitHub([pr(5, A1), pr(9, B1)]), Server(), Builds()
+    srv.mode = {"mode": "dev", "since": time.time(), "waiting": [], "preempted": []}
+    run(g, srv, b)
+    state = json.loads(prq.STATE.read_text())
+    now = time.time()
+    state["queue"]["9"]["since"] = now - 900
+    state["queue"]["5"]["since"] = now - 60
+    prq.save_state(state)
+    staging = {
+        "runner": "staging",
+        "sha": A2,
+        "since": now - 300,
+        "ready": True,
+        "reported_at": now,
+    }
+    srv.mode = {"mode": "queue", "since": 0.0, "waiting": [staging], "preempted": []}
+    assert sys.modules["staging"].older_elsewhere(
+        {
+            "waiting": [
+                {"runner": "pr", "sha": B1, "since": now - 900, "ready": True, "reported_at": now}
+            ]
+        },
+        "staging",
+        now - 300,
+    )  # the staging runner yields
+    state = run(g, srv, b)
+    assert state["running"]["pr"] == "5"  # and this one goes

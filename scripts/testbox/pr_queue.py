@@ -172,7 +172,7 @@ def gh_json_stdin(gh_: Gh, payload: str, *args: str) -> Any:
 
 
 def _fmt(v: Any) -> str:
-    return "–" if v is None else str(round(v, 3) if isinstance(v, float) else v)
+    return "-" if v is None else str(round(v, 3) if isinstance(v, float) else v)
 
 
 def render(report: dict[str, Any]) -> str:
@@ -463,7 +463,11 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
         return
     number = ready[0]
     item = queue[number]
-    ahead = older_elsewhere(mode, RUNNER, float(item["since"]))
+    # Turn-taking compares this runner's longest wait, not the PR it picks: the staging runner
+    # yields to any older ready PR head, so judging by one PR's (possibly newer) wait could
+    # have both yield to each other for good.
+    oldest = min(float(queue[n]["since"]) for n in ready)
+    ahead = older_elsewhere(mode, RUNNER, oldest)
     if ahead:
         other = f"{ahead.get('runner')} {str(ahead.get('sha'))[:12]}"
         log(f"{item['sha'][:12]} (#{number}): {other} has waited longer")
