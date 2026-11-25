@@ -965,7 +965,7 @@ async def test_rebroadcast_to_laggards_counter_resets_on_new_command(
 async def test_build_command_v2_packet_layout() -> None:
     """Wire-format pin for COMMAND_V2 — the firmware-side decoder relies on
     the exact byte order. Any change here MUST match
-    ``blinky-things/comms/BleProtocol.h`` (COMMAND_V2 = 0x04) and the
+    blinky-firmware's ``blinky-things/comms/BleProtocol.h`` (COMMAND_V2 = 0x04) and the
     LE 2-byte command_id token immediately after the 4-byte header.
     """
     from blinky_server.ble.protocol import (

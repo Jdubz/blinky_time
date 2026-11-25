@@ -89,15 +89,16 @@ SERVER_PATHS = (
     "blinky-console/",  # the web UI the server serves
     "scripts/testbox/",  # this deployer and the units
     # The corpus submodule (a gitlink, so no trailing slash; blinky_time#357): the Spark
-    # client's default audio root, and the blinky_scoring the server imports. Not firmware/:
-    # the server runs its own host tools (blinky-server/hosttools/, #411) and reads nothing
-    # from the firmware checkout, so a firmware pin bump restarts nothing.
+    # client's default audio root, and the blinky_scoring the server imports. The repo has no
+    # firmware submodule since the 2026-11-24 decoupling; the server runs its own host tools
+    # (blinky-server/hosttools/, #411).
     "corpus",
 )
-# The submodules a slot checks out, when the commit has them. Never recursive. Not firmware/
-# (decoupling step 3): nothing the box runs reads it. A slot that an older deploy.py checked
-# it out in keeps that checkout, untouched and unread, as it keeps the toolchain links that
-# deploy.py made (firmware/.arduino, .arduino).
+# The submodules a slot checks out, when the commit has them. Never recursive. Not firmware,
+# which commits before the 2026-11-24 decoupling still list: nothing the box runs reads it. A
+# slot that an older deploy.py checked it out in keeps that checkout, untouched and unread, as
+# it keeps the toolchain links that deploy.py made (firmware/.arduino, .arduino); they are
+# removed by hand (docs/TEST_BOX.md).
 SUBMODULES = ("corpus",)
 FETCH = ("--quiet", "--no-recurse-submodules", "origin", BRANCH)  # see deploy_once
 # The latest master commit that passed the gate, server change or not. blinky-server builds the

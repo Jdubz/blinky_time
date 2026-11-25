@@ -3,7 +3,7 @@
 Train a small NN that outputs a per-frame **onset** activation (one value per 16 ms mel frame) for the Blinky firmware. The task is drum-hit (kick/snare) detection, on or off the beat. It is not beat detection (see "Task is Drum-Hit Detection" in the repo's `CLAUDE.md`).
 
 **Current status (2026-11-23): the NN is shelved on the nRF52840 and training is paused** (ESP32-S3 feasibility is the only active ML direction).
-- The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h` in blinky-firmware (`../firmware/` here).
+- The firmware embeds the **v33** model (`configs/conv1d_w16_onset_v33_mel_only.yaml`): Conv1D [32, 32], kernel 5, 16-frame window, 50 mel bands. The header is `blinky-things/audio/frame_onset_model_data.h` in [blinky-firmware](https://github.com/Jdubz/blinky-firmware).
 - **Devices ship with the onset NN off** (`BLINKY_ONSET_NN_ENABLED=0` in `blinky-things/audio/AudioTracker.h`). Onsets come from tuned spectral flux. On edm/ with the hat's CPU cost model, flux scores F1 0.546 at 178 fps; v33 scores 0.480 and holds the loop at 48 fps (~12 ms per inference).
 - A new model is enabled only when it beats flux under that same measurement (blinky-firmware's host harness in `tests/tracker/`). Status, the gate to turn a model back on, and paused work: `docs/ML_IMPROVEMENT_PLAN.md`.
 
@@ -19,7 +19,7 @@ tmux new-session -d -s train "cd ml-training && source venv/bin/activate && \
 # Steps:
 make prepare CONFIG=...   # Extract mel features + augmentation
 make train CONFIG=...     # Train model (auto-named output dir)
-make export CONFIG=...    # Export TFLite INT8 → C header
+make export CONFIG=...    # TFLite INT8 + C header into the run's export/
 make eval CONFIG=...      # Evaluate on the 18-track edm/ corpus
 ```
 
@@ -78,10 +78,17 @@ outputs/<run-name>/
 ├── model_checkpoint.pt      # state_dict + config + metadata (incl. mel_frontend)
 ├── mel_frontend.json        # the dataset's mel front end, for export (#291)
 ├── training_log.csv         # Per-epoch metrics
-└── eval/eval_results.json   # Offline edm/ onset F1
+├── eval/eval_results.json   # Offline edm/ onset F1
+└── export/                  # export_tflite.py: <c_array_name>_int8.tflite, the config's
+                             #   header_name (versioned .h) and <c_array_name>.h, the same header
+                             #   under the name the firmware includes
 ```
 
-**`export_tflite.py` writes into the `firmware/` submodule** and also overwrites the firmware's active header `firmware/blinky-things/audio/frame_onset_model_data.h`, not just the versioned one named in the config. Check `git diff` in `firmware/`, and run `python tools/check_model_input.py` there to confirm the firmware will accept the model. Shipping a model is a PR to blinky-firmware (its `staging` branch), never a commit to the submodule pin here.
+## Exporting a model
+
+`export_tflite.py` writes only into its `--output-dir` (`make export` and `train_pipeline.sh` use the run's `export/`): the INT8 `.tflite`, the header named by the config's `export.header_name`, and the same header as `<c_array_name>.h` (`frame_onset_model_data.h`), the name the firmware includes. It never writes into a firmware tree; this repo has no firmware checkout.
+
+A model reaches the firmware by a PR to [blinky-firmware](https://github.com/Jdubz/blinky-firmware)'s `staging` branch that copies `export/frame_onset_model_data.h` (and the versioned header, if it's to be kept) into its `blinky-things/audio/`. In that checkout, `python tools/check_model_input.py` confirms the firmware will accept the model (front end, input width, hash), and the PR then goes through the firmware's own review and the box's hardware test. While the NN is shelved on the nRF52840 (`BLINKY_ONSET_NN_ENABLED=0`), a new model also has to beat flux first (status above).
 
 ## Key Constraint: Feature Parity
 

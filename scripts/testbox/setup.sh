@@ -9,7 +9,7 @@
 # What it does (each step logs OK/FAIL; any FAIL makes the run exit non-zero):
 #   1. apt upgrade + the packages the box needs (python, ffmpeg, uhubctl, gh, node...)
 #   2. clone blinky_time into the user's home (never pulls an existing clone), with its corpus
-#      submodule; never the firmware submodule (the box doesn't build or read firmware)
+#      submodule (the only one)
 #   3. blinky-server venv with the `firmware` and `ble` extras (the server imports bleak
 #      unconditionally; the box's BLE guard is --no-ble plus dtoverlay=disable-bt)
 #   4. build blinky-console into blinky-server/web/
@@ -23,8 +23,10 @@
 #      master once CI and review pass (deploy.py). The dev clone is never what the server runs.
 #   9. Grafana Alloy, shipping the box's journal, host metrics and traces to the central LGTM
 #      stack on bignasty (scripts/testbox/alloy/blinkytest.alloy; Grafana: grafana.joshwentworth.com)
-#  10. development tooling for this repo: a dev Python venv, blinky-serial-mcp, git hooks,
-#      Claude Code (with Linux MCP servers: blinky-serial on this box, playwright + its Chromium)
+#  10. development tooling for this repo: ~/.local/bin on PATH (a managed ~/.profile block),
+#      blinky-serial-mcp, git hooks, Claude Code (with Linux MCP servers: blinky-serial on this
+#      box, playwright + its Chromium). No dev venv: ml analysis runs on CI or the Spark, and
+#      blinky-server's tests use its own venv (blinky-server/venv)
 #
 # No firmware toolchain (arduino-cli, the pinned core, cppcheck, GCC 13, adafruit-nrfutil): the box
 # flashes published images with blinky-server's own host tools. To develop firmware on the box,
@@ -134,7 +136,6 @@ clone_repo() {
     as_user git clone "$REPO_URL" "$REPO_DIR" || return 1
   fi
   # blinky-corpus at the commit this repo pins (#357): the server imports its blinky_scoring.
-  # Not the firmware submodule: nothing on the box reads it (a clone that has it keeps it).
   ( cd "$REPO_DIR" && as_user git submodule update --init corpus )
 }
 
@@ -279,27 +280,32 @@ ENV
   systemctl restart alloy
 }
 
-DEV_VENV="$HOME_DIR/.venvs/blinky"
-dev_python() {
-  # On top of the apt python3-* packages, what apt doesn't ship: librosa, soundfile and
-  # mir_eval for ml-training's CPU analysis. Training itself runs on the Spark.
-  if [[ ! -x "$DEV_VENV/bin/python" ]]; then
-    as_user python3 -m venv --system-site-packages "$DEV_VENV" || return 1
-  fi
-  as_user "$DEV_VENV/bin/pip" install -q --upgrade pip &&
-    as_user "$DEV_VENV/bin/pip" install -q librosa soundfile mir_eval || return 1
-  # Login shells (tmux starts them) get the venv and ~/.local/bin first on PATH. Written once:
-  # a profile with the block keeps it as it is (an older one also exports CXX=g++-13 for
-  # firmware host builds; that is blinky-firmware's setup now, and left alone here).
-  local profile="$HOME_DIR/.profile"
-  if ! grep -qs '^# >>> blinky test box' "$profile"; then
-    as_user tee -a "$profile" >/dev/null <<'EOF'
-
+user_profile() {
+  # Login shells (tmux starts them) get ~/.local/bin first on PATH. setup.sh owns the block
+  # between the markers and rewrites it on every run; the rest of ~/.profile is left alone.
+  # No dev venv and no CXX: nothing here compiles C++, and ml analysis runs on CI or the
+  # Spark, not the box. An older block also put ~/.venvs/blinky on PATH and exported CXX.
+  local profile="$HOME_DIR/.profile" block
+  block=$(cat <<'EOF'
 # >>> blinky test box (scripts/testbox/setup.sh) >>>
-# The dev venv (system site packages included) and per-user tools (claude, pipx apps).
-PATH="$HOME/.venvs/blinky/bin:$HOME/.local/bin:$PATH"
+# Per-user tools (claude, pipx apps).
+PATH="$HOME/.local/bin:$PATH"
 # <<< blinky test box <<<
 EOF
+)
+  if grep -qs '^# >>> blinky test box' "$profile"; then
+    # The block goes in as an argument: sudo doesn't pass the environment through.
+    as_user python3 - "$profile" "$block" <<'PY' || return 1
+import re, sys
+path, block = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+new = re.sub(r"^# >>> blinky test box.*?^# <<< blinky test box <<<$", lambda _: block,
+             text, count=1, flags=re.M | re.S)
+if new != text:
+    open(path, "w", encoding="utf-8").write(new)
+PY
+  else
+    printf '\n%s\n' "$block" | as_user tee -a "$profile" >/dev/null
   fi
 }
 
@@ -364,7 +370,7 @@ step "user ssh key"       user_ssh_key
 step "deploy worktree"    deploy_worktree
 step "blinky-server unit" install_service
 step "alloy (telemetry)"  install_alloy
-step "dev python"         dev_python
+step "user profile"       user_profile
 step "blinky-serial-mcp"  serial_mcp
 step "git hooks"          git_hooks
 step "tmux config"        tmux_conf

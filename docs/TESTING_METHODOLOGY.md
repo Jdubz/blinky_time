@@ -59,7 +59,7 @@ Tier 4: Full Validation (~50 min)
 blinky-firmware's `tests/tracker/` runs the firmware's real audio code on the host against the edm/ corpus, with a simulated main loop and a CPU cost model calibrated to hat_v1. It reports the drum metrics, onset F1 and rhythm metrics, and can compare two builds. Build and run instructions: blinky-firmware's `tests/tracker/README.md`.
 
 ```bash
-# in blinky-firmware (firmware/ here)
+# in a blinky-firmware checkout
 python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
     --compare build/tracker_harness_old --tracks techno-minimal-01
 ```

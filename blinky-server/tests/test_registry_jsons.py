@@ -35,8 +35,8 @@ def _registry_json_files() -> list[Path]:
 def _decode_offsets(led_type: int) -> tuple[int, int, int]:
     """Decode (r, g, b) byte offsets from a NEO_*-style ledType.
 
-    Matches `Nrf52PwmLedStrip::Nrf52PwmLedStrip` (blinky-things/hal/hardware/
-    Nrf52PwmLedStrip.cpp:20-23): lower 8 bits encode three 2-bit fields,
+    Matches `Nrf52PwmLedStrip::Nrf52PwmLedStrip` (blinky-firmware's
+    blinky-things/hal/hardware/Nrf52PwmLedStrip.cpp:20-23): lower 8 bits encode three 2-bit fields,
     b=bits[1:0], g=bits[3:2], r=bits[5:4].
     """
     order = led_type & 0xFF
@@ -171,7 +171,7 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
     range values silently cast and dispatch to a default branch, which
     is again the silent-failure surface we want to close at lint
     time. Mirror the enum ranges in
-    ``blinky-things/devices/DeviceConfig.h`` (MatrixOrientation +
+    blinky-firmware's ``blinky-things/devices/DeviceConfig.h`` (MatrixOrientation +
     LayoutType): 0..5 (5 = HORIZONTAL_ROTATED_180, blinky-firmware#46)
     and 0..2 respectively. PR #144 review item 8."""
     cfg = json.loads(registry_path.read_text())
@@ -181,13 +181,13 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
         assert isinstance(orientation, int) and 0 <= orientation <= 5, (
             f"{registry_path.name}: orientation={orientation} "
             f"outside the MatrixOrientation enum range 0..5. See "
-            f"blinky-things/devices/DeviceConfig.h."
+            f"blinky-firmware's blinky-things/devices/DeviceConfig.h."
         )
     if layout is not None:
         assert isinstance(layout, int) and 0 <= layout <= 2, (
             f"{registry_path.name}: layoutType={layout} "
             f"outside the LayoutType enum range 0..2. See "
-            f"blinky-things/devices/DeviceConfig.h."
+            f"blinky-firmware's blinky-things/devices/DeviceConfig.h."
         )
 
 

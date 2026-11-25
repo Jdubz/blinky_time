@@ -9,7 +9,7 @@ import {
   u32Diff,
 } from './recordProtocol';
 
-// Builders mirror the packed structs in blinky-things/comms/RecordStream.h.
+// Builders mirror the packed structs in blinky-firmware's blinky-things/comms/RecordStream.h.
 function audioPacket(seq: number, sampleIndex: number, samples: number[]): DataView {
   const dv = new DataView(new ArrayBuffer(8 + samples.length * 2));
   dv.setUint8(0, PacketType.AUDIO);

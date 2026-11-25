@@ -51,7 +51,6 @@ jobs:
         # its job also tests (not camera/, which has its own job), the device registry it lints
         # (devices/), and the corpus scorers it runs; ml: ml-training and the corpus it labels
         # and trains on; console: blinky-console. A change to this workflow runs everything.
-        # No job reads the firmware/ submodule (decoupling step 2), so its pin selects nothing.
         check() {
           if grep -qE "$2" changed.txt; then v=true; else v=false; fi
           echo "$1=$v" >> "$GITHUB_OUTPUT"; echo "$1: $v"
@@ -107,8 +106,8 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
 
-    # The server scores with the corpus's blinky_scoring (#357). Nothing from firmware/: its
-    # host tools are its own (hosttools/, 2026-11-24 decoupling), so only the corpus.
+    # The server scores with the corpus's blinky_scoring (#357). Its host tools are its own
+    # (hosttools/, 2026-11-24 decoupling), so only the corpus.
     - name: Corpus submodule
       working-directory: .
       run: git submodule update --init --depth 1 corpus

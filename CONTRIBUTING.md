@@ -5,7 +5,7 @@ This repo is the tooling: blinky-server, blinky-console, ml-training, blinky-ser
 - **Firmware** (`blinky-things/`, bootloader, simulator, host tests) goes to **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)**, by PR to its `staging` branch. That repo's [CONTRIBUTING.md](https://github.com/Jdubz/blinky-firmware/blob/staging/CONTRIBUTING.md) covers building, test devices and the hardware-tested release flow.
 - **Labels and scoring** (`edm/`, `blinky_scoring`) go to **[blinky-corpus](https://github.com/Jdubz/blinky-corpus)**, by PR to `main`.
 
-A change that crosses repos (a wire protocol, a firmware tool the server runs, a new label file) is a PR in each. This repo picks up the other two through its `corpus/` submodule pin (and, until the decoupling finishes, `firmware/`), bumped by an ordinary PR when the other repo changes. Dependabot is not used for repos we own.
+A change that crosses repos (a wire protocol, a model header, a new label file) is a PR in each. This repo picks up blinky-corpus through its `corpus/` submodule pin, bumped by an ordinary PR when that repo changes (Dependabot is not used for repos we own). It has no copy of blinky-firmware: it consumes its releases and staging artifacts, and the two share only the mel contract in `ml-training/spec/` and service APIs (`CLAUDE.md`, Repositories).
 
 ## Code of Conduct
 
@@ -14,7 +14,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ## Getting started
 
 - Git, Python 3.11+, Node 20+ (for the console), bash (Git Bash on Windows).
-- `git clone --recurse-submodules https://github.com/Jdubz/blinky_time.git`, or `git submodule update --init firmware corpus` in an existing clone.
+- `git clone https://github.com/Jdubz/blinky_time.git`, then `git submodule update --init corpus` (the only submodule).
 - **Read [CLAUDE.md](CLAUDE.md) before touching hardware.** It holds the flashing, release and test box rules. In short: never use `arduino-cli upload`, the Arduino IDE Upload button or `adafruit-nrfutil dfu serial` on the nRF52840, and only stable releases reach fleet devices, through `scripts/deploy.sh`.
 
 Setup and tests for each part:

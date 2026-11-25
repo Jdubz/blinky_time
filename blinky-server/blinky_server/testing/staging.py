@@ -5,7 +5,7 @@ puts a staging build on the test chips and tests it on real hardware.
    (deploy_pipeline.run_deploy with ``staging_sha``: test devices only, the single flash path,
    settings restore + save, the post-deploy version assertion).
 2. Health: ``stable_minutes`` of ``json info`` with no music, the bench gate's checks
-   (tools/release_gate.py): fps floor, longest frame, no reboot, overrun growth.
+   (blinky-firmware's tools/release_gate.py): fps floor, longest frame, no reboot, overrun growth.
 3. In a test session (runtime defaults, streaming), with the box speaker, every track is
    played once:
    - validation: every edm/ track, scored like /api/test/validate (drum metrics);
@@ -60,7 +60,8 @@ from .workflows import (
 
 log = logging.getLogger(__name__)
 
-# The bench gate's thresholds (tools/release_gate.py defaults, docs/RELEASE_PROCESS.md).
+# The bench gate's thresholds (blinky-firmware's tools/release_gate.py defaults and
+# docs/RELEASE_PROCESS.md).
 DEFAULTS: dict[str, float] = {
     "stable_minutes": 5.0,
     "min_fps": 60.0,
