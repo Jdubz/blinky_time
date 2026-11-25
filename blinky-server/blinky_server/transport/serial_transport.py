@@ -10,6 +10,7 @@ call_soon_threadsafe.
 
 import asyncio
 import logging
+import os
 import termios
 import threading
 from collections.abc import Callable
@@ -111,13 +112,24 @@ class SerialTransport(Transport):
                     break  # Port fd gone
                 chunk = ser.read(waiting or 1)
                 if not chunk:
+                    if not waiting:
+                        # Nothing was waiting and read(1) timed out: the device is quiet,
+                        # which is normal (an unconfigured chip in safe mode prints nothing
+                        # until asked; the old rule dropped and re-opened one every ~10 s).
+                        # A quiet port is only a lost one if its device node has gone.
+                        if not os.path.exists(self._port):
+                            log.warning("Serial %s: device node gone, disconnecting", self._port)
+                            break
+                        empty_reads = 0
+                        continue
+                    # The driver reported bytes waiting but read() returned none: the dead-
+                    # port symptom some USB drivers show during re-enumeration (ad53c802).
+                    # Sustained, after the device has spoken, it means the port is gone.
                     empty_reads += 1
-                    # Allow many empty reads during initial connection (device needs
-                    # ~1-2s to start serial output). Only treat as disconnect after
-                    # sustained empty reads AND we previously received data.
                     if empty_reads > 100 and self._ever_received:
                         log.warning(
-                            "Serial %s: %d consecutive empty reads, treating as disconnect",
+                            "Serial %s: %d consecutive empty reads with bytes reported "
+                            "waiting, treating as disconnect",
                             self._port,
                             empty_reads,
                         )
