@@ -10,7 +10,7 @@ The task is drum-hit (kick/snare) detection, not beat or all-onset detection (CL
 - **A tie goes to flux.** Speed only has to fit the frame budget; past that, the comparison is accuracy alone, and flux is cheaper, needs no training and is plain code. Without CPU cost, v33 scores drum F 0.672 against SuperFlux's 0.657 on the 18 edm/ tracks, measured against labels known to be late and wrong at the time. That is a tie. At ~12 ms per inference, v33 also can't hold the frame rate.
 - Compute was not the deciding factor. A streaming export (per-layer state, newest frame only) is estimated at about 13k MACs, roughly 0.75 ms, against v33's 210k. That estimate is unmeasured. The blocker is accuracy.
 
-The consistency work that replaced it is firmware work: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8) (the same hit sometimes triggers and sometimes doesn't) and [blinky-firmware#20](https://github.com/Jdubz/blinky-firmware/issues/20) (frame-phase wobble).
+The consistency work that replaced it is firmware work: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8) (the same hit sometimes triggers and sometimes doesn't). The frame-phase wobble ([blinky-firmware#20](https://github.com/Jdubz/blinky-firmware/issues/20)) was fixed with the overlapped onset STFT and closed on 2026-11-23; what's left of it moved to #8.
 
 ## The gate to turn a model back on
 
