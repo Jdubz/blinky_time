@@ -67,3 +67,7 @@ scratch/
 /build/
 /reports/
 /research_notes/
+
+# The test box's private config (setup.sh reads ~/.config/blinky/observability.env; a copy next to
+# setup.sh seeds it on first boot). Only the .example template is tracked.
+scripts/testbox/observability.env

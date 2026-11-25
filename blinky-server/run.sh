@@ -8,7 +8,7 @@
 #   ./run.sh status       Check if running
 #   ./run.sh logs         Attach to tmux session (Ctrl-B D to detach)
 #   ./run.sh restart      Stop + start
-#   ./run.sh start --no-ble --wifi-device 192.168.86.238:3333
+#   ./run.sh start --no-ble --wifi-device 192.0.2.10:3333
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
