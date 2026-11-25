@@ -50,8 +50,11 @@ async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict
     """The firmware-to-host clock offset from the best of ``samples`` round trips: the one with
     the shortest RTT, whose midpoint estimate is tightest (its error is at most RTT/2).
     Returns {offset_ms, rtt_ms, samples, loop}, or None if no sample succeeded (each failure is
-    logged by ``_sync_clock_sample``). ``loop`` is the newest sample's LOOP_FIELDS that the
-    firmware reports (older builds lack the ACF/PLP ones)."""
+    logged by ``_sync_clock_sample``). ``loop`` is the FIRST sample's LOOP_FIELDS that the
+    firmware reports (older builds lack the ACF/PLP ones): they describe the chip's last closed
+    5 s window, and the first sample's window closed before this sync's own commands paused the
+    stream, so it holds none of them. Read after a run of 10 s or more, that window lies wholly
+    inside the run (it closed at most 5 s before the sync and spans 5 s)."""
     got = []
     for _ in range(samples):
         one = await _sync_clock_sample(device)
@@ -60,7 +63,7 @@ async def _sync_clock(device: Device, samples: int = CLOCK_SYNC_SAMPLES) -> dict
     if not got:
         return None
     offset, rtt, _ = min(got, key=lambda o: o[1])
-    loop = {k: got[-1][2][k] for k in LOOP_FIELDS if k in got[-1][2]}
+    loop = {k: got[0][2][k] for k in LOOP_FIELDS if k in got[0][2]}
     log.debug(
         "Clock sync %s: offset=%.1fms rtt=%.1fms (best of %d)",
         device.id[:12],
@@ -309,7 +312,9 @@ async def _record_and_play(
             after_offset_ms=after["offset_ms"],
             after_rtt_ms=after["rtt_ms"],
             drift_ms=after["offset_ms"] - clock[device.id]["offset_ms"],
-            # Read right after the music, streaming still on: the loop timing of the run itself.
+            # Read right after the music, streaming still on: the chip's last closed 5 s window,
+            # inside the run when it lasted 10 s or more (see _sync_clock). One window: its
+            # maxFrameMs is that window's longest loop, not the whole run's.
             after_loop=after["loop"],
         )
     playback.clock = clock

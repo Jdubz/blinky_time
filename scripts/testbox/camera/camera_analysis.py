@@ -372,8 +372,9 @@ def timing_budget(
     - exposure: the timestamp's position in the exposure (start or readout) is unknown, a
       shift of up to the exposure time;
     - chip_frame: a detection is stamped at the top of the chip's loop and drawn at its end,
-      so it waits up to one loop: 0 to 1/fps (the fps DURING the run: streaming halves it);
-      its longest loop (maxFrameMs) bounds the tail;
+      so it waits up to one loop: 0 to 1/fps (the fps DURING the run: streaming halves it).
+      `longest_in_window` is the longest loop in the one 5 s window sampled (a hint at the
+      tail, not a bound: earlier windows of the run may have had longer ones);
     - clock_sync: firmware times are placed on the host clock to within RTT/2 (a constant
       shift for the run); drift is corrected linearly and listed for the record."""
     period_ms = frame_ns / 1e6
@@ -385,7 +386,7 @@ def timing_budget(
         f = 1000.0 / chip_fps
         out["chip_frame_ms"] = {"spread": round(f, 2), "sd": round(f / 12**0.5, 2)}
         if chip_max_frame_ms:
-            out["chip_frame_ms"]["longest"] = chip_max_frame_ms
+            out["chip_frame_ms"]["longest_in_window"] = chip_max_frame_ms
         if chip_fps_source:
             out["chip_frame_ms"]["source"] = chip_fps_source
     if clock:

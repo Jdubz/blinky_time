@@ -296,8 +296,8 @@ def test_the_budget_carries_the_longest_chip_frame_and_where_the_fps_came_from()
         chip_fps=60.0,
         clock=None,
         chip_max_frame_ms=37,
-        chip_fps_source="during the run",
+        chip_fps_source="the last 5 s window of the run",
     )
     assert b["chip_frame_ms"]["spread"] == pytest.approx(16.67, abs=0.01)
-    assert b["chip_frame_ms"]["longest"] == 37
-    assert b["chip_frame_ms"]["source"] == "during the run"
+    assert b["chip_frame_ms"]["longest_in_window"] == 37
+    assert b["chip_frame_ms"]["source"] == "the last 5 s window of the run"

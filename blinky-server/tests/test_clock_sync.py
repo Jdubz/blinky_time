@@ -25,6 +25,7 @@ class _Protocol:
         self.fw_offset_ms = fw_offset_ms
         self.calls = 0
         self.fps = 130.0
+        self.fps_seq: list[float] = []  # per-call fps, consumed first (then self.fps)
 
     async def send_command_timed(self, cmd: str) -> tuple[str, float, list[float]]:
         assert cmd == "json info"
@@ -36,7 +37,8 @@ class _Protocol:
         await asyncio.sleep(d / 2)
         arrived = time.time()
         await asyncio.sleep(0.05)  # the silence gap before the reply is finalized: not counted
-        info = {"version": "b0", "millis": millis, "fps": self.fps, "maxFrameMs": 31, "heapUsed": 1}
+        fps = self.fps_seq.pop(0) if self.fps_seq else self.fps
+        info = {"version": "b0", "millis": millis, "fps": fps, "maxFrameMs": 31, "heapUsed": 1}
         return json.dumps(info), sent, [arrived]
 
 
@@ -82,13 +84,16 @@ async def test_a_run_records_both_syncs_and_the_drift(monkeypatch: pytest.Monkey
 
     async def fake_play_streaming(*a: Any, **k: Any) -> PlaybackResult:
         proto.fps = 60.0  # streaming during the run halves the loop rate
+        # A window closes partway through the post-run sync and holds its pauses: only the
+        # first sample's window is the run's.
+        proto.fps_seq = [60.0, 90.0, 90.0, 90.0, 90.0]
         return await fake_play(*a, **k)
 
     monkeypatch.setattr(test_runner, "play_audio", fake_play_streaming)
     playback, _ = await test_runner._record_and_play([dev], "x.mp3")  # type: ignore[list-item]
     c = playback.clock[dev.id]
     assert c["loop"]["fps"] == 130.0  # before the run
-    assert c["after_loop"] == {"fps": 60.0, "maxFrameMs": 31}  # the run's own; no unrelated keys
+    assert c["after_loop"] == {"fps": 60.0, "maxFrameMs": 31}  # the first sample's; no other keys
     assert {"offset_ms", "rtt_ms", "samples", "after_offset_ms", "after_rtt_ms", "drift_ms"} <= set(
         c
     )
