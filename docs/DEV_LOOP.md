@@ -117,6 +117,7 @@ Code reads the location from config and never has a default address.
 ### 6. Stable candidates from scores
 
 - **Recording:** each staging suite records its scores with the corpus pin and the test setup. Scores are compared only within the same pin.
+- **Lag:** a box run's drum scores depend on removing its lag (ffplay's start to detection: 0.24-0.53 s, varying run to run). The scorer searches for it over the rig's window and reports where it came from (`lagSource`, `lagAmbiguous`, `lagNote`: blinky-corpus `blinky_scoring/lag.py`). An ambiguous lag (periodic drums) or a fallback is flagged in the score, not hidden. Box drum scores from before corpus `a20aa2f` were scored at an aliased lag and aren't comparable with later ones.
 - **Proposing:** when a candidate leads the current stable without health regressions (drum F, kick/snare recall, on-drum, repS, tempo, each beyond its noise), the box opens a "Propose bN for stable" issue with the comparison. The owner decides.
 - **No composite score yet:** the proposal shows each metric. How to weigh them gets decided from real proposals.
 
