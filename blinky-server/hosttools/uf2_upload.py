@@ -39,6 +39,8 @@ import shutil
 import subprocess
 import argparse
 import signal
+import atexit
+import tempfile
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
@@ -391,6 +393,17 @@ def find_bin_file(args):
     )
 
 
+def _private_output_dir():
+    """[blinky_time: a fresh directory per run for the converted UF2, removed at exit.
+    The source wrote it next to the hex: blinky-server keeps every image in one
+    images/ directory and flashes different devices concurrently, so two runs
+    would write the same images/blinky-things.uf2 and one could flash the other's
+    image or a half-written file (Copilot review on blinky_time#411).]"""
+    d = Path(tempfile.mkdtemp(prefix="blinky-uf2-"))
+    atexit.register(shutil.rmtree, d, True)
+    return d
+
+
 def convert_bin_to_uf2(bin_path, output_dir=None):
     """Convert a raw binary (.bin) to UF2 format for ESP32-S3.
 
@@ -413,7 +426,7 @@ def convert_bin_to_uf2(bin_path, output_dir=None):
     base_addr = profile["bin_base_addr"]
 
     if output_dir is None:
-        output_dir = bin_path.parent
+        output_dir = _private_output_dir()  # [blinky_time: was bin_path.parent]
     uf2_path = output_dir / "blinky-things.ino.uf2"
 
     cmd = [
@@ -663,7 +676,7 @@ def convert_to_uf2(hex_path, output_dir=None):
         )
 
     if output_dir is None:
-        output_dir = hex_path.parent
+        output_dir = _private_output_dir()  # [blinky_time: was hex_path.parent]
     uf2_path = output_dir / "blinky-things.uf2"
 
     cmd = [

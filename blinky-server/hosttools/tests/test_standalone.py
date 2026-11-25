@@ -78,6 +78,30 @@ def test_gh_runs_without_a_cwd_and_every_release_call_names_the_repo(
             assert cmd[-2:] == ["-R", fr.FIRMWARE_REPO]
 
 
+def test_each_conversion_writes_its_own_uf2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server keeps every image in one images/ directory and flashes devices concurrently:
+    two runs converting there would share images/blinky-things.uf2 (Copilot review, #411)."""
+    hex_path = tmp_path / "images" / "abc.hex"
+    hex_path.parent.mkdir()
+    hex_path.write_text(":00000001FF\n")
+    outs: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        out = cmd[cmd.index("-o") + 1]
+        outs.append(out)
+        Path(out).write_bytes(b"\0" * 512)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(uf2_upload.subprocess, "run", fake_run)
+    a = uf2_upload.convert_to_uf2(hex_path)
+    b = uf2_upload.convert_to_uf2(hex_path)
+    assert a != b and a.name == b.name == "blinky-things.uf2"
+    assert hex_path.parent not in (a.parent, b.parent)
+    assert not (hex_path.parent / "blinky-things.uf2").exists()
+
+
 def test_the_repo_defaults_to_blinky_firmware() -> None:
     if "BLINKY_FIRMWARE_REPO" not in os.environ:
         assert fr.FIRMWARE_REPO == "Jdubz/blinky-firmware"
