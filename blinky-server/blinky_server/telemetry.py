@@ -204,6 +204,48 @@ def register_fleet(get_devices: Callable[[], list[Any]]) -> None:
     REGISTRY.register(_fleet_collector)
 
 
+# -- the box's mode and the hardware queue behind it (testing/box_mode.py) ---------------------
+
+
+class BoxCollector(Collector):
+    """``blinky_box_mode{mode}`` (1 for the mode the box is in), and the work waiting behind
+    dev mode: ``blinky_hw_queue_depth`` and ``blinky_hw_queue_oldest_seconds`` (0 when none).
+    A switch to dev still waiting for its suite counts as queue (it is, until the suite ends)."""
+
+    def collect(self) -> Iterator[GaugeMetricFamily]:
+        from .testing import box_mode
+
+        try:
+            st = box_mode.snapshot()
+        except OSError as e:  # the data dir; never fail a scrape over it
+            log.warning("box mode metrics: %s", e)
+            return
+        mode = GaugeMetricFamily(
+            "blinky_box_mode",
+            "1 for the test box's mode (queue: runners submit; dev: dev builds, runners hold).",
+            labels=["mode"],
+        )
+        for m in box_mode.MODES:
+            mode.add_metric([m], 1.0 if st["mode"] == m else 0.0)
+        waiting = st["waiting"]
+        depth = GaugeMetricFamily(
+            "blinky_hw_queue_depth", "Hardware runs waiting behind the box's dev mode."
+        )
+        depth.add_metric([], float(len(waiting)))
+        oldest = GaugeMetricFamily(
+            "blinky_hw_queue_oldest_seconds",
+            "How long the oldest hardware run has waited behind dev mode (0: none waiting).",
+        )
+        since = [float(i.get("since") or 0.0) for i in waiting]
+        oldest.add_metric([], max(0.0, time.time() - min(since)) if since else 0.0)
+        yield mode
+        yield depth
+        yield oldest
+
+
+REGISTRY.register(BoxCollector())
+
+
 def metrics_body() -> tuple[bytes, str]:
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
 

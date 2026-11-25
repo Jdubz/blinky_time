@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from ..firmware import fleet_workflows  # noqa: F401  (registers fleet flash and deploy)
     from ..paths import data_dir
     from ..spark import workflows as _spark  # noqa: F401  (registers separate and train)
+    from ..testing import dev_run as _dev_run  # noqa: F401  (registers the dev targeted checks)
     from ..testing import staging as _staging  # noqa: F401  (registers the staging suite)
     from ..testing import workflows  # noqa: F401  (registers the test workflows)
     from ..work import durable
@@ -130,6 +131,7 @@ def create_app(
 
     # Import routers here to avoid circular imports
     from .routes_commands import router as commands_router
+    from .routes_dev import router as dev_router
     from .routes_devices import router as devices_router
     from .routes_firmware import router as firmware_router
     from .routes_flash_jobs import router as flash_jobs_router
@@ -145,6 +147,7 @@ def create_app(
     app.include_router(testing_router, prefix="/api")
     app.include_router(spark_router, prefix="/api")
     app.include_router(work_router, prefix="/api")
+    app.include_router(dev_router, prefix="/api")
     app.include_router(ws_router)
 
     @app.get("/metrics", include_in_schema=False)

@@ -120,7 +120,7 @@ BLINKY_BUILD_URL=http://<service address>:<port>
 BLINKY_BUILD_TOKEN=<the token from 1Password>
 ```
 
-The box checks every package with `blinky-server/hosttools/firmware_release.py verify-dev-package --sha SHA --dir DIR`, the same checks `download-staging` runs on a staging artifact. Unpushed work goes as a bundle against a pushed branch (`git bundle create x.bundle origin/staging..HEAD`), from a clean commit, never a dirty tree.
+The box checks every package with `blinky-server/hosttools/firmware_release.py verify-dev-package --sha SHA --dir DIR`, the same checks `download-staging` runs on a staging artifact. Unpushed work goes as a bundle against a pushed branch, from a commit, never a dirty tree: `dev.py` (see "Dev loop") makes it.
 
 ## Staging runner
 
@@ -129,6 +129,26 @@ The box checks every package with `blinky-server/hosttools/firmware_release.py v
 The suite deploys the staging build through the deploy pipeline, checks health (fps floor, longest frame, no reboot, overrun growth: release_gate's checks), plays every edm/ track once for validation and the music/beat-pace checks, then checks the version is unchanged, no reboot, and no firmware `[ASSERT]`/`[FALLBACK]`. The validation numbers are reported, not gated, because the box's numbers aren't trusted as a floor yet (see "Trusting the box's numbers" below).
 
 blinky-firmware's `tools/deploy_local.py` and `tools/release_gate.py` (and `devices/test_devices.json`) live in blinky-firmware and run against a chip on the machine's own USB. On the box blinky-server owns the chip's port, so the staging suite is how the box tests firmware.
+
+## Dev loop
+
+A firmware change can be built, flashed to the box's test chip and checked in a few minutes, before any push or CI (design: [DEV_LOOP.md](DEV_LOOP.md)). From a blinky-firmware checkout on the box (or `--repo PATH`):
+
+```
+python3 ~/blinky-deploy/scripts/testbox/dev.py try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
+python3 ~/blinky-deploy/scripts/testbox/dev.py status          # mode, what waits behind it, the chips
+python3 ~/blinky-deploy/scripts/testbox/dev.py mode queue      # leave dev mode: the staging runner carries on
+python3 ~/blinky-deploy/scripts/testbox/dev.py mode dev [--note TEXT] [--preempt]
+python3 ~/blinky-deploy/scripts/testbox/dev.py build [REF] [--wip]
+python3 ~/blinky-deploy/scripts/testbox/dev.py flash BUILD_ID
+python3 ~/blinky-deploy/scripts/testbox/dev.py test info health=2 validate=techno-machine-drum pace "cmd=set odfgate 0.3"
+```
+
+- **`try` is the one command.** It switches the box to dev mode if it isn't (and says so), builds the commit on the build service, flashes it, runs the info check plus the ones asked for, and prints the version, the flash result, each check and the `json info` timers. Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) pass or fail; scores are reported, never gating. `--camera` then runs `camera_review.py` on the tracks.
+- **No push needed.** An unpushed commit goes to the build service as a git bundle on its merge-base with `origin/staging` (then `origin/master`). A dirty tree is refused unless `--wip`, which builds the working tree as a throwaway commit at `refs/dev/wip` without touching your branch, index or stash.
+- **Dev mode has no expiry.** While the box is in it, the staging runner holds the staging head with a pending status (`queued: box in dev mode since HH:MM (N waiting)`), and the wait shows in `dev.py status`, `GET /api/box/mode` and the metrics `blinky_box_mode`, `blinky_hw_queue_depth` and `blinky_hw_queue_oldest_seconds`. Switching to dev while a staging suite runs waits for it; `--preempt` cancels it, and the staging runner tests that head again in queue mode. Switch back with `dev.py mode queue` when done.
+- **Server side:** `GET`/`PUT /api/box/mode`; `POST /api/dev/deploy {build_id, device_ids}` (the staging deploy pipeline with the build service's package, verified like a staging artifact: test chips only, stored non-stable) and `POST /api/dev/run {device_ids, checks}` (`info`, `health`, `validate`, `pace`, `commands`, in order, in one test session), both 409 outside dev mode. Each chip keeps the firmware's 60 s between resets: a dev deploy is refused (with Retry-After) until the chip has run 60 s.
+- **Config:** `~/.config/blinky/build.env` ("Build service client" above); the server and `dev.py` both read it, the environment overriding it. Without it, dev deploys answer 503.
 
 ## Needed: per-server device ownership
 

@@ -165,6 +165,25 @@ def fetch_staging_build(sha: str, out_dir: Path) -> dict[str, Any]:
     return rel
 
 
+def fetch_dev_build(build_id: str, out_dir: Path) -> dict[str, Any]:
+    """A build-service dev package (docs/DEV_LOOP.md), fetched and verified as
+    fetch_staging_build verifies a staging artifact (firmware/build_service.py: the
+    dev-channel manifest of exactly the build's commit, its version, every file's sha256).
+    Not a release: only test devices take it."""
+    from . import build_service
+
+    try:
+        rel = build_service.fetch(build_id, out_dir)
+    except build_service.BuildServiceError as e:
+        raise DeployError("release", str(e)) from e
+    for key in ("tag", "hex", "version", "sha"):
+        if key not in rel:
+            raise DeployError("release", f"the dev package record has no {key!r}")
+    if not Path(rel["hex"]).is_file():
+        raise DeployError("release", f"verified hex missing: {rel['hex']}")
+    return rel
+
+
 # ── 3. Targets ──────────────────────────────────────────────────────────
 
 
@@ -412,6 +431,12 @@ async def _staging_build(sha: str, download_dir: Path) -> dict[str, Any]:
 
 
 @durable.step
+async def _dev_build(build_id: str, download_dir: Path) -> dict[str, Any]:
+    rel = await asyncio.to_thread(fetch_dev_build, build_id, download_dir)
+    return {**rel, "hex": str(rel["hex"]), "uf2": str(rel.get("uf2", ""))}
+
+
+@durable.step
 async def _store_only(store_firmware: Callable[[Path, str], Path], rel: dict[str, Any]) -> str:
     # Not stable, so never armed for auto-recovery (#251): a test chip that a bad staging
     # build leaves in its bootloader is recovered with the stable image armed before.
@@ -466,6 +491,7 @@ async def run_deploy(
     flash: Callable[[Any, list[str], Path, Any], Awaitable[dict[str, Any]]],
     settle_s: float = LOOP_METRICS_SETTLE_S,
     staging_sha: str | None = None,
+    dev_build: str | None = None,
 ) -> dict[str, Any]:
     """All six steps. Returns a result dict; any failed step returns
     ``status: error`` with ``failed_step`` and that step's details.
@@ -475,11 +501,18 @@ async def run_deploy(
     auto-recovery stays armed with the stable image it had, and the settings restore + save
     go to the targets only, not the whole fleet; every other step is the same.
 
+    ``dev_build``: the same as ``staging_sha``, with a build-service dev package (a build id,
+    docs/DEV_LOOP.md) in place of the staging artifact. Nothing else differs.
+
     ``store_firmware`` and ``flash`` are the routes' own storage and
     flash-job helpers, passed in so the deploy writes and flashes exactly
     the way /api/fleet/upload and /api/fleet/flash do.
     """
     steps: dict[str, Any] = {}
+    if staging_sha is not None and dev_build is not None:
+        raise ValueError("a deploy is a staging build or a dev build, not both")
+    # A staging or dev build: test devices only, stored non-stable, settings on the targets.
+    test_build = staging_sha is not None or dev_build is not None
 
     def failed(e: DeployError) -> dict[str, Any]:
         log.error("Fleet deploy failed at %s", e)
@@ -488,26 +521,31 @@ async def run_deploy(
 
     try:
         job.progress, job.progress_message = 0, "Resolving targets"
-        if staging_sha is None:
+        if not test_build:
             target_ids = await _targets(fleet, device_ids)
         else:
             if isinstance(device_ids, str) or release_tag is not None:
                 raise DeployError(
-                    "targets", "a staging deploy takes an explicit list of test devices only"
+                    "targets",
+                    f"a {'dev' if dev_build else 'staging'} deploy takes an explicit list of "
+                    "test devices only",
                 )
             target_ids = await _staging_targets(fleet, list(device_ids))
         steps["targets"] = {"status": "ok", "devices": target_ids}
 
-        if staging_sha is None:
-            job.progress_message = "Downloading and verifying the stable release"
-            rel = await _release(release_tag, download_dir)
-        else:
+        if dev_build is not None:
+            job.progress_message = "Fetching and verifying the dev build"
+            rel = await _dev_build(dev_build, download_dir)
+        elif staging_sha is not None:
             job.progress_message = "Downloading and verifying the staging build"
             rel = await _staging_build(staging_sha, download_dir)
+        else:
+            job.progress_message = "Downloading and verifying the stable release"
+            rel = await _release(release_tag, download_dir)
         version = rel["version"]
         steps["release"] = {"status": "ok", "tag": rel["tag"], "version": version}
 
-        if staging_sha is None:
+        if not test_build:
             firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
             steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
         else:
@@ -529,7 +567,7 @@ async def run_deploy(
 
     try:
         job.progress_message = "Restoring runtime settings and saving"
-        if staging_sha is None:
+        if not test_build:
             settings = await _settings(fleet)
         else:
             settings = await _settings_on(fleet, target_ids)
@@ -544,10 +582,13 @@ async def run_deploy(
         return failed(e)
 
     job.progress, job.progress_message = 100, "Deploy complete"
-    return {
+    out = {
         "status": "ok",
         "message": f"{version} deployed and verified on {len(target_ids)} device(s)",
         "release": rel["tag"],
         "version": version,
         "steps": steps,
     }
+    if dev_build is not None:
+        out["build_id"], out["sha"] = dev_build, rel["sha"]
+    return out

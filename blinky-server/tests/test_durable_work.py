@@ -233,7 +233,9 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
     assert sum(x == "play bravo start" for x in effects(tmp_path)) == 1  # not run again
 
 
-@pytest.mark.parametrize("workflow", ["param-sweep", "tune-threshold", "capture-nn", "staging"])
+@pytest.mark.parametrize(
+    "workflow", ["param-sweep", "tune-threshold", "capture-nn", "staging", "dev-run"]
+)
 def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow: str) -> None:
     """The other test jobs, as validate above: crashed in the middle of a unit, then started
     again, they finish with the same units as an uninterrupted run, only the cut-off unit
@@ -265,6 +267,13 @@ def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow:
             res = {k: res[k] for k in ("sha", "version", "passed")} | {
                 "played": res["validation"]["played"]
             }
+        if workflow == "dev-run":  # likewise: the verdict, the checks and what each played
+            assert res["passed"] is True, res
+            res = {
+                "passed": res["passed"],
+                "checks": [(c["kind"], c.get("played"), c.get("track")) for c in res["checks"]],
+                "commands": res["checks"][1]["devices"],
+            }
         return res
 
     want_result = outcome(r)
@@ -287,10 +296,13 @@ RESTART_TESTS = {
     "test.tune-threshold": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.capture-nn": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.staging": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "test.dev-run": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "fleet.flash": "test_durable_flash.py::test_killed_before_the_bytes_land_reflashes_that_device_only",
     "fleet.deploy": "test_durable_flash.py::test_a_deploy_cut_off_mid_flash_resumes_with_that_device",
     "fleet.deploy-staging": "test_durable_flash.py::"
     "test_a_staging_deploy_cut_off_mid_flash_resumes_with_that_device",
+    "fleet.deploy-dev": "test_durable_flash.py::"
+    "test_a_dev_deploy_cut_off_mid_flash_resumes_with_that_device",
     "spark.separate": "test_durable_spark.py::"
     "test_a_separate_cut_off_by_a_restart_resumes_when_asked_again",
     "spark.train": "test_durable_spark.py::"

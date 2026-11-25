@@ -153,11 +153,16 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     unknown = sorted(set(body.limits or {}) - set(DEFAULTS))
     if unknown:
         raise HTTPException(422, f"unknown limits: {unknown}")
+    from ..testing import box_mode
     from . import routes_firmware
 
     # One deploy-bearing job at a time, the suite included (routes_firmware._deploy_active):
     # the same lock makes the check and the submit one step.
     async with routes_firmware._deploy_lock:
+        if box_mode.holds_queue():
+            # The runner holds back in dev mode (docs/DEV_LOOP.md); this closes the race of a
+            # runner that read the mode just before a switch. Retried on its next pass.
+            raise HTTPException(409, "the box is in dev mode: staging suites wait for queue mode")
         if await routes_firmware._deploy_active():
             raise HTTPException(409, "A deploy or staging suite is already running")
         try:

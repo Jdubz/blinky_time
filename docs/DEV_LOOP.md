@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built so far: the build service ([build-service/](../build-service/README.md), phase 1A), not yet deployed.
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: the build service ([build-service/](../build-service/README.md), phase 1A) and the box side of phase 1 (box modes, dev deploy and targeted checks, `dev.py`).
 
 ## Why
 
@@ -54,11 +54,11 @@ Code reads the location from config and never has a default address.
 
 ### 1. Build service
 
-- **API** (bearer token; the contract is in [build-service/README.md](../build-service/README.md), under `/v1/`):
-  - `POST /builds` takes `{repo, sha}` or a git bundle, and returns a build id;
-  - `GET /builds/{id}` returns the state and log tail;
-  - `GET /builds/{id}/package` returns the result.
-- **Output:** the same dev package as a staging build (`firmware_release.py package --dev`): hex, UF2, and `manifest.json` with sha256s and version `b<N>-dev-<sha8>`. The box verifies it exactly as `download_staging` verifies a staging artifact: both call `verify_dev_package` in `blinky-server/hosttools/firmware_release.py`.
+- **API** (bearer token; the contract is in [build-service/README.md](../build-service/README.md)):
+  - `POST /v1/builds` takes JSON `{"repo": "Jdubz/blinky-firmware", "sha"}` or multipart `bundle` + `sha`, and answers 202 `{"id", "state", "sha"}` (`state: done` at once on a cache hit; a commit already building returns that build); 403 is an untrusted commit, 409 a bundle whose prerequisite commits the service lacks;
+  - `GET /v1/builds/{id}` returns `{"id", "state": "queued|building|done|failed", "sha", "version", "error", "log_tail", "source", "created_at", "duration_s"}`;
+  - `GET /v1/builds/{id}/package` returns a `.tar.gz` of `manifest.json`, `*.hex` and `*.uf2`: the files of a `staging-firmware-<sha>` artifact.
+- **Output:** the same dev package as a staging build (`firmware_release.py package --dev`): hex, UF2, and `manifest.json` with sha256s and version `b<N>-dev-<sha8>`. The box verifies it exactly as `download_staging` verifies a staging artifact: both call `verify_dev_package` in `blinky-server/hosttools/firmware_release.py` (every file listed with its sha256, nothing unlisted).
 - **Speed:** a warm Arduino build cache per toolchain version (`tools/firmware_toolchain.json`) and a persistent build tree, so an incremental build recompiles only what changed. One build at a time for now; arduino-cli already compiles on every core in the CPU cap. The target is well under a minute for an incremental build.
 - **Later (phase 3):** it also runs the heavy CI jobs, the tracker harness and the NN harness, for owner commits, posting the results as commit statuses with a token scoped to commit statuses on these repos.
 
@@ -69,26 +69,34 @@ Code reads the location from config and never has a default address.
 - **`dev` mode:** the runners submit nothing. Each waiting commit gets a pending status saying why: `queued: box in dev mode since 14:05 (3 waiting)`. The same shows in `dev.py status`, in metrics on the box's Grafana dashboard (`blinky_box_mode`, `blinky_hw_queue_depth`, `blinky_hw_queue_oldest_seconds`), and in the staging reports.
 - **No expiry:** the box stays in dev mode until someone switches it back.
 - **Switching into dev mode while a suite runs** waits for the suite to finish, or `--preempt` cancels it and puts it back in the queue.
+- **How it is built** (`blinky_server/testing/box_mode.py`, `scripts/testbox/staging.py`):
+  - the mode is a JSON file in the server's data dir, so it survives restarts;
+  - while a switch waits for its suite the box is "switching": still `queue`, but the runners hold back and `POST /api/test/staging` answers 409 (closing the race of a runner that read the mode just before the switch);
+  - each runner reports what it holds back (`PUT /api/box/queue/{runner}`), which is what `GET /api/box/mode`, `dev.py status` and the metrics show;
+  - a preempted suite is cancelled at its next step boundary (a flash in flight finishes) and listed in the mode's `preempted`; the staging runner sees its job there, records no failure, and tests that head again.
 
 ### 3. Dev flash and targeted tests (dev mode only)
 
-- **`POST /api/dev/deploy {build}`:** the staging deploy pipeline unchanged, with a build-service package in place of the staging artifact. Test chips only, a verified package, the post-deploy version assertion, and an image stored as non-stable, so auto-recovery stays on the stable image (#251).
+- **`POST /api/dev/deploy {build_id, device_ids}`:** the staging deploy pipeline unchanged, with a build-service package in place of the staging artifact. Test chips only, a verified package, the post-deploy version assertion, and an image stored as non-stable, so auto-recovery stays on the stable image (#251). The server fetches the package itself and checks it as `download_staging` checks a staging artifact (`verify_dev_package`, the same function: manifest `channel: dev`, `git_sha`, `version == b<N>-dev-<sha8>`, the sha256 of every file, nothing unlisted), and unpacks only flat regular files, size- and count-capped. It is a durable job (`fleet.deploy-dev`) holding the audio lock, and the box's relaxed path like `deploy-staging`: the API key and box chips only, never the `X-Deploy-Tool` header.
 - **`POST /api/dev/run {checks}`:** any of the following, run in order inside one test session:
   - `info`: the `json info` timers, frame time and heap;
   - `health --minutes N`;
   - `validate --tracks …`;
   - `pace`;
-  - `camera --tracks …`;
-  - `commands …`.
+  - `camera --tracks …` (`dev.py try --camera`: the existing `camera_review.py`, which submits its own validation job);
+  - `commands …` (no reboot or config write: those aren't checks).
 
-  These are the staging suite's own functions; the suite becomes the "everything" set.
-- **`scripts/testbox/dev.py`:**
-  - `mode dev|queue`;
-  - `status`;
-  - `build <ref|bundle>`;
-  - `flash <build>`;
-  - `test <checks>`;
-  - `try <ref> <checks>`: build, flash, test, then print a short report.
+  These are the staging suite's own functions; the suite becomes the "everything" set. A durable job (`test.dev-run`): the audio lock and the LEDs lit for the whole run, runtime settings restored once at the start (so a `commands` check's `set` holds for the checks after it), streaming only while a track plays. Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) set pass/fail; scores are reported, never gating.
+- **`scripts/testbox/dev.py`** (stdlib only, run from a blinky-firmware checkout or with `--repo`):
+  - `mode dev|queue [--note] [--preempt]`;
+  - `status`: the mode, what waits behind it, the chips;
+  - `build [REF] [--wip]`;
+  - `flash BUILD_ID`;
+  - `test <checks>`: `info`, `health[=MIN]`, `validate=a,b`, `pace`, `cmd=c1;c2`;
+  - `try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]`: the one command. It enters dev mode itself if needed and says so, builds, flashes, runs the info check plus the ones asked for, and prints a short report (version, flash result, each check, the info timers). The box stays in dev mode afterwards.
+- **No push needed.** `dev.py` sends an unpushed commit as a git bundle of `<base>..<sha>`, where base is the merge-base with a fetched `origin/staging` (or `origin/master`). If the service answers 409 (it lacks the base), it tries the merge-base with the other branch, then says what to push. A commit already on a branch goes by sha.
+- **`--wip`.** A dirty tree is refused, unless `--wip`: the working tree, untracked files that git doesn't ignore included, becomes a throwaway commit on HEAD, through a temporary index and `git commit-tree -p HEAD`, kept at `refs/dev/wip`. The branch, index and stash are never touched, and the build is still of a commit (see "Trust").
+- **The 60 s rule.** A dev deploy is refused, with Retry-After, until each target chip has run 60 s since its last reset; `dev.py` waits that out once.
 - **CLAUDE.md** also loses "devtop runs one-shot CPU scripts only, with nothing left running": the build service is the exception the owner chose.
 - **CLAUDE.md** changes from "dev builds only through `deploy_local.py`" to "dev builds through `deploy_local.py`, or the box's dev mode".
 

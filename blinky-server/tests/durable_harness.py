@@ -1,7 +1,8 @@
 """Runs the real ``test.validate`` workflow against a fake fleet in its own process, so
 test_durable_work.py can kill it for real and start it again (#325). WORKFLOW names another
 test job instead; ``staging`` runs the staging suite (#349) with the deploy, json info, the
-stream and json rhythm faked, its validation playbacks counted like validate's.
+stream and json rhythm faked, its validation playbacks counted like validate's; ``dev-run`` runs
+the dev loop's targeted checks the same way.
 
     python -m tests.durable_harness start  OUT KILL   # KILL: none | crash:N | drain:N
     python -m tests.durable_harness resume OUT [late]  # late: devices reconnect 1.5 s in
@@ -27,7 +28,7 @@ from blinky_server.api.deps import set_fleet
 from blinky_server.device.device import DeviceState
 from blinky_server.firmware import deploy_pipeline
 from blinky_server.paths import data_dir
-from blinky_server.testing import staging, workflows
+from blinky_server.testing import dev_run, staging, workflows
 from blinky_server.work import durable
 
 TRACKS = ["alpha", "bravo", "charlie"]
@@ -209,6 +210,8 @@ deploy_pipeline.run_deploy = fake_deploy  # type: ignore[assignment]
 staging._info = fake_info
 staging.play_audio = fake_play_audio
 staging.stop_audio = noop
+dev_run.kill_orphan_audio = noop
+dev_run.stop_audio = noop
 staging.HEALTH_POLL_S = 0.05
 staging.HEALTH_SETTLE_S = 0.0
 STAGING_REQ = {
@@ -221,6 +224,21 @@ STAGING_REQ = {
         "pace_seconds": 2.5,
         "validation_ms": 1000,
     },
+}
+
+
+# The dev loop's targeted checks (docs/DEV_LOOP.md): every kind, in order.
+DEV_RUN_REQ = {
+    "device_ids": DEVICES,
+    "checks": [
+        {"kind": "info"},
+        {"kind": "commands", "commands": ["set x 3"]},
+        {"kind": "health", "minutes": 0.005},
+        {"kind": "validate", "tracks": TRACKS},
+        {"kind": "pace"},
+    ],
+    "track_dir": "/fake",
+    "limits": STAGING_REQ["limits"],
 }
 
 
@@ -264,6 +282,8 @@ async def main() -> None:
         }
         if WORKFLOW == "staging":
             wid = await durable.submit(staging.staging_suite, STAGING_REQ)
+        elif WORKFLOW == "dev-run":
+            wid = await durable.submit(dev_run.dev_run, DEV_RUN_REQ)
         elif WORKFLOW == "capture-nn":
             wid = await durable.submit(workflows.capture_nn, "dev-a", 1000.0, str(out / "c.jsonl"))
         else:

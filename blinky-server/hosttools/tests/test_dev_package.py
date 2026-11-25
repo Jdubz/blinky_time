@@ -1,0 +1,69 @@
+"""firmware_release.verify_dev_package, the box's dev loop (docs/DEV_LOOP.md): beyond
+download_staging's manifest checks (test_staging_download.py), nothing unverified may sit beside
+the image: every file is a regular file listed in the manifest with a matching sha256."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import firmware_release as fr  # noqa: E402
+
+SHA = "cd" * 20
+HEX, UF2 = b":00000001FF\n", b"UF2"
+
+
+def package(d: Path, **files: bytes) -> Path:
+    d.mkdir(parents=True, exist_ok=True)
+    content = {"blinky-things-b220.hex": HEX, "blinky-things-b220.uf2": UF2, **files}
+    m = {"build": 220, "version": f"b220-dev-{SHA[:8]}", "channel": "dev", "git_sha": SHA,
+         "files": {n: hashlib.sha256(b).hexdigest() for n, b in content.items()}}
+    (d / "manifest.json").write_text(json.dumps(m))
+    for n, b in content.items():
+        (d / n).write_bytes(b)
+    return d
+
+
+def test_an_unlisted_file_beside_the_image_is_refused(tmp_path: Path) -> None:
+    d = package(tmp_path / "p")
+    fr.verify_dev_package(d, SHA)
+    (d / "extra.hex").write_bytes(b"x")
+    with pytest.raises(fr.ReleaseError, match="not in the manifest"):
+        fr.verify_dev_package(d, SHA)
+
+
+def test_every_listed_file_is_checked_not_only_hex_and_uf2(tmp_path: Path) -> None:
+    d = package(tmp_path / "p", **{"blinky-things-b220.bin": b"bin"})
+    fr.verify_dev_package(d, SHA)
+    (d / "blinky-things-b220.bin").write_bytes(b"other")
+    with pytest.raises(fr.ReleaseError, match="sha256 mismatch"):
+        fr.verify_dev_package(d, SHA)
+
+
+def test_a_symlink_or_directory_is_refused(tmp_path: Path) -> None:
+    d = package(tmp_path / "a")
+    (d / "link.hex").symlink_to(d / "blinky-things-b220.hex")
+    with pytest.raises(fr.ReleaseError, match="not a regular file"):
+        fr.verify_dev_package(d, SHA)
+    d = package(tmp_path / "b")
+    (d / "sub").mkdir()
+    with pytest.raises(fr.ReleaseError, match="not a regular file"):
+        fr.verify_dev_package(d, SHA)
+
+
+def test_the_cli_prints_what_the_server_reads(tmp_path: Path) -> None:
+    d = package(tmp_path / "p")
+    tool = Path(fr.__file__)
+    args = [sys.executable, str(tool), "verify-dev-package", "--dir", str(d), "--sha"]
+    out = json.loads(subprocess.run([*args, SHA], capture_output=True, text=True,
+                                    check=True).stdout)
+    assert out["sha"] == SHA and out["version"] == f"b220-dev-{SHA[:8]}"
+    assert Path(out["hex"]).is_file() and Path(out["uf2"]).is_file()
+    bad = subprocess.run([*args, "ab" * 20], capture_output=True, text=True)
+    assert bad.returncode == 1 and "not the dev build" in bad.stderr

@@ -51,7 +51,8 @@ log = logging.getLogger(__name__)
 
 TEST_JOBS = jobs.Family(
     prefix="test.",
-    kinds=("validate", "param-sweep", "tune-threshold", "capture-nn", "staging"),  # staging.py
+    # staging: staging.py; dev-run: dev_run.py
+    kinds=("validate", "param-sweep", "tune-threshold", "capture-nn", "staging", "dev-run"),
     result_steps=("validation_run", "sweep_run", "tune_run", "nn_capture"),
 )
 
