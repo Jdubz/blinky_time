@@ -112,6 +112,9 @@ def test_build_cache_is_per_toolchain_and_stale_ones_pruned(client, remote, work
     w.run_once()
     mine = f"tc-{toolchain.fingerprint_id(w.baked)}"
     assert (tmp_path / "cache" / mine / "tmp").is_dir()
+    # arduino-cli's build cache ($XDG_CACHE_HOME/arduino) is on the cache volume, not in HOME.
+    marker = tmp_path / "cache" / mine / "xdg-cache" / "arduino" / "last-build"
+    assert marker.read_text().strip() == remote.tip[:8]
     (tmp_path / "cache" / "tc-0123456789abcdef").mkdir()
     w.prune_caches()
     assert sorted(p.name for p in (tmp_path / "cache").iterdir()) == [mine]

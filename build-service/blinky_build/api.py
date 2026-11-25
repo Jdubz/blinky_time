@@ -95,7 +95,8 @@ class Service:
     def __init__(self, cfg):
         self.cfg = cfg
         self.mirror = Mirror(cfg.data / "mirror.git", cfg.remote, cfg.repo)
-        self.store = JobStore(cfg.jobs)
+        # The api's own record of jobs lives with the mirror, not on the shared volume.
+        self.store = JobStore(cfg.jobs, meta_dir=cfg.data / "jobs")
         self.lock = threading.Lock()
 
     def start(self):
@@ -121,7 +122,8 @@ class Service:
         except BaseException:
             self.store.discard_incoming(job_id)
             raise
-        self.store.prune(self.cfg.keep)
+        for gone in self.store.prune(self.cfg.keep):
+            self.mirror.delete_refs(f"refs/dev/{gone}")  # a pruned bundle's history goes too
         log(f"queued {job_id} ({source} {sha[:12]})")
         return 202, {"id": job_id, "state": "queued", "sha": sha}
 
@@ -166,40 +168,59 @@ class Service:
                 raise HttpError(409, str(e)) from None
 
     def package_tar(self, job_id):
-        if not self.store.view(job_id):
+        meta = self.store.meta(job_id)
+        if not meta:
             raise HttpError(404, f"no build {job_id}")
-        pkg = self.store.package_dir(job_id)
-        if not pkg:
+        if (self.store.status(job_id) or {}).get("state") != "done":
             raise HttpError(409, f"build {job_id} is not done")
+        files = self.store.package_files(job_id)
+        # The worker wrote these; serve them only if they claim to be this job's commit (the
+        # box still verifies every hash itself).
+        try:
+            manifest = json.loads(files["manifest.json"]) if files else None
+        except (KeyError, ValueError):
+            manifest = None
+        if not isinstance(manifest, dict) or manifest.get("git_sha") != meta["sha"]:
+            raise HttpError(500, f"build {job_id}: the package is missing or not of {meta['sha']}")
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for p in sorted(pkg.iterdir()):
-                if p.is_file() and (p.name == "manifest.json" or p.suffix in (".hex", ".uf2")):
-                    info = tar.gettarinfo(str(p), arcname=p.name)
-                    info.uid = info.gid = 0
-                    info.uname = info.gname = ""
-                    info.mode = 0o644
-                    with open(p, "rb") as f:
-                        tar.addfile(info, f)
+            for name, data in sorted(files.items()):
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                info.mode = 0o644
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(data))
         return buf.getvalue()
 
 
 def parse_multipart(content_type, body):
-    """{field: (filename or None, bytes)} from a multipart/form-data body."""
+    """{field: (filename or None, bytes)} from a multipart/form-data body.
+
+    Parts are split on the delimiter LINE (CRLF "--" boundary, RFC 2046 5.1.1), not on any
+    occurrence of the boundary: "--boundary" inside a part's content (a bundle is binary) is
+    data."""
     m = Message()
     m["content-type"] = content_type
     boundary = m.get_param("boundary")
     if m.get_content_type() != "multipart/form-data" or not boundary:
         raise HttpError(400, "expected multipart/form-data with a boundary")
-    delim = b"--" + boundary.encode("latin-1")
-    chunks = body.split(delim)
-    if len(chunks) < 3 or not chunks[-1].startswith(b"--"):
+    dash = b"--" + boundary.encode("latin-1")
+    if body.startswith(dash):
+        rest = body[len(dash):]
+    else:
+        i = body.find(b"\r\n" + dash)  # after a preamble
+        if i < 0:
+            raise HttpError(400, "malformed multipart body")
+        rest = body[i + 2 + len(dash):]
+    chunks = rest.split(b"\r\n" + dash)
+    if len(chunks) < 2 or not chunks[-1].startswith(b"--"):
         raise HttpError(400, "malformed multipart body")
     fields = {}
-    for chunk in chunks[1:-1]:
-        if not chunk.startswith(b"\r\n") or not chunk.endswith(b"\r\n"):
+    for chunk in chunks[:-1]:
+        chunk = chunk.lstrip(b" \t")  # transport padding after the boundary
+        if not chunk.startswith(b"\r\n"):
             raise HttpError(400, "malformed multipart part")
-        head, sep, data = chunk[2:-2].partition(b"\r\n\r\n")
+        head, sep, data = chunk[2:].partition(b"\r\n\r\n")
         if not sep:
             raise HttpError(400, "malformed multipart part headers")
         hm = Message()
@@ -289,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, v)
                 if parts[3] == "package":
                     data = self.service.package_tar(job_id)
-                    sha = self.service.store.meta(job_id)["sha"]
+                    sha = self.service.store.meta(job_id)["sha"]  # 40 hex: safe in a header
                     return self._send(200, data, "application/gzip", {
                         "Content-Disposition": f'attachment; filename="dev-firmware-{sha}.tar.gz"'
                     })
@@ -336,10 +357,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise HttpError(400, "Content-Type must be application/json or multipart/form-data")
             return self._send(code, body)
         except HttpError as e:
-            return self._error(e.code, e.message, close=e.code in (411, 413))
+            # The body may be unread (an error raised before it was): close, so it is never
+            # parsed as the next request on this connection.
+            return self._error(e.code, e.message, close=True)
         except Exception as e:  # never a stack trace to the client; the log has it
             log(f"internal error on POST: {e!r}")
-            return self._error(500, "internal error (see the service log)")
+            return self._error(500, "internal error (see the service log)", close=True)
 
 
 def make_server(service):

@@ -175,20 +175,30 @@ class Mirror:
 
     def write_checkout(self, sha, dest, dev_prefix=None):
         """A checkout of ``sha`` with history at ``dest``: the branch heads (and the bundle's
-        refs) fetched by NAME from the mirror, never by SHA, then a detached checkout."""
+        refs) fetched by NAME from the mirror, never by SHA, then a detached checkout.
+
+        Built in the api's private storage and then copied to ``dest`` (symlinks copied as
+        links, never followed): no git command runs on the shared job volume, which the build
+        can write to (a planted filter or config there would run in this container)."""
         dest = Path(dest)
+        stage = self.path.parent / "stage" / dest.parent.name
         with self.lock:
-            git("init", "--quiet", dest)
-            git("-C", dest, "config", "core.hooksPath", "/dev/null")
-            specs = ["+refs/heads/*:refs/remotes/origin/*"]
-            if dev_prefix:
-                specs.append(f"+{dev_prefix}/*:refs/remotes/dev/*")
-            git(
-                "-C", dest, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
-                "--no-write-fetch-head", str(self.path.resolve()), *specs,
-            )
-            git("-C", dest, "checkout", "--quiet", "--force", "--detach", sha)
-            head = out("-C", dest, "rev-parse", "HEAD")
-            if head != sha:
-                shutil.rmtree(dest, ignore_errors=True)
-                raise RuntimeError(f"checkout of {sha} produced {head}")
+            shutil.rmtree(stage, ignore_errors=True)
+            stage.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                git("init", "--quiet", stage)
+                git("-C", stage, "config", "core.hooksPath", "/dev/null")
+                specs = ["+refs/heads/*:refs/remotes/origin/*"]
+                if dev_prefix:
+                    specs.append(f"+{dev_prefix}/*:refs/remotes/dev/*")
+                git(
+                    "-C", stage, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules",
+                    "--no-write-fetch-head", str(self.path.resolve()), *specs,
+                )
+                git("-C", stage, "checkout", "--quiet", "--force", "--detach", sha)
+                head = out("-C", stage, "rev-parse", "HEAD")
+                if head != sha:
+                    raise RuntimeError(f"checkout of {sha} produced {head}")
+                shutil.copytree(stage, dest, symlinks=True)
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)

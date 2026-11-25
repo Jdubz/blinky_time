@@ -11,13 +11,15 @@ status.json back into the job.
 The checkout it builds in is one persistent tree at a fixed path (BLINKY_BUILD_SRC), moved
 between commits with `git checkout`, so arduino-cli's sketch build directory (keyed by the
 sketch path) stays warm and unchanged files keep their mtimes: an incremental build
-recompiles only what changed. The pinned toolchain sits at <src>/.arduino, root-owned and
-read-only to the build: arduino-cli canonicalizes library paths and the firmware's
-tools/check_build_libs.py requires them under <checkout>/.arduino, so it can't be a symlink.
+recompiles only what changed. The build cache itself is on the cache volume. The pinned
+toolchain sits at <src>/.arduino, root-owned and read-only to the build: arduino-cli
+canonicalizes library paths and the firmware's tools/check_build_libs.py requires them
+under <checkout>/.arduino, so it can't be a symlink.
 
 Configuration (environment):
   BLINKY_BUILD_JOBS       the shared job volume (default /jobs)
-  BLINKY_BUILD_CACHE      the warm build cache volume (default /cache)
+  BLINKY_BUILD_CACHE      the warm build cache volume (default /cache): per toolchain,
+                          arduino-cli's build cache ($XDG_CACHE_HOME) and TMPDIR
   BLINKY_BUILD_SRC        the persistent checkout, holding .arduino (default /opt/blinky/src)
   BLINKY_BUILD_TOOLCHAIN  the image's toolchain fingerprint (default /opt/blinky/toolchain.json)
   BLINKY_BUILD_OUTPUT     where scripts/build.sh writes the hex (default /tmp/blinky-build)
@@ -252,14 +254,19 @@ class Worker:
         tc_id = toolchain.fingerprint_id(want)
         logf.write(f"=== toolchain {tc_id} (matches the image)\n")
 
-        tmp = self.cfg.cache / f"tc-{tc_id}" / "tmp"
+        tc_cache = self.cfg.cache / f"tc-{tc_id}"
+        tmp = tc_cache / "tmp"
+        xdg = tc_cache / "xdg-cache"
         tmp.mkdir(parents=True, exist_ok=True)
+        xdg.mkdir(parents=True, exist_ok=True)
         self.cfg.home.mkdir(parents=True, exist_ok=True)
         env = {
             "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
             "HOME": str(self.cfg.home),
-            # arduino-cli's build directory and core cache live under TMPDIR: on the cache
-            # volume, one tree per toolchain.
+            # arduino-cli 1.3.1 keeps its sketch build directories and core cache in
+            # build_cache.path, which defaults to os.UserCacheDir()/arduino, i.e.
+            # $XDG_CACHE_HOME/arduino: on the cache volume, one tree per toolchain.
+            "XDG_CACHE_HOME": str(xdg),
             "TMPDIR": str(tmp),
             "LANG": "C.UTF-8",
             "PYTHON": sys.executable,

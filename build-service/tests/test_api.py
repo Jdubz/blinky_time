@@ -14,7 +14,8 @@ def fake_done(service, job_id, n=211, sha=None):
     sha = sha or service.store.meta(job_id)["sha"]
     pkg = service.cfg.jobs / job_id / "package"
     pkg.mkdir()
-    (pkg / "manifest.json").write_text(json.dumps({"version": f"b{n}-dev-{sha[:8]}"}))
+    (pkg / "manifest.json").write_text(json.dumps({"version": f"b{n}-dev-{sha[:8]}",
+                                                    "git_sha": sha}))
     (pkg / f"blinky-things-b{n}.hex").write_text(":00000001FF\n")
     (pkg / f"blinky-things-b{n}.uf2").write_bytes(b"UF2")
     service.store.set_status(job_id, state="done", version=f"b{n}-dev-{sha[:8]}")
@@ -116,7 +117,6 @@ def test_package_409_until_done_then_tar(client, service, remote):
 
 def test_prune_keeps_inflight(service, remote):
     store = service.store
-    service.cfg.keep = 1
     ids = []
     for state in ("done", "failed", None):
         job_id = store.new_id(remote.tip) + (state or "q")
@@ -125,8 +125,93 @@ def test_prune_keeps_inflight(service, remote):
         if state:
             store.set_status(job_id, state=state)
         ids.append(job_id)
-    store.prune(0)
+    assert store.prune(0) == ids[:2]
     assert store.ids() == [ids[2]]
+    assert not (service.cfg.data / "jobs" / f"{ids[0]}.json").exists()
+
+
+def test_pruned_bundle_refs_are_deleted(client, service, remote, tmp_path):
+    from blinky_build import gitutil
+
+    new = remote.commit_file("blinky-things/main.cpp", "int main() { return 21; }\n", "dev")
+    b = remote.bundle(tmp_path / "p.bundle", [f"{remote.tip}..HEAD"])
+    _, first = client.post_bundle(new, b.read_bytes())
+    service.store.set_status(first["id"], state="failed", error="x")
+    service.cfg.keep = 1
+    client.post_sha(remote.tip)  # a new job prunes the old one, and its refs/dev
+    refs = gitutil.out("--git-dir", service.mirror.path, "for-each-ref", "--format=%(refname)",
+                       "refs/dev/")
+    assert refs == ""
+    assert first["id"] not in service.store.ids()
+
+
+def test_package_must_be_of_the_jobs_commit(client, service, remote):
+    _, b = client.post_sha(remote.tip)
+    fake_done(service, b["id"], sha=remote.base)  # the worker claims another commit
+    assert client.req("GET", f"/v1/builds/{b['id']}/package")[0] == 500
+
+
+def test_api_ignores_worker_symlinks_and_specials(client, service, remote):
+    """Build code can write the job volume: the api must not follow a symlink there (a
+    build.log linked to /proc/self/environ would leak the token) or read a FIFO."""
+    import os
+
+    _, b = client.post_sha(remote.tip)
+    d = service.cfg.jobs / b["id"]
+    (d / "build.log").symlink_to("/proc/self/environ")
+    secret = d.parent / "secret.json"
+    secret.write_text(json.dumps({"state": "done", "version": "TOKEN-LEAK"}))
+    (d / "status.json").symlink_to(secret)
+    code, view = client.req("GET", f"/v1/builds/{b['id']}")
+    assert code == 200 and "TOKEN-LEAK" not in json.dumps(view) and TOKEN not in view["log_tail"]
+    assert view["state"] == "failed"  # a status.json it can't read is not "queued" forever
+    (d / "status.json").unlink()
+    os.mkfifo(d / "status.json")
+    assert client.req("GET", f"/v1/builds/{b['id']}")[1]["state"] == "failed"
+
+
+def test_worker_cannot_rewrite_the_apis_record(client, service, remote):
+    _, b = client.post_sha(remote.tip)
+    job_json = service.cfg.jobs / b["id"] / "job.json"
+    job_json.write_text(json.dumps({"id": b["id"], "sha": remote.base, "created_at": 0}))
+    fake_done(service, b["id"], sha=remote.tip)
+    # The cache still files this build under remote.tip, not the sha the worker wrote.
+    assert client.post_sha(remote.base)[1]["id"] != b["id"]
+    assert client.req("GET", f"/v1/builds/{b['id']}")[1]["sha"] == remote.tip
+
+
+def test_corrupt_status_is_failed_and_retried(client, service, remote):
+    _, b = client.post_sha(remote.tip)
+    (service.cfg.jobs / b["id"] / "status.json").write_text("{not json")
+    assert client.req("GET", f"/v1/builds/{b['id']}")[1]["state"] == "failed"
+    assert client.post_sha(remote.tip)[1]["id"] != b["id"]
+
+
+def test_post_errors_close_the_connection(client, remote):
+    import http.client
+    from urllib.parse import urlparse
+
+    u = urlparse(client.base)
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=30)
+    conn.request("POST", "/v1/nope", body=b"GET /v1/healthz HTTP/1.1\r\n\r\n",
+                 headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "text/plain"})
+    r = conn.getresponse()
+    r.read()
+    assert r.status == 404 and r.getheader("Connection") == "close"
+
+
+def test_job_checkout_is_not_made_on_the_shared_volume(service, remote):
+    # Staged privately (next to the mirror), then copied: nothing left behind in either.
+    code, _ = service.submit_sha("Jdubz/blinky-firmware", remote.tip)
+    assert code == 202
+    assert not list((service.cfg.data / "stage").iterdir())
+
+
+def test_multipart_boundary_inside_content_is_data():
+    body = (b"--B\r\nContent-Disposition: form-data; name=\"bundle\"; filename=\"x\"\r\n\r\n"
+            b"data--Bmore\n--B not a delimiter\r\n--B--\r\n")
+    f = api.parse_multipart("multipart/form-data; boundary=B", body)
+    assert f["bundle"] == ("x", b"data--Bmore\n--B not a delimiter")
 
 
 def test_multipart_parser():

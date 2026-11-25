@@ -410,10 +410,10 @@ jobs:
     name: Build service
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Skipped unless build-service changed (job `changes`); runs if that job failed, so a broken
-    # diff can never skip it silently.
+    # Heavy: skipped on a draft PR (see `on:`). Otherwise skipped unless build-service changed
+    # (job `changes`); runs if that job failed, so a broken diff can never skip it silently.
     needs: changes
-    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.build_service == 'true') }}
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.build_service == 'true') }}
     env:
       # A recent blinky-firmware staging commit (b211): the worker image bakes in its toolchain,
       # and it is the commit built end to end. Move it when the toolchain pin moves.

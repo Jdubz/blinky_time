@@ -67,6 +67,7 @@ printf ':00000001FF\\n%s\\n' "$(cat blinky-things/main.cpp)" > "@OUT@/blinky-thi
 echo '[{"name": "ArduinoJson", "version": "7.4.2", "folder": "user/libraries/ArduinoJson"}]' \\
   > "@OUT@/libraries.json"
 echo "compiled $N $SHA" > "@OUT@/compile.log"
+mkdir -p "$XDG_CACHE_HOME/arduino" && echo "$SHA" > "$XDG_CACHE_HOME/arduino/last-build"
 echo "=== Build $N complete ==="
 """
 
