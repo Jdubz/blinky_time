@@ -733,7 +733,7 @@ async def test_a_pr_smoke_test_in_queue_mode(
         ({"tracks": ["missing"]}, 400),
         ({"build_id": "b2"}, 400),  # a build of another commit
         ({"build_id": "b3"}, 409),  # not built yet
-        ({"build_id": "nope"}, 502),  # the service doesn't know it
+        ({"build_id": "nope"}, 410),  # the service doesn't know it (pruned): rebuild
         ({"device_ids": ["nope"]}, 400),
         ({"track_dir": "/etc"}, 400),
         ({"build_id": "../x"}, 422),

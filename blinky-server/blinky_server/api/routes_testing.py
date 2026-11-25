@@ -222,6 +222,10 @@ async def pr_smoke(body: PrSmokeRequest) -> dict[str, Any]:
     try:
         rec = await asyncio.to_thread(build_service.build, body.build_id)
     except build_service.BuildServiceError as e:
+        if e.code == 404:
+            # Pruned or lost by the service: the runner builds the head again (410, not a 5xx
+            # it would retry with the same id forever).
+            raise HTTPException(410, f"the build service has no build {body.build_id}") from e
         raise HTTPException(502, str(e)) from e
     if rec.get("sha") != body.sha:
         raise HTTPException(400, f"build {body.build_id} is not of {body.sha[:12]}")

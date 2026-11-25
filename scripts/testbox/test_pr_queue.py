@@ -619,3 +619,31 @@ def test_turn_taking_compares_the_longest_wait_so_the_runners_never_deadlock() -
     )  # the staging runner yields
     state = run(g, srv, b)
     assert state["running"]["pr"] == "5"  # and this one goes
+
+
+def test_a_build_pruned_after_it_was_ready_is_built_again() -> None:
+    """Ready in dev mode with an old build id the service has since pruned: the server answers
+    410 for it, and the head is built again rather than retried with that id forever."""
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    srv.refuse = http_error(410, "the build service has no build build-aaaa")
+    state = run(g, srv, b)
+    assert "build" not in state["queue"]["5"] and not state["queue"]["5"].get("ready")
+    srv.refuse = None
+    assert run(g, srv, b)["running"]["sha"] == A1 and b.submitted == [A1, A1]
+
+
+def test_a_build_service_down_leaves_nothing_ready_so_staging_is_not_held() -> None:
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    srv.devices = []  # built and ready, but not submitted yet
+    assert run(g, srv, b)["queue"]["5"]["ready"]
+    real_get = b.get
+
+    def down(build_id: str) -> dict[str, Any]:
+        raise dev.DevError("the build service isn't answering: refused")
+
+    b.get = down  # type: ignore[method-assign]
+    state = run(g, srv, b)
+    assert not state["queue"]["5"].get("ready") and "ready" not in srv.queue[-1][0]
+    b.get = real_get  # type: ignore[method-assign]
+    srv.devices = [GRID]
+    assert run(g, srv, b)["running"]["sha"] == A1 and b.submitted == [A1]  # same build

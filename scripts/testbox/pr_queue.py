@@ -420,13 +420,13 @@ def hold(gh_: Gh, state: dict[str, Any], mode: dict[str, Any]) -> None:
 
 
 def build(gh_: Gh, state: dict[str, Any], builds: Builds) -> None:
-    """Queue mode: each queued head built (by sha) or its build polled; a failed build settles
-    the head with a failure and the log's tail."""
+    """Queue mode: each queued head built (by sha) or its build polled, a built one too, so
+    ``ready`` always means a build the service has now; a failed build settles the head with a
+    failure and the log's tail. A service that can't be reached leaves nothing ready: a head
+    that can't be tested must not hold the staging runner back (it yields to ready items)."""
     queue = state.get("queue") or {}
     for number in sorted(queue, key=int):
         item = queue[number]
-        if item.get("ready"):
-            continue
         try:
             rec = builds.get(item["build"]) if item.get("build") else builds.submit_sha(item["sha"])
         except Untrusted as e:
@@ -441,14 +441,18 @@ def build(gh_: Gh, state: dict[str, Any], builds: Builds) -> None:
                 # The service no longer has the build (pruned, or its store was reset): build
                 # the head again.
                 log(f"{item['sha'][:12]} (#{number}): build {item.pop('build')} gone; rebuilding")
+                item.pop("ready", None)
                 continue
             log(f"build service: {e}; next pass")
+            for held in queue.values():
+                held.pop("ready", None)
             return
         item["build"] = rec.get("id") or item.get("build")
         st = rec.get("state")
         if st == "done":
+            if not item.get("ready"):  # said once, not over a later "no test device"
+                post_once(gh_, item, "pending", "built; queued for the box")
             item["ready"] = True
-            post_once(gh_, item, "pending", "built; queued for the box")
         elif st == "failed":
             url = upsert_comment(gh_, number, item["sha"], render_build_failure(item["sha"], rec))
             status(gh_, item["sha"], "failure", "the build failed: see the log in the comment", url)
@@ -491,6 +495,10 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
             },
         )
     except urllib.error.HTTPError as e:
+        if e.code == 410:  # the build service no longer has the build: build the head again
+            log(f"{item['sha'][:12]} (#{number}): build {item.pop('build')} gone; rebuilding")
+            item.pop("ready", None)
+            return
         if not (400 <= e.code < 500) or e.code in RETRY_CODES:
             log(f"{item['sha'][:12]} (#{number}): server answered {e.code}; next pass")
             return

@@ -47,7 +47,12 @@ VERIFY_TIMEOUT_S = 60.0
 
 
 class BuildServiceError(RuntimeError):
-    """The build service can't be used, or its answer isn't a verified dev package."""
+    """The build service can't be used, or its answer isn't a verified dev package. ``code``:
+    the service's HTTP status when it answered with an error (404: it has no such build)."""
+
+    def __init__(self, msg: str, code: int | None = None) -> None:
+        super().__init__(msg)
+        self.code = code
 
 
 def _env_file(path: Path) -> dict[str, str]:
@@ -96,7 +101,7 @@ def _get(path: str, *, raw: bool = False) -> Any:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as r:
             data = r.read(MAX_PACKAGE_BYTES + 1)
     except urllib.error.HTTPError as e:
-        raise BuildServiceError(f"build service: GET {path} -> {e.code} {e.reason}") from e
+        raise BuildServiceError(f"build service: GET {path} -> {e.code} {e.reason}", e.code) from e
     except (urllib.error.URLError, OSError) as e:
         raise BuildServiceError(f"build service unreachable: {e}") from e
     if len(data) > MAX_PACKAGE_BYTES:
