@@ -5,7 +5,7 @@ This repo is the tooling: blinky-server, blinky-console, ml-training, blinky-ser
 - **Firmware** (`blinky-things/`, bootloader, simulator, host tests) goes to **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)**, by PR to its `staging` branch. That repo's [CONTRIBUTING.md](https://github.com/Jdubz/blinky-firmware/blob/staging/CONTRIBUTING.md) covers building, test devices and the hardware-tested release flow.
 - **Labels and scoring** (`edm/`, `blinky_scoring`) go to **[blinky-corpus](https://github.com/Jdubz/blinky-corpus)**, by PR to `main`.
 
-A change that crosses repos (a wire protocol, a firmware tool the server runs, a new label file) is a PR in each. This repo picks up the other two through its `firmware/` and `corpus/` submodule pins, which Dependabot bumps by PR.
+A change that crosses repos (a wire protocol, a firmware tool the server runs, a new label file) is a PR in each. This repo picks up the other two through its `corpus/` submodule pin (and, until the decoupling finishes, `firmware/`), bumped by an ordinary PR when the other repo changes. Dependabot is not used for repos we own.
 
 ## Code of Conduct
 
