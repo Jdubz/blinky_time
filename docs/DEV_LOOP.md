@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Not built yet. Phases are at the end.
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built so far: the build service ([build-service/](../build-service/README.md), phase 1A), not yet deployed.
 
 ## Why
 
@@ -29,7 +29,7 @@ First attempts often have mistakes, and every one of them pays the whole loop. T
 This is the rule everything else follows.
 
 - **No GitHub runner on devtop ever takes a job from a public repo.** blinky's workflows run only on GitHub-hosted runners (checked 2026-11-25: all 14). The org's self-hosted runners serve private org repos only; their runner group has public repos off, and the blinky repos are on the personal account. Keep it that way: "CI jobs on devtop" means jobs submitted to the build service, never a runner registration.
-- **The build service builds only owner commits.** A request names a commit of `Jdubz/blinky-firmware`. The service refuses it unless the commit is on one of that repo's own branches, which only the owner can push. "The SHA exists in the repo" is not enough: GitHub serves a fork PR's commits from the base repo by SHA (`refs/pull/N/head`). The check is a branch comparison through the GitHub API, the same one `download_staging` uses for `staging`.
+- **The build service builds only owner commits.** A request names a commit of `Jdubz/blinky-firmware`. The service refuses it unless the commit is on one of that repo's own branches, which only the owner can push. "The SHA exists in the repo" is not enough: GitHub serves a fork PR's commits from the base repo by SHA (`refs/pull/N/head`). The check is local: the service's mirror fetches only the branch heads (`refs/heads/*`), never a commit by SHA, and the commit must be an ancestor of one of them.
 - **Unpushed commits** come as a git bundle from the box. The box is an authenticated, trusted caller. The bundle must be a commit (clean tree), never a working directory: b210 and b211 reached a device from dirty trees (blinky-firmware `docs/RELEASE_PROCESS.md`).
 - **Fork PRs never reach the box.** The PR hardware queue takes only PRs whose head is a branch of the repo itself. A fork PR keeps GitHub-hosted CI and gets hardware-tested only after an owner merge into `staging`, as today.
 - **The build sandbox, defence in depth.** The build runs the repo's own scripts (`scripts/build.sh`), so it is arbitrary code even for owner commits. It runs:
@@ -54,12 +54,12 @@ Code reads the location from config and never has a default address.
 
 ### 1. Build service
 
-- **API** (bearer token):
+- **API** (bearer token; the contract is in [build-service/README.md](../build-service/README.md), under `/v1/`):
   - `POST /builds` takes `{repo, sha}` or a git bundle, and returns a build id;
   - `GET /builds/{id}` returns the state and log tail;
   - `GET /builds/{id}/package` returns the result.
-- **Output:** the same dev package as a staging build (`firmware_release.py package --dev`): hex, UF2, and `manifest.json` with sha256s and version `b<N>-dev-<sha8>`. The box verifies it exactly as `download_staging` verifies a staging artifact.
-- **Speed:** a warm Arduino build cache per toolchain version (`tools/firmware_toolchain.json`), and builds in parallel up to the CPU cap. The target is well under a minute for an incremental build.
+- **Output:** the same dev package as a staging build (`firmware_release.py package --dev`): hex, UF2, and `manifest.json` with sha256s and version `b<N>-dev-<sha8>`. The box verifies it exactly as `download_staging` verifies a staging artifact: both call `verify_dev_package` in `blinky-server/hosttools/firmware_release.py`.
+- **Speed:** a warm Arduino build cache per toolchain version (`tools/firmware_toolchain.json`) and a persistent build tree, so an incremental build recompiles only what changed. One build at a time for now; arduino-cli already compiles on every core in the CPU cap. The target is well under a minute for an incremental build.
 - **Later (phase 3):** it also runs the heavy CI jobs, the tracker harness and the NN harness, for owner commits, posting the results as commit statuses with a token scoped to commit statuses on these repos.
 
 ### 2. Box modes: `dev` and `queue`

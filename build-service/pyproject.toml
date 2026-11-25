@@ -1,0 +1,11 @@
+# Lint and test settings only: the service is stdlib Python, run from its images
+# (docker/), not installed as a package.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

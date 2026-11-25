@@ -1,0 +1,70 @@
+# The build service, run from this directory (CI's end-to-end job; a local try).
+# The deployment is NOT this file: it lives in the platform's private infrastructure repo,
+# which builds these images at a pinned commit and binds the api to a private address.
+#
+# Everything about where it runs comes from the environment; nothing has a default:
+#   BLINKY_BUILD_BIND          host address to publish the api on
+#   BLINKY_BUILD_PORT          port (host and container)
+#   BLINKY_BUILD_TOKEN         bearer token (>= 32 chars)
+#   FIRMWARE_TOOLCHAIN_REF     blinky-firmware commit whose toolchain the worker image bakes in
+#
+#   docker compose up -d --build
+name: blinky-build-local
+
+x-hardening: &hardening
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+services:
+  api:
+    <<: *hardening
+    image: ${BLINKY_BUILD_API_IMAGE:-blinky-build-api:local}
+    build: {context: ., dockerfile: docker/Dockerfile.api}
+    environment:
+      BLINKY_BUILD_HOST: 0.0.0.0     # inside the container; the host side is BLINKY_BUILD_BIND
+      BLINKY_BUILD_PORT: ${BLINKY_BUILD_PORT:?}
+      BLINKY_BUILD_TOKEN: ${BLINKY_BUILD_TOKEN:?}
+    ports:
+      - "${BLINKY_BUILD_BIND:?}:${BLINKY_BUILD_PORT:?}:${BLINKY_BUILD_PORT:?}"
+    volumes:
+      - mirror:/data
+      - jobs:/jobs
+    read_only: true
+    tmpfs: ["/tmp:size=256m"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/v1/healthz' % os.environ['BLINKY_BUILD_PORT'], timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    <<: *hardening
+    image: ${BLINKY_BUILD_WORKER_IMAGE:-blinky-build-worker:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+      args:
+        FIRMWARE_TOOLCHAIN_REF: ${FIRMWARE_TOOLCHAIN_REF:?}
+    network_mode: none          # always: the source arrives through the job volume
+    volumes:
+      - jobs:/jobs
+      - cache:/cache
+    # Not read_only: the build tree must sit next to the root-owned toolchain at
+    # /opt/blinky/src/.arduino (see blinky_build/worker.py). Everything else in the image is
+    # root-owned and unwritable to uid 10001.
+    tmpfs: ["/tmp:size=2g"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/jobs/.worker/heartbeat') > 60)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mirror:
+  jobs:
+  cache:

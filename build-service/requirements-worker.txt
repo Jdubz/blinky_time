@@ -1,0 +1,15 @@
+# Python the firmware's build and package steps need, as staging-build.yml installs them
+# (`pip install adafruit-nrfutil pyserial`), pinned by hash:
+#   adafruit-nrfutil  the Seeeduino core's post-build recipe (recipe.objcopy.zip.pattern) runs
+#                     `adafruit-nrfutil dfu genpkg`; a compile fails at the end without it
+#   pyserial          tools/firmware_release.py package imports tools/uf2_upload.py
+adafruit-nrfutil==0.5.3.post16 \
+    --hash=sha256:b72103dc8e50f92951f512fc2b6f2c621dac1614531ddf8c0be3b13d020e24ad
+click==8.5.1 \
+    --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37
+ecdsa==0.19.2 \
+    --hash=sha256:840f5dc5e375c68f36c1a7a5b9caad28f95daa65185c9253c0c08dd952bb7399
+six==1.17.0 \
+    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+pyserial==3.5 \
+    --hash=sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0
