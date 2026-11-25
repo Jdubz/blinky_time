@@ -382,7 +382,7 @@ def load_config(config_path: str) -> dict:
 # Storage roots in config paths (#286). Configs name `${BLINKY_DATA}` (warm
 # tier: audio corpora, labels, RIR, noise) and `${BLINKY_WORK}` (hot tier:
 # prepared tensors, mel cache, outputs) instead of one machine's mounts; set
-# them to wherever a local copy lives. Unset, they are the old devtop layout
+# them to wherever a local copy lives. Unset, they are the old build-host layout
 # (docs/ML_STORAGE_LAYOUT.md). The label reviewer resolves its defaults here too.
 STORAGE_ROOT_DEFAULTS = {
     "BLINKY_DATA": "/mnt/storage/blinky-ml-data",

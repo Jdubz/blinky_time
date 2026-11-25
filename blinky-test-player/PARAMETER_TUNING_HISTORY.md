@@ -2398,7 +2398,7 @@ decay sweep, dual-path ODF, band-selective whitening).
 **Goal:** Systematically optimize all 6 forward filter parameters informed by literature comparison (madmom/BTrack reference implementations).
 
 **Environment:**
-- Hardware: 3 XIAO nRF52840 Sense devices (ACM0/ACM1/ACM2) on blinkyhost
+- Hardware: 3 XIAO nRF52840 Sense devices (ACM0/ACM1/ACM2) on the fleet server
 - Firmware: v59+NN, `fwdfilter=1`, `nnbeat=1` (NN beat ODF)
 - Test tracks: 18 EDM tracks, 35s duration, 12s settle, middle-of-track seeking
 - Method: Batched multi-device sweep (3 values/batch, ~23 min per 6-value sweep)

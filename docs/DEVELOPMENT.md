@@ -45,7 +45,10 @@ cd blinky-console && npm run dev
 ```
 
 Console at `:3000` keeps HMR + WebSerial; `/api/*` and `/ws/*` requests
-proxy through to the server. Edit either side without rebuilding.
+proxy through to the server. Edit either side without rebuilding. To proxy to
+a blinky-server on another machine, set `BLINKY_DEV_PROXY_TARGET` in
+`blinky-console/.env.local` (gitignored; template `.env.example`). Never commit
+a real host: the repo is public.
 
 ### Production-style: server serves the SPA
 

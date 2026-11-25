@@ -94,6 +94,11 @@ jobs:
         fi
         echo "✅ All required documentation files present"
 
+    - name: No network topology (the repo is public)
+      # Host names, private/tailnet addresses and mDNS names belong in ~/.config/blinky/, never
+      # here; justified exceptions go in .topology-allowlist.
+      run: python3 scripts/check_topology.py
+
     - name: Check version file
       run: |
         if [ -f "VERSION" ]; then

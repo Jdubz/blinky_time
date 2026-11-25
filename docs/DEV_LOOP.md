@@ -17,7 +17,7 @@ First attempts often have mistakes, and every one of them pays the whole loop. T
 
 ## Owner decisions (2026-11-25)
 
-1. **Builds run on devtop, through a build service.** That keeps the box light and builds faster. The repos are public: they name no host, address, port or secret. Where the service runs comes only from private config (see "Where it runs").
+1. **Builds run on the build host, through a build service.** That keeps the box light and builds faster. The repos are public: they name no host, address, port or secret. Where the service runs comes only from private config (see "Where it runs").
 2. **Draft PRs run no heavy CI jobs** until they're marked ready for review.
 3. **On-box smoke tests must finish healthy** (blocking). Their scores are reported and never block.
 4. **The top-scoring builds are proposed as stable candidates.** The owner decides; promotion stays `release_promote.py`.
@@ -28,7 +28,7 @@ First attempts often have mistakes, and every one of them pays the whole loop. T
 
 This is the rule everything else follows.
 
-- **No GitHub runner on devtop ever takes a job from a public repo.** blinky's workflows run only on GitHub-hosted runners (checked 2026-11-25: all 14). The org's self-hosted runners serve private org repos only; their runner group has public repos off, and the blinky repos are on the personal account. Keep it that way: "CI jobs on devtop" means jobs submitted to the build service, never a runner registration.
+- **No GitHub runner on the build host ever takes a job from a public repo.** blinky's workflows run only on GitHub-hosted runners (checked 2026-11-25: all 14). The org's self-hosted runners serve private org repos only; their runner group has public repos off, and the blinky repos are on the personal account. Keep it that way: "CI jobs on the build host" means jobs submitted to the build service, never a runner registration.
 - **The build service builds only owner commits.** A request names a commit of `Jdubz/blinky-firmware`. The service refuses it unless the commit is on one of that repo's own branches, which only the owner can push. "The SHA exists in the repo" is not enough: GitHub serves a fork PR's commits from the base repo by SHA (`refs/pull/N/head`). The check is local: the service's mirror fetches only the branch heads (`refs/heads/*`), never a commit by SHA, and the commit must be an ancestor of one of them.
 - **Unpushed commits** come as a git bundle from the box. The box is an authenticated, trusted caller. The bundle must be a commit (clean tree), never a working directory: b210 and b211 reached a device from dirty trees (blinky-firmware `docs/RELEASE_PROCESS.md`).
 - **Fork PRs never reach the box.** The PR hardware queue takes only PRs whose head is a branch of the repo itself. A fork PR keeps GitHub-hosted CI and gets hardware-tested only after an owner merge into `staging`, as today.
@@ -97,7 +97,7 @@ Code reads the location from config and never has a default address.
 - **No push needed.** `dev.py` sends an unpushed commit as a git bundle of `<base>..<sha>`, where base is the merge-base with a fetched `origin/staging` (or `origin/master`). If the service answers 409 (it lacks the base), it tries the merge-base with the other branch, then says what to push. A commit already on a branch goes by sha.
 - **`--wip`.** A dirty tree is refused, unless `--wip`: the working tree, untracked files that git doesn't ignore included, becomes a throwaway commit on HEAD, through a temporary index and `git commit-tree -p HEAD`, kept at `refs/dev/wip`. The branch, index and stash are never touched, and the build is still of a commit (see "Trust").
 - **The 60 s rule.** A dev deploy is refused, with Retry-After, until each target chip has run 60 s since its last reset; `dev.py` waits that out once.
-- **CLAUDE.md** also loses "devtop runs one-shot CPU scripts only, with nothing left running": the build service is the exception the owner chose.
+- **CLAUDE.md** also loses "The build host runs one-shot CPU scripts only, with nothing left running": the build service is the exception the owner chose.
 - **CLAUDE.md** changes from "dev builds only through `deploy_local.py`" to "dev builds through `deploy_local.py`, or the box's dev mode".
 
 ### 4. CI: drafts run no heavy jobs
@@ -124,7 +124,7 @@ Code reads the location from config and never has a default address.
 
 1. **The dev loop:**
    - the topology leaks out of the public repo (see "Where it runs");
-   - the build service on devtop (owner commits and bundles, sandboxed);
+   - the build service on the build host (owner commits and bundles, sandboxed);
    - box modes;
    - dev flash and targeted tests, and `dev.py`;
    - drafts run no heavy jobs.

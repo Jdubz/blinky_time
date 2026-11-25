@@ -5,7 +5,7 @@ Two copies exist intentionally:
 
 * ``ml-training/scripts/onset_label_merge.py`` — used by the training pipeline.
 * ``corpus/blinky_scoring/onset_label_merge.py`` (blinky-corpus, #357) — used by the
-  blinky-server validation harness, which runs on blinkyhost (a Raspberry Pi)
+  blinky-server validation harness, which runs on the fleet server and the test box (Raspberry Pis)
   where the ml-training package is intentionally not installed.
 
 The two files MUST stay byte-identical except for their module docstring

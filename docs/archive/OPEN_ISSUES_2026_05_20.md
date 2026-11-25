@@ -27,7 +27,7 @@ won't-do rationales — read it for the "why" behind anything below.
 ## 0. ACTIVE (2026-05-20 PM): SWD reset-line crosstalk fix + 06ACEB recovery (IN PROGRESS)
 
 **Root cause found — high value, affects all SWD recovery.** SWD flashing via
-the `swd-flash.local` Pi was failing on the SoftDevice write with
+the SWD Pi was failing on the SoftDevice write with
 `Wrong parity detected` / `Error waiting NVMC_READY` /
 `clearing lockup after double fault` / **`external reset detected`**. It is
 **NOT** power, **NOT** the rig, **NOT** my config changes, and **NOT** a faulty
@@ -160,7 +160,7 @@ when the real umbrella geometry is confirmed.
 ### Deploy-tooling audit (2026-05-20) — done before trusting the rollout
 
 All on the bench chip `659C8DD3ADF84A33` (the one SWD-recoverable device;
-forced BLE-only by cutting USB while the swd-flash Pi held it on 3V3).
+forced BLE-only by cutting USB while the SWD Pi held it on 3V3).
 
 **Fixed + validated (committed):**
 - `protocol.py`: `save`/`load` got a 10 s serial timeout (was 2 s →
@@ -172,7 +172,7 @@ forced BLE-only by cutting USB while the swd-flash Pi held it on 3V3).
   the save-timeout had always aborted before reaching it).
 - `deploy-bootloader.sh`: headless-compatible (explicit by-label mount,
   was assuming desktop udisks auto-mount) + stale-mountpoint
-  false-positive fix. Validated end-to-end on blinkyhost.
+  false-positive fix. Validated end-to-end on the fleet server.
 - **SHOWSTOPPER — canary killed BLE-DFU flashes.** The orchestrator
   pauses the broadcaster for a whole flash; the canary saw
   `broadcaster.running=false`, and after 90 s restarted blinky-server,

@@ -24,7 +24,7 @@ Offline `evaluate.py` F1 is not the gate: it ignores CPU cost and the firmware's
 
 ## Active: ESP32-S3 feasibility (P3)
 
-The ESP32-S3's second core is the only place an NN is being considered (blinky-firmware's [NEXTGEN_ESP32S3_PLAN.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/NEXTGEN_ESP32S3_PLAN.md)). The question is whether a model there can clear the gate above while the LEDs never drop frames. Training for it runs on the DGX Spark as a `gpu_task` job (`ml-training/scripts/spark_jobs.py train`, CLAUDE.md "Long-Running Scripts"); nothing trains on devtop or the test box.
+The ESP32-S3's second core is the only place an NN is being considered (blinky-firmware's [NEXTGEN_ESP32S3_PLAN.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/NEXTGEN_ESP32S3_PLAN.md)). The question is whether a model there can clear the gate above while the LEDs never drop frames. Training for it runs on the DGX Spark as a `gpu_task` job (`ml-training/scripts/spark_jobs.py train`, CLAUDE.md "Long-Running Scripts"); nothing trains on the build host or the test box.
 
 ## Paused
 

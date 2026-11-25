@@ -22,7 +22,7 @@ Pi fleet server (blinky-server)
   ├── BLE NUS (BleTransport — working, both platforms)
   └── WiFi TCP (WifiTransport — implemented, blocked by ESP32-S3 antenna)
 
-REST API: http://blinkyhost.local:8420/api/
+REST API: http://<fleet-server>:8420/api/
   ├── GET  /devices               — list all devices (incl. RSSI, MTU, BLE addr)
   ├── GET  /fleet/status          — fleet health summary (counts, per-device health)
   ├── POST /fleet/discover        — trigger immediate BLE/serial scan
@@ -155,7 +155,7 @@ Built-in NimBLE in arduino-esp32 3.3.7 crashes on ESP32-S3. External NimBLE-Ardu
 
 ---
 
-## BLE Addresses (blinkyhost devices)
+## BLE Addresses (the fleet server's devices)
 
 | Serial Number | App BLE Address | Bootloader BLE Address | USB Hub | Notes |
 |--------------|-----------------|----------------------|---------|-------|

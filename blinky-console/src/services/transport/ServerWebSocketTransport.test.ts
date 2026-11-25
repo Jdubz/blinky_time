@@ -80,14 +80,14 @@ afterEach(() => {
 });
 
 describe('ServerWebSocketTransport', () => {
-  const SERVER_URL = 'http://blinkyhost.local:8420';
+  const SERVER_URL = 'http://server.example.invalid:8420';
   const DEVICE_ID = 'ABC123';
 
   describe('connect', () => {
     it('connects to the correct WebSocket URL', async () => {
       const transport = new ServerWebSocketTransport(SERVER_URL, DEVICE_ID);
       await transport.connect();
-      expect(mockWsInstance?.url).toBe('ws://blinkyhost.local:8420/ws/ABC123');
+      expect(mockWsInstance?.url).toBe('ws://server.example.invalid:8420/ws/ABC123');
     });
 
     it('converts https to wss', async () => {
@@ -359,7 +359,9 @@ describe('ServerWebSocketTransport', () => {
     it('URL-encodes device ID with special characters', async () => {
       const transport = new ServerWebSocketTransport(SERVER_URL, 'device with spaces');
       await transport.connect();
-      expect(mockWsInstance?.url).toBe('ws://blinkyhost.local:8420/ws/device%20with%20spaces');
+      expect(mockWsInstance?.url).toBe(
+        'ws://server.example.invalid:8420/ws/device%20with%20spaces'
+      );
     });
   });
 });

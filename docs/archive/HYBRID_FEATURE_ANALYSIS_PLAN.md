@@ -760,7 +760,7 @@ No held-out-contamination concern added by the v29 retrain: `processed_v28/` was
 
 **Near-term plan:**
 
-1. Finish the in-flight v28_mel_only held-out validation on blinkyhost. Record before numbers (F1, P, R, TP/FP distribution) as the last data point for the broken-loss generation.
+1. Finish the in-flight v28_mel_only held-out validation on the fleet server. Record before numbers (F1, P, R, TP/FP distribution) as the last data point for the broken-loss generation.
 2. Launch v29_mel_only in tmux on the training GPU. ~11 h.
 3. Export v29_mel_only to TFLite, flash fleet, run held-out validation with `persist_raw=true`. Record after numbers.
 4. If v29_mel_only clears P ≥ 0.40 on held-out: re-queue the four v29 single-feature ablations. Each reuses `processed_v28/` with `feature_indices` column selection (already implemented in `MemmapBeatDataset`).

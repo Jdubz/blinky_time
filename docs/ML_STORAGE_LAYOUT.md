@@ -1,10 +1,10 @@
 # ML data: where it lives
 
-Where blinky's ML training data is, and how configs find it. Training is paused (`ML_IMPROVEMENT_PLAN.md`); when it runs, it runs on the DGX Spark as a job, never on devtop or the test box.
+Where blinky's ML training data is, and how configs find it. Training is paused (`ML_IMPROVEMENT_PLAN.md`); when it runs, it runs on the DGX Spark as a job, never on the build host or the test box.
 
-## The archive (bignasty)
+## The archive (the NAS)
 
-On 2026-07-10 devtop's `/mnt/storage` became the my-spark object store, and the old devtop data layout (the `/mnt/nvme` pool, `/mnt/storage/blinky-ml-data`) no longer exists. blinky's ML data was archived first, to the archive on the NAS (bignasty's RAID). Its path is in the owner's private notes: this repo is public, and it names no host path or address. The archive's `blinky/` directory holds:
+On 2026-07-10 the build host's `/mnt/storage` became the my-spark object store, and the old build-host data layout (the `/mnt/nvme` pool, `/mnt/storage/blinky-ml-data`) no longer exists. blinky's ML data was archived first, to the archive on the NAS's RAID. Its path is in the owner's private notes: this repo is public, and it names no host path or address. The archive's `blinky/` directory holds:
 
 | Path in the archive | Size | Contents |
 |---|---|---|
@@ -16,7 +16,7 @@ On 2026-07-10 devtop's `/mnt/storage` became the my-spark object store, and the 
 | `processed_v36` | 217 GB | prepared tensors for the dead v36 (80-mel) config; re-prep instead |
 | `blinky-ml-archive/_archive_beats_2026_04_29` | 1 GB | archived beat labels (never a training input) |
 
-bignasty's RAID is production's only redundant backup: read from the archive, never write or delete there.
+The NAS's RAID is production's only redundant backup: read from the archive, never write or delete there.
 
 ## The Spark's object store (what jobs read)
 
@@ -26,13 +26,13 @@ bignasty's RAID is production's only redundant backup: read from the archive, ne
 - `datasets/blinky-stems/htdemucs/`: the 172 GB archive stems, copied as-is with a manifest (my-spark #1558), laid out `<track>/<stem>.wav`. Not re-separated: that would spend about 9 h of GPU and replace the stems the existing `kick_weighted` labels came from.
 - `blinky/stems/<model>/`: output of the Spark `separate` job, for tracks the archive lacks or a new separator. Never reaped.
 
-A host copy also sits at `/home/blinky/corpus` on the Spark (6.8 GB); jobs don't read it.
+A host copy also sits on the Spark (6.8 GB); jobs don't read it.
 
 Prepared training tensors (about 200 GB at full size) are made inside the job's checkpoint directory by `ml-training/spark_entry.py` and never go to the store.
 
 ## Storage roots (#286)
 
-Configs, the Makefile and `train_pipeline.sh` name `${BLINKY_DATA}` (corpora, labels, RIR, noise) and `${BLINKY_WORK}` (`processed_v*`, mel cache, outputs) instead of mounts. Set them to wherever a local copy lives. Unset, they default to the old devtop paths (`/mnt/storage/blinky-ml-data`, `/mnt/nvme`), which no longer exist. `scripts/audio.py:load_config` expands them and refuses any other `${…}`, and `tests/test_storage_roots.py` fails on a config that names a machine mount.
+Configs, the Makefile and `train_pipeline.sh` name `${BLINKY_DATA}` (corpora, labels, RIR, noise) and `${BLINKY_WORK}` (`processed_v*`, mel cache, outputs) instead of mounts. Set them to wherever a local copy lives. Unset, they default to the old build-host paths (`/mnt/storage/blinky-ml-data`, `/mnt/nvme`), which no longer exist. `scripts/audio.py:load_config` expands them and refuses any other `${…}`, and `tests/test_storage_roots.py` fails on a config that names a machine mount.
 
 New configs set paths through the roots:
 

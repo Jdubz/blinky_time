@@ -1,0 +1,3 @@
+# Justified exceptions to scripts/check_topology.py (the repo is public: no host names or
+# private addresses). One per line: <path glob> <regex matched against the offending line>,
+# with a comment above saying why it isn't topology.

@@ -2,7 +2,7 @@
 
 What blinky-server and the firmware do over Bluetooth today, and the known limits. The build history is in `archive/BLUETOOTH_IMPLEMENTATION_PLAN.md` and `archive/BLE_FLEET_RELIABILITY_PLAN.md`. Flashing rules (deploy.sh only, the single flash path) are in `CLAUDE.md` and `SAFETY.md`; browser updates over Bluetooth are in blinky-firmware's [WEB_FLASHER.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/WEB_FLASHER.md).
 
-The test box runs with BLE off (`--no-ble` and `dtoverlay=disable-bt`; see `TEST_BOX.md`). Everything below is about blinkyhost and the fleet.
+The test box runs with BLE off (`--no-ble` and `dtoverlay=disable-bt`; see `TEST_BOX.md`). Everything below is about the fleet server and the fleet.
 
 ## Connections (NUS)
 

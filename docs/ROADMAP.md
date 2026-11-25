@@ -9,7 +9,7 @@ Where the project is going, in priority order, across all three repos:
 
 | Label | Priority | Open issues |
 |---|---|---|
-| `P0-tooling` | Test-box hardware testing, Spark and devtop workflow | [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3AP0-tooling) · [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP0-tooling) |
+| `P0-tooling` | Test-box hardware testing, Spark and build-host workflow | [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3AP0-tooling) · [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP0-tooling) |
 | `P1-audio` | Consistent drum-hit reactivity | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP1-audio) · [blinky-corpus](https://github.com/Jdubz/blinky-corpus/issues?q=is%3Aopen+label%3AP1-audio) |
 | `P2-smoothness` | LED smoothness, no dropped frames | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP2-smoothness) |
 | `P3-esp32` | ESP32-S3: dual cores, NN feasibility | [blinky-firmware](https://github.com/Jdubz/blinky-firmware/issues?q=is%3Aopen+label%3AP3-esp32) · [blinky_time](https://github.com/Jdubz/blinky_time/issues?q=is%3Aopen+label%3AP3-esp32) |
@@ -19,9 +19,9 @@ A new issue gets a label when it's filed. When priorities change, change this pa
 
 ## Order (owner, 2026-11-23)
 
-> Box tooling will support all other endeavors. We need to solidify the hardware testing in the test box and leverage the Spark and devtop services to their full extent. Once we have an elegant workflow in place then we can focus on real improvements.
+> Box tooling will support all other endeavors. We need to solidify the hardware testing in the test box and leverage the Spark and build-host services to their full extent. Once we have an elegant workflow in place then we can focus on real improvements.
 
-1. **P0, tooling.** Solid, hands-off hardware testing on the test box, and full use of the DGX Spark and devtop.
+1. **P0, tooling.** Solid, hands-off hardware testing on the test box, and full use of the DGX Spark and the build host.
 2. **P1, audio.** Consistent reactivity to drum hits.
 3. **P2, smoothness.** No dropped frames, ever.
 4. **P3, next generation.** The ESP32-S3 again: dual cores, and whether NN analysis is feasible there.
@@ -40,9 +40,9 @@ Umbrella: [#386](https://github.com/Jdubz/blinky_time/issues/386). The loop:
 
 > change → CI → staging build → box hardware test (device + camera) → report → promotion
 
-Heavy work runs on the Spark or devtop, never on the box.
+Heavy work runs on the Spark or the build host, never on the box.
 
-**Next: the dev loop** (owner, 2026-11-25; design in [`DEV_LOOP.md`](DEV_LOOP.md)). Build a commit on a devtop build service, flash it to the box's test chip, run only the checks a change needs, then send it through CI. The box gets `dev` and `queue` modes (no expiry; work waiting behind dev mode is visible). Drafts run no heavy CI. Smoke tests block on health, never on scores. Top-scoring builds are proposed for stable. Nothing from a fork reaches the owner's machines.
+**Next: the dev loop** (owner, 2026-11-25; design in [`DEV_LOOP.md`](DEV_LOOP.md)). Build a commit on the build host's build service, flash it to the box's test chip, run only the checks a change needs, then send it through CI. The box gets `dev` and `queue` modes (no expiry; work waiting behind dev mode is visible). Drafts run no heavy CI. Smoke tests block on health, never on scores. Top-scoring builds are proposed for stable. Nothing from a fork reaches the owner's machines.
 
 **Done when** (owner, 2026-11-24): a full dev loop is iterable with adequate observability. Measured 2026-11-24: a firmware PR to promoted master takes about an hour (CI and review ~15-35 min, the box's hardware test ~30 min, promotion ~6-8 min).
 
@@ -52,7 +52,7 @@ Heavy work runs on the Spark or devtop, never on the box.
 - **Timing you can trust:** the clock sync times the reply line (#395, RTT 3-4 ms), runs record the audio start, clock and the chip's loop timing (#394, #399).
 - **CI only runs what a change touches** (#397, blinky-firmware#55).
 - **Serial:** a quiet device is no longer dropped as dead (#401).
-- **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
+- **The box can SSH to the build host** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
 - **blinky_time and blinky-firmware are decoupled** (owner, 2026-11-24: "they need to be completely decoupled"): no submodule, no source dependency, and neither repo reads the other's tree (#411, #413, #414 and the submodule's removal). They share three things: blinky-firmware's published artifacts (releases `bN` and staging builds with their manifest), which blinky-server and the console mirror download through blinky-server's own host tools (`blinky-server/hosttools/`); the mel contract files (`ml-training/spec/mel_frontend_v1.json` and `mel_golden_v1.npz`), carried identically by both and checked on each side in CI; and service APIs (the box's `Hardware test (staging)` status and promotion PRs, firmware's `release_promote.py` dispatching the console deploy, its `uf2_upload.py` calling blinky-server's HTTP API). A model reaches the firmware by a blinky-firmware PR that copies ml-training's exported header in.
 
 **Next:**
@@ -62,7 +62,7 @@ Heavy work runs on the Spark or devtop, never on the box.
 - Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
 - Recovery: USB auto-recovery on the box's enrolled chip ([#219](https://github.com/Jdubz/blinky_time/issues/219)), server-triggered SWD, and the bootloader gate runner.
-- Spark and devtop: put the surveyed services to work (#386): Grafana observability for the box, the artifact store for reports and captures, Spark `audio` / `gpu_task` jobs for heavy work.
+- Spark and the build host: put the surveyed services to work (#386): Grafana observability for the box, the artifact store for reports and captures, Spark `audio` / `gpu_task` jobs for heavy work.
 
 ## P1: consistent drum-hit reactivity
 
@@ -110,9 +110,9 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 
 ## Open owner decisions
 
-Decided 2026-11-23: the `swd-flash.local` Pi is retired; SWD recovery is the test box's XIAO Debug Mate only. Record mode waits until after P1–P3.
+Decided 2026-11-23: the old SWD Pi is retired; SWD recovery is the test box's XIAO Debug Mate only. Record mode waits until after P1–P3.
 
-Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate observability. What P0 uses from the platform (surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919)): box logs, metrics and traces go to the existing Grafana stack on bignasty, reports and captures go to the artifact store, and heavy analysis runs as Spark jobs.
+Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate observability. What P0 uses from the platform (surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919)): box logs, metrics and traces go to the existing Grafana stack on the NAS, reports and captures go to the artifact store, and heavy analysis runs as Spark jobs.
 
 Still open:
 

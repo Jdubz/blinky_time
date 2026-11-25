@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 describe('BlinkyServerSource', () => {
-  const SERVER_URL = 'http://blinkyhost.local:8420';
+  const SERVER_URL = 'http://server.example.invalid:8420';
 
   describe('poll', () => {
     it('registers connected devices in the registry', async () => {
@@ -181,7 +181,7 @@ describe('BlinkyServerSource', () => {
 
     it('uses host as display name', () => {
       const source = new BlinkyServerSource(SERVER_URL, registry);
-      expect(source.displayName).toBe('blinkyhost.local:8420');
+      expect(source.displayName).toBe('server.example.invalid:8420');
     });
 
     it('is always supported', () => {

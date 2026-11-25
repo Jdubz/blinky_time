@@ -145,7 +145,7 @@ async def jobs() -> dict[str, Any]:
 async def artifact(key: str) -> RedirectResponse:
     """A stable link to an artifact the staging suite archived: redirects to a freshly signed
     URL, valid 10 minutes. Presigned URLs expire, so reports link here. The store signs its LAN
-    address (devtop's SeaweedFS), so the redirect opens from the home network.
+    address (the build host's SeaweedFS), so the redirect opens from the home network.
 
     No API key (the links open in a browser), so it signs only keys this box archived
     (``staging.is_archived``); anything else in the store is 404 here."""

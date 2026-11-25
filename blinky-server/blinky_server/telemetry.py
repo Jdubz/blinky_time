@@ -1,7 +1,7 @@
 """Telemetry: Prometheus metrics at ``/metrics`` and OpenTelemetry traces over OTLP.
 
-On the test box both go to the central LGTM stack on bignasty (Josh-Wentworth/observability)
-through the box's Alloy agent (scripts/testbox/alloy/blinkytest.alloy). Alloy scrapes
+On the test box both go to the central LGTM stack (Josh-Wentworth/observability)
+through the box's Alloy agent (scripts/testbox/alloy/testbox.alloy). Alloy scrapes
 ``/metrics`` on loopback and receives OTLP on 127.0.0.1:4318, then pushes to Prometheus and Tempo.
 
 - **Metrics** are read at scrape time. Device health comes from the last ``json info`` each

@@ -16,8 +16,8 @@
       "command": "ssh",
       "args": [
         "-o", "StrictHostKeyChecking=accept-new",
-        "blinkytime@blinkyhost.local",
-        "cd /home/blinkytime/blinky_time && node blinky-serial-mcp/dist/index.js"
+        "${BLINKY_SERIAL_SSH}",
+        "cd blinky_time && node blinky-serial-mcp/dist/index.js"
       ],
       "env": {}
     }
