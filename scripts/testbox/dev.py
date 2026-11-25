@@ -366,6 +366,17 @@ def submit(repo: Repo, svc: BuildService, sha: str) -> dict[str, Any]:
     )
 
 
+def started(rec: dict[str, Any], sha: str) -> str:
+    """Say what the service did with the submission: a new build is queued, a commit already
+    built is ``done`` at once (a cache hit), one already building is that build. Its id."""
+    state = rec.get("state")
+    if rec.get("sha") not in (None, sha):
+        raise DevError(f"the build service answered for {rec.get('sha')}, not {sha}")
+    note = "already built (cache hit)" if state == "done" else state
+    say(f"build {rec['id']} of {sha[:12]}: {note}")
+    return str(rec["id"])
+
+
 def wait_build(svc: BuildService, build_id: str, wait_s: float = BUILD_WAIT_S) -> dict[str, Any]:
     deadline = time.monotonic() + wait_s
     last = None
@@ -375,6 +386,8 @@ def wait_build(svc: BuildService, build_id: str, wait_s: float = BUILD_WAIT_S) -
             last = rec.get("state")
             say(f"build {build_id}: {last}")
         if rec.get("state") == "done":
+            if rec.get("duration_s") is not None:
+                say(f"build {build_id}: built in {float(rec['duration_s']):.1f} s")
             return rec
         if rec.get("state") == "failed":
             tail = str(rec.get("log_tail") or "").rstrip()
@@ -389,8 +402,7 @@ def wait_build(svc: BuildService, build_id: str, wait_s: float = BUILD_WAIT_S) -
 def build(repo: Repo, svc: BuildService, ref: str | None, wip: bool) -> dict[str, Any]:
     sha = resolve(repo, ref, wip)
     rec = submit(repo, svc, sha)
-    say(f"build {rec['id']} queued for {sha[:12]}")
-    done = wait_build(svc, str(rec["id"]))
+    done = wait_build(svc, started(rec, sha))
     say(f"build {done['id']}: {done.get('version')}")
     return done
 
@@ -689,8 +701,7 @@ def cmd_try(args: argparse.Namespace, server: Server, svc: BuildService, repo: R
     devices = chips(server, args.device)
     st = ensure_dev(server, args.note or f"dev.py try {sha[:8]}", args.preempt)
     rec = submit(repo, svc, sha)
-    say(f"build {rec['id']} queued for {sha[:12]}")
-    done = wait_build(svc, str(rec["id"]))
+    done = wait_build(svc, started(rec, sha))
     st = wait_dev(server, st)
     res = flash(server, str(done["id"]), devices)
     report = [f"== dev.py try {sha[:12]}: {done.get('version')} (build {done['id']})"]

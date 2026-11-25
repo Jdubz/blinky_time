@@ -473,3 +473,17 @@ def test_status_shows_what_waits_behind_dev_mode(capsys: pytest.CaptureFixture[s
     assert "box: DEV mode since" in out and "waiting behind dev mode: 1" in out
     assert "staging: ssssssssssss" in out and "preempted" in out and "dev.py mode queue" in out
     assert "chip 87DE9B58C90A testbox_grid_v1: connected, b211" in out
+
+
+def test_a_cache_hit_is_done_at_once(
+    no_sleep: list[float], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The live service answers 202 with state done for a commit it has built already."""
+    svc = FakeService()
+    svc.states = ["done"]
+    build_id = dev.started({"id": "b9", "state": "done", "sha": "a" * 40}, "a" * 40)
+    rec = dev.wait_build(svc, build_id)
+    assert rec["state"] == "done" and not no_sleep
+    assert "already built (cache hit)" in capsys.readouterr().out
+    with pytest.raises(dev.DevError, match="answered for"):
+        dev.started({"id": "b9", "state": "done", "sha": "b" * 40}, "a" * 40)
