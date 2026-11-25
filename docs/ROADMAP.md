@@ -80,8 +80,8 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 - [blinky-firmware#49](https://github.com/Jdubz/blinky-firmware/issues/49): a settings save stalls the loop ~85–115 ms (flash page erase).
 - [blinky-firmware#23](https://github.com/Jdubz/blinky-firmware/issues/23): JSON stream formatting runs on the render loop. The box streams during tests.
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
-- **[blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59): the ~30 ms detection-to-light tail (measured 2026-11-24):** ACF tempo detection runs inline in the audio update every 100 ms (`acfPeriodMs`) before the frame is drawn, and costs **17-19.5 ms per run** (PLP adds ~1-2 ms; blinky-firmware#57 reports `acfUs`/`acfMaxUs`/`plpUs`/`plpMaxUs`). That makes the chip's 31 ms `maxFrameMs` even with streaming off, and ~17 % of its CPU. Options, owner to choose: draw the onset before the tempo work runs (smallest), or spread / cheapen the ACF (needs a tempo-accuracy check). Camera before/after and the tracker harness per the audio rules. The ~15 ms median is validation's own streaming halving the loop rate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
-- Then tighten the staging frame-time gate. It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
+- ~~blinky-firmware#59, the ~30 ms detection-to-light tail~~: fixed 2026-11-25 by ACF phase 1 ([blinky-firmware#61](https://github.com/Jdubz/blinky-firmware/pull/61), exact incremental lag tables, each decision spread over its cycle). On the box: `maxFrameMs` 31–34 → 15 ms (streaming off), `acfUs` 17–19.5 → 6.4–7.2 ms, and a camera p90 of 29–31 → 19–21 ms; tracker harness unchanged. ACF phase 2 (narrower range or comb filterbank for pass 2, 32-bit table updates) is optional CPU headroom, not a smoothness blocker.
+- Then tighten the staging frame-time gate. It allows 100 ms today, which the release docs call a visible freeze. The ACF stall is gone (frames now peak at 15 ms with streaming off and 16–18 ms during validation), so what's left is #49 (settings-save stall) and #23. The threshold is the owner's call, and it changes in two places together: the server's staging suite and blinky-firmware's `release_gate.py`. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
@@ -114,5 +114,4 @@ Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate ob
 
 Still open:
 
-- **The frame-time gate:** the target threshold once the P2 stalls are fixed (it waits on blinky-firmware#59, ACF).
-- **The ACF tail ([blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59)):** draw the onset before the tempo work, or spread / cheapen the ACF.
+- **The frame-time gate:** the target threshold once the remaining P2 stalls are fixed (blinky-firmware#49, #23; the ACF one, #59, is fixed).
