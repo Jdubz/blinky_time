@@ -44,6 +44,11 @@ from .test_runner import _configure_device, _start_streaming, _stop_streaming
 from .workflows import _connected, lit, plan, reserve, validation_run
 
 KINDS = ("info", "health", "validate", "pace", "commands")
+# The firmware's loop metrics (maxFrameMs, every ...MaxUs) cover one 5 s window, and a dev run
+# usually starts right after a deploy, whose settings restore + save stalls the loop ~100 ms
+# (blinky-firmware#49). Wait out one full window plus a margin, as deploy.sh's
+# LOOP_METRICS_SETTLE_S does, so the info check reports a window that began after the run did.
+INFO_SETTLE_S = 6.0
 # json info fields reported by the info check: every timer (…Us, …MaxUs, the frame times) and
 # the memory and audio counters a firmware change can move.
 TIMER_RE = re.compile(r"(Us|FrameMs)$")
@@ -86,6 +91,7 @@ async def restore_settings(device_ids: list[str]) -> None:
 
 @durable.step
 async def info(device_ids: list[str]) -> dict[str, Any]:
+    await asyncio.sleep(INFO_SETTLE_S)
     out: dict[str, Any] = {}
     for i in device_ids:
         got = await staging._info(i)
