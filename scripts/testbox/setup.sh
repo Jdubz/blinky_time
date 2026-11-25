@@ -269,7 +269,8 @@ obs_value() {
 # First boot: a copy next to this script (the card's blinky-testbox/observability.env) seeds it.
 read_observability_env() {
   if [[ ! -f "$OBS_ENV" && -f "$HERE/observability.env" ]]; then
-    install -d -m 0700 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" "$(dirname "$OBS_ENV")" &&
+    # As the user, so a ~/.config that doesn't exist yet isn't created root-owned.
+    as_user install -d -m 0700 "$(dirname "$OBS_ENV")" &&
       install -m 0600 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" \
         "$HERE/observability.env" "$OBS_ENV" || return 1
     log "seeded $OBS_ENV from $HERE/observability.env (delete that copy from the card)"
