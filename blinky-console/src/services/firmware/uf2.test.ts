@@ -3,7 +3,7 @@ import golden from './__fixtures__/golden.json';
 import { APP_START, UF2_FAMILY_NRF52840_APP } from './flashLayout';
 import { validateUf2 } from './uf2';
 
-// A real uf2conv.py image that tools/uf2_upload.py validate_uf2 accepts
+// A real uf2conv.py image that blinky-server/hosttools/uf2_upload.py validate_uf2 accepts
 // (__fixtures__/make_fixtures.py).
 const uf2Bytes = Uint8Array.from(atob(golden.appUf2Base64), c => c.charCodeAt(0));
 

@@ -16,7 +16,8 @@ Firmware pipeline (SharedSpectralAnalysis::getRawMelBands):
   - NO compressor or whitening (raw mel path for NN input)
 
 The table and the arithmetic live in spec/mel_frontend_v1.json (scripts/mel_frontend.py);
-analysis/test_mel_parity.py checks them against the firmware in CI (#295).
+analysis/test_mel_parity.py checks them against the spec's golden vectors (the firmware's
+own output) in CI (#295); blinky-firmware checks its side against its copy of the spec.
 """
 
 from __future__ import annotations

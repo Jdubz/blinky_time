@@ -47,15 +47,16 @@ jobs:
         # runs that tree's suite.
         git diff --name-only --no-renames "$range" > changed.txt
         echo "changed ($range):"; cat changed.txt
-        # server: blinky-server and the test box scripts its job also tests (not camera/, which
-        # has its own job), the device registry it lints (devices/), with the firmware
-        # tools and corpus scorers it runs; ml: ml-training and the corpus it labels and trains
-        # on; console: blinky-console. A change to this workflow runs everything.
+        # server: blinky-server (with its own host tools, hosttools/) and the test box scripts
+        # its job also tests (not camera/, which has its own job), the device registry it lints
+        # (devices/), and the corpus scorers it runs; ml: ml-training and the corpus it labels
+        # and trains on; console: blinky-console. A change to this workflow runs everything.
+        # No job reads the firmware/ submodule (decoupling step 2), so its pin selects nothing.
         check() {
           if grep -qE "$2" changed.txt; then v=true; else v=false; fi
           echo "$1=$v" >> "$GITHUB_OUTPUT"; echo "$1: $v"
         }
-        check server '^(blinky-server/|scripts/testbox/[^/]+$|scripts/testbox/alloy/|devices/|firmware$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
+        check server '^(blinky-server/|scripts/testbox/[^/]+$|scripts/testbox/alloy/|devices/|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         check ml '^(ml-training/|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         check console '^(blinky-console/|\.github/workflows/pr-validation\.yml$)'
 
@@ -106,12 +107,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
 
-    # The server scores with the corpus's blinky_scoring (#357). It no longer runs anything
-    # from firmware/ (its host tools are in hosttools/ since the 2026-11-24 decoupling); the
-    # firmware checkout here goes in decoupling step 2. Never the bootloader submodule.
-    - name: Firmware and corpus submodules
+    # The server scores with the corpus's blinky_scoring (#357). Nothing from firmware/: its
+    # host tools are its own (hosttools/, 2026-11-24 decoupling), so only the corpus.
+    - name: Corpus submodule
       working-directory: .
-      run: git submodule update --init --depth 1 firmware corpus
+      run: git submodule update --init --depth 1 corpus
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -175,6 +175,8 @@ jobs:
         python -m pytest -v scripts/testbox/camera/test_camera_analysis.py
 
   feature-parity:
+    # The name is a required status check: keep it. "firmware" is the contract the firmware
+    # publishes (ml-training/spec/), not its source: no firmware checkout here.
     name: Feature Parity (Python ↔ firmware)
     runs-on: ubuntu-latest
 
@@ -182,10 +184,10 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v5
 
-    # The firmware's DSP for the parity harness, and the edm labels and blinky_scoring for
-    # test_drum_label_sync, at the commits this repo pins (#357).
-    - name: Firmware and corpus submodules
-      run: git submodule update --init --depth 1 firmware corpus
+    # The edm labels and blinky_scoring for test_drum_label_sync and the label-merge copy
+    # check, at the commit this repo pins (#357).
+    - name: Corpus submodule
+      run: git submodule update --init --depth 1 corpus
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -209,22 +211,20 @@ jobs:
       working-directory: ml-training
       run: python -m analysis.test_shape_features
 
-    - name: Mel parity (training front end vs firmware, #295)
-      # The NN runs on the firmware's integer MEL_BANDS table, not an HTK
-      # filterbank. Builds firmware/tests/parity (the real SharedSpectralAnalysis.cpp, at the pinned blinky-firmware)
-      # and checks: the spec carries the firmware's table and constants; the
-      # firmware still produces the golden frames; training's front end
-      # (scripts/mel_frontend.py) reproduces them; configs default to the table.
-      run: |
-        cmake -S firmware/tests/parity -B firmware/tests/parity/build -DCMAKE_BUILD_TYPE=Release
-        cmake --build firmware/tests/parity/build -j
-        cd ml-training
-        python -m analysis.test_mel_parity --harness ../firmware/tests/parity/build/parity_harness
+    - name: Mel parity (training front end vs the mel contract, #295)
+      # The NN runs on the firmware's integer MEL_BANDS table, not an HTK filterbank. The
+      # contract is ml-training/spec/mel_frontend_v1.json and its golden vectors (the
+      # firmware's own mel on fixed frames); blinky-firmware carries identical copies and
+      # checks its C++ against them in its CI. Here: the spec and vectors are whole (sha256),
+      # training's front end (scripts/mel_frontend.py) reproduces the vectors within the
+      # spec's tolerance, and configs default to the table. No firmware source.
+      working-directory: ml-training
+      run: python -m analysis.test_mel_parity
 
     - name: Mel front end travels to the model header (#291)
-      # prepare_dataset.py records the front end, train.py and export_tflite.py
-      # carry it into the header, and FrameOnsetNN.h / check_model_input.py
-      # refuse one the firmware doesn't run. The record and the header check.
+      # prepare_dataset.py records the front end, train.py and export_tflite.py carry it into
+      # the header as the spec's version, which blinky-firmware compares with its
+      # MEL_FRONTEND_VERSION (its check_model_input.py, tested there).
       working-directory: ml-training
       run: |
         pip install pytest
