@@ -1,5 +1,5 @@
 {
-  "_comment": "The firmware's mel front end (SharedSpectralAnalysis::computeMelBandsFrom, the NN input via getRawMelBands). The contract training must reproduce (#295, #291). 'bands' must equal MEL_BANDS[] in blinky-things/audio/SharedSpectralAnalysis.cpp; ml-training/analysis/test_mel_parity.py checks that, and checks the arithmetic against the firmware itself on golden frames.",
+  "_comment": "The firmware's mel front end (blinky-firmware SharedSpectralAnalysis::computeMelBandsFrom, the onset NN input via getRawMelBands) as a contract (blinky_time#295, #291). blinky-firmware (tests/parity/spec/) and blinky_time (ml-training/spec/) each carry an identical copy of this file and of the golden vectors it names; each repo's CI checks its own side against them, with no source from the other. blinky-firmware checks that 'bands' is MEL_BANDS[], the constants are its own, 'version' is MEL_FRONTEND_VERSION (the number a model header records) and its code still produces the golden mel; blinky_time checks that training's front end (scripts/mel_frontend.py) reproduces the golden mel. A change is a new version: firmware first, then copy both files here. Keys starting with '_' are notes and test data, outside the content digest a dataset records.",
   "version": 1,
   "sample_rate": 16000,
   "n_fft": 256,
@@ -69,5 +69,16 @@
   "silence_note": "band_energy < silence_threshold -> output exactly 0.0, before the log",
   "log_epsilon": 1e-07,
   "db_range": 60.0,
-  "log_map": "clip((10*log10(band_energy + log_epsilon) + db_range) / db_range, 0, 1)"
+  "log_map": "clip((10*log10(band_energy + log_epsilon) + db_range) / db_range, 0, 1)",
+  "_golden": {
+    "file": "mel_golden_v1.npz",
+    "sha256": "29ad3bb5aeb0957bccb690c3128b96b16fe9b4cfbbd83adc07323bc51d53171c",
+    "frames": 163,
+    "format": "numpy .npz: 'mags' float32 (frames, num_bins), magnitude frames of rFFT bins 0..num_bins-1; 'mel' float32 (frames, n_mels), the firmware's getRawMelBands() on each frame",
+    "frames_note": "silence, flat levels from below the silence threshold to clipping, one bin at a time (each band's support and weights), 24 random log-uniform frames, a kick and a noise burst through the window",
+    "atol": 2e-05,
+    "atol_note": "any implementation's mel on 'mags' must match 'mel' within atol (float64 against the firmware's float32 agree to ~1e-6)",
+    "reference_atol": 1e-06,
+    "reference_note": "the firmware itself must still produce 'mel' within reference_atol. Its parity test (blinky-firmware tests/parity/test_mel_contract.py --regenerate) writes the file when the front end changes on purpose, with a new version"
+  }
 }

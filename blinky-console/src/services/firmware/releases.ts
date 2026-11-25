@@ -5,8 +5,8 @@ import { validateUf2 } from './uf2';
 
 /**
  * Stable releases mirrored onto the console's own origin by
- * `tools/firmware_release.py mirror` (run by .github/workflows/
- * blinky-console-deploy.yml). GitHub release assets can't be fetched from a
+ * `blinky-server/hosttools/firmware_release.py mirror` (run by
+ * .github/workflows/blinky-console-deploy.yml). GitHub release assets can't be fetched from a
  * browser (no CORS), so the mirror is the only source.
  */
 const Sha256Schema = z.string().regex(/^[0-9a-f]{64}$/, 'sha256 must be 64 lowercase hex chars');

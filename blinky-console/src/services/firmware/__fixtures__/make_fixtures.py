@@ -1,13 +1,14 @@
 """Golden UF2 fixture for the web flasher's UF2 checks: a synthetic app image
 converted by uf2conv.py exactly as release packaging runs it, and accepted by
-tools/uf2_upload.py validate_uf2.
+uf2_upload.py validate_uf2 (blinky-server/hosttools/, blinky_time's own copy with
+its vendored uf2conv.py; blinky-firmware's tools/ has the original).
 
-Regenerate from the repo root (needs the Seeeduino nRF52 core for uf2conv.py):
+Manual only, never run by CI or the build. Regenerate from the repo root:
   F=blinky-console/src/services/firmware/__fixtures__; python $F/make_fixtures.py $F
 """
 import base64, json, random, subprocess, sys, tempfile
 from pathlib import Path
-sys.path.insert(0, "tools")
+sys.path.insert(0, "blinky-server/hosttools")
 import uf2_upload
 
 out = Path(sys.argv[1])

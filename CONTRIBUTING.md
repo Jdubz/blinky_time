@@ -31,7 +31,7 @@ Setup and tests for each part:
 All work branches from `master` and merges back by pull request. See [.github/BRANCHING_STRATEGY.md](.github/BRANCHING_STRATEGY.md).
 
 1. Branch from `master`: `fix/...`, `feat/...`, `docs/...`, one change per branch.
-2. Open a PR to `master`. CI (`.github/workflows/pr-validation.yml`) must pass: the server, console and test box tests, Python ↔ firmware feature parity, the trainer's Spark contract, the ADTOF labeler and the docs check. The Claude review and Copilot review run on every PR. Address what they find.
+2. Open a PR to `master`. CI (`.github/workflows/pr-validation.yml`) must pass: the server, console and test box tests, Python ↔ firmware feature parity (against the mel contract in `ml-training/spec/`, no firmware source), the trainer's Spark contract, the ADTOF labeler and the docs check. The Claude review and Copilot review run on every PR. Address what they find.
 3. Merged changes that touch the server's paths reach the test box through its deployer, after CI is green and the PR's last commit has a clean Claude review verdict (CLAUDE.md, "The test box's blinky-server runs this repo's merged master only").
 
 ## Guidelines

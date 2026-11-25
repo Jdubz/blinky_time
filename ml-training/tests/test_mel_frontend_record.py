@@ -1,23 +1,25 @@
 """The mel front end travels from the dataset to the model header (#291).
 
-prepare_dataset.py records it, train.py carries it, export_tflite.py writes it into the header,
-and FrameOnsetNN.h / tools/check_model_input.py refuse a front end the firmware doesn't run.
-These test the record and the header check without torch or tflite; the end-to-end flow
-through prep and train is asserted in test_spark_entry.py.
+prepare_dataset.py records it, train.py carries it, and export_tflite.py writes it into the
+header as FRAME_ONSET_MODEL_DATA_MEL_FRONTEND, next to FRAME_ONSET_MODEL_DATA_HASH (the first 16
+hex digits of the model bytes' sha256). blinky-firmware refuses a header whose front end isn't its
+MEL_FRONTEND_VERSION (FrameOnsetNN.h, tools/check_model_input.py, tested there), and checks that
+number against its copy of spec/mel_frontend_v1.json. So the contract between the repos is the
+spec's `version`: these tests hold the record and the header to it, without torch, tflite or any
+firmware source. The end-to-end flow through prep and train is asserted in test_spark_entry.py.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
 ML = Path(__file__).resolve().parents[1]
-REPO = ML.parent
 sys.path.insert(0, str(ML))
 
 from scripts.mel_frontend import (  # noqa: E402
@@ -28,11 +30,6 @@ from scripts.mel_frontend import (  # noqa: E402
     read_record,
     write_record,
 )
-
-_spec = importlib.util.spec_from_file_location("check_model_input",
-                                               REPO / "firmware" / "tools" / "check_model_input.py")
-check_model_input = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(check_model_input)
 
 TABLE = frontend_record("firmware_table")
 LIBROSA = frontend_record("librosa_htk")
@@ -75,47 +72,22 @@ def test_model_record_sources_must_exist_and_agree(tmp_path):
         model_record(model, LIBROSA, None)
 
 
-def header(data: bytes, frontend: int | None, hash_: str | None = None) -> str:
-    """A model header as export_tflite.py writes it."""
-    hash_ = hash_ or hashlib.sha256(data).hexdigest()[:16]
-    fe = "" if frontend is None else f"#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND {frontend}\n"
-    hexed = ", ".join(f"0x{b:02x}" for b in data)
-    return (f'#define FRAME_ONSET_MODEL_DATA_HASH "{hash_}"\n{fe}'
-            f"alignas(8) static const unsigned char frame_onset_model_data[] = {{\n  {hexed},\n}};\n")
+def read_header(src: str) -> tuple[int, str, bytes]:
+    """(front end, declared hash, model bytes) from a model header, read the way the firmware's
+    tools/check_model_input.py reads one."""
+    fe = re.search(r"#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND (\d+)", src)
+    hash_ = re.search(r'#define FRAME_ONSET_MODEL_DATA_HASH "([0-9a-f]+)"', src)
+    assert fe and hash_, src[:300]
+    start = src.index("{", src.index("frame_onset_model_data[]"))
+    body = src[start:src.index("};", start)]
+    data = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{2})", body))
+    return int(fe.group(1)), hash_.group(1), data
 
 
-def errors(src: str, waived: str = "fa087e0a364640ab") -> list[str]:
-    return check_model_input.frontend_errors(src, check_model_input.model_bytes(src), 1, waived)
-
-
-def test_header_check_accepts_the_firmware_front_end():
-    assert errors(header(b"model", 1)) == []
-
-
-def test_header_check_refuses_others():
-    assert "no FRAME_ONSET_MODEL_DATA_MEL_FRONTEND" in errors(header(b"model", None))[0]
-    assert "firmware runs 1" in errors(header(b"model", 2))[0]
-    # librosa (0) is waived only for the one model, by the hash of its bytes.
-    assert "waived" in errors(header(b"model", 0))[0]
-    waived = hashlib.sha256(b"model").hexdigest()[:16]
-    assert errors(header(b"model", 0), waived=waived) == []
-    # Claiming the waived hash for other bytes is caught: the hash is recomputed.
-    forged = errors(header(b"other", 0, hash_=waived), waived=waived)
-    assert any("bytes hash to" in e for e in forged) and any("waived" in e for e in forged)
-
-
-def test_the_embedded_model_passes():
-    """The live header is v33 on the librosa front end, waived by its real hash."""
-    src = check_model_input.MODEL_H.read_text(encoding="utf-8")
-    nn_h = check_model_input.NN_H.read_text(encoding="utf-8")
-    assert "#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND 0" in src
-    assert 'WAIVED_LIBROSA_MODEL = "fa087e0a364640ab"' in nn_h
-    assert errors(src) == []
-
-
-def test_export_header_passes_the_check(tmp_path):
-    """What export_tflite.py writes is what the check reads. The writer is compiled on its own,
-    since importing export_tflite needs TensorFlow."""
+def test_export_header_records_the_spec_version(tmp_path):
+    """What export_tflite.py writes carries the spec's version (the number the firmware compares
+    with its MEL_FRONTEND_VERSION) and the hash of exactly the bytes it embeds. The writer is
+    compiled on its own, since importing export_tflite needs TensorFlow."""
     import ast
 
     src = (ML / "scripts" / "export_tflite.py").read_text(encoding="utf-8")
@@ -124,9 +96,10 @@ def test_export_header_passes_the_check(tmp_path):
     ns: dict = {"Path": Path}
     exec(compile(ast.Module(body=[fn], type_ignores=[]), "export_tflite.py", "exec"), ns)
     out = tmp_path / "frame_onset_model_data.h"
-    for record, want in ((TABLE, []), (LIBROSA, ["waived"])):
-        ns["tflite_to_c_header"](b"\x01\x02model", "frame_onset_model_data", str(out), record)
-        text = out.read_text()
-        assert f"#define FRAME_ONSET_MODEL_DATA_MEL_FRONTEND {record['version']}" in text
-        got = errors(text)
-        assert len(got) == len(want) and all(w in g for w, g in zip(want, got)), got
+    data = b"\x01\x02model"
+    for record, want in ((TABLE, load_spec()["version"]), (LIBROSA, 0)):
+        ns["tflite_to_c_header"](data, "frame_onset_model_data", str(out), record)
+        fe, hash_, embedded = read_header(out.read_text())
+        assert fe == want
+        assert embedded == data
+        assert hash_ == hashlib.sha256(data).hexdigest()[:16]

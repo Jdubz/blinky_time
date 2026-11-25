@@ -2,9 +2,10 @@
 
 The NN runs on the firmware's `SharedSpectralAnalysis::getRawMelBands()`, which reads the
 integer table `MEL_BANDS[]`, not an HTK filterbank. Training must build the same features,
-so the table and the arithmetic come from one spec, `ml-training/spec/mel_frontend_v1.json`.
-`analysis/test_mel_parity.py` checks the spec against the firmware source, and the
-arithmetic here against the firmware itself on golden frames.
+so the table and the arithmetic come from one spec, `ml-training/spec/mel_frontend_v1.json`,
+the contract blinky-firmware carries an identical copy of and checks its C++ against.
+`analysis/test_mel_parity.py` checks the arithmetic here against the spec's golden vectors
+(the mel the firmware computed on golden frames), with no firmware source.
 """
 
 from __future__ import annotations

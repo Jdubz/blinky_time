@@ -2,14 +2,17 @@
 # Vendored from Jdubz/blinky-firmware tools/firmware_release.py at commit
 # 33e005982c34e7c3664215cacf767bd20910deb2: the download side only. blinky_time owns
 # this copy since the 2026-11-24 decoupling; blinky-firmware keeps the full tool
-# (package, sign, mirror, gate) for its release flow. Changes from the source are
-# marked "[blinky_time: ...]".
+# (package, sign, mirror, gate) for its release flow. `mirror` (mirror_entry, mirror)
+# was added in decoupling step 2 from blinky-firmware master 1218847ff5a9 for the
+# console's web flasher. Changes from the source are marked "[blinky_time: ...]".
 """
 firmware_release.py - blinky-server's release client (blinky-firmware's
 docs/RELEASE_PROCESS.md defines what a release is).
 
 Used by blinky-server (blinky_server/firmware/deploy_pipeline.py) and
-scripts/deploy.sh to download a verified release or staging build.
+scripts/deploy.sh to download a verified release or staging build, and by
+.github/workflows/blinky-console-deploy.yml to mirror the stable releases for the
+console's web flasher.
 
 A release is a GitHub Release of blinky-firmware tagged `b<N>` whose assets are:
   blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and, once
@@ -28,6 +31,7 @@ CLI:
   firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
   firmware_release.py latest-stable
   firmware_release.py download-staging --sha SHA [--out DIR]   (staging build, test devices only)
+  firmware_release.py mirror --out DIR [--keep N]   (stable releases for the web flasher)
 
 Every failure exits non-zero with a message; nothing falls back silently.
 """
@@ -239,6 +243,81 @@ def download(tag, out_dir):
     }
 
 
+# ----------------------------------------------------------------- mirror ---
+
+MIRROR_INDEX_SCHEMA = 1
+
+
+def mirror_entry(tag, manifest, published_at, url):
+    """One index.json entry. Paths are relative to the index (the web flasher
+    resolves them against the index URL) and every file carries the sha256 the
+    release manifest gave it, so the browser re-verifies what it downloads."""
+    n = TAG_RE.match(tag).group(1)
+    files = manifest["files"]
+    entry = {
+        "tag": tag,
+        "build": manifest["build"],
+        "version": manifest["version"],
+        "git_sha": manifest["git_sha"],
+        "settings_version": manifest["settings_version"],
+        "device_version": manifest["device_version"],
+        "published_at": published_at,
+        "url": url,
+        "files": {},
+    }
+    for kind in ("hex", "uf2", "bin", "otam"):
+        name = f"blinky-things-b{n}.{kind}"
+        if kind in ("bin", "otam") and name not in files:
+            continue  # released before signed OTA: not installable from the web updater
+        entry["files"][kind] = {"path": f"{tag}/{name}", "sha256": files[name]}
+    return entry
+
+
+def mirror(out_dir, keep):
+    """Download the newest `keep` stable releases into out_dir/<tag>/ and write
+    out_dir/index.json for the web flasher (blinky-console #firmware).
+
+    Only stable releases are mirrored: the web flasher installs firmware on
+    devices nobody bench-gated, which is exactly what stable is for. "No
+    stable release yet" is written as latest=null, which the flasher shows as
+    a refusal; any other failure (download, sha256) aborts the mirror.
+    """
+    if keep < 1:
+        raise ReleaseError(f"--keep must be >= 1, got {keep}")
+    out_dir = Path(out_dir)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)  # never serve a release that is no longer stable
+    out_dir.mkdir(parents=True)
+    rows = json.loads(gh("release", "list", "--limit", "200",
+                         "--json", "tagName,isPrerelease,isLatest,isDraft,publishedAt",
+                         "-R", repo_slug()))
+    rows = [r for r in rows if TAG_RE.match(r["tagName"]) and not r["isDraft"] and not r["isPrerelease"]]
+    rows.sort(key=lambda r: int(TAG_RE.match(r["tagName"]).group(1)), reverse=True)
+    stable = [r for r in rows if tag_exists(f"stable-{r['tagName']}")]
+    latest = [r["tagName"] for r in stable if r["isLatest"]]
+
+    releases = []
+    for r in stable[:keep]:
+        tag = r["tagName"]
+        got = download(tag, out_dir / tag)
+        # [blinky_time: download() re-checks stable; a release withdrawn since the listing
+        # (marker deleted, made a pre-release) aborts the mirror instead of being served.]
+        if not got["stable"]:
+            raise ReleaseError(f"{tag} stopped being stable during the mirror; run it again")
+        # download() leaves only this release's three assets in the directory.
+        releases.append(mirror_entry(tag, got["manifest"], r["publishedAt"], release_info(tag)["url"]))
+    if latest and latest[0] not in [e["tag"] for e in releases]:
+        raise ReleaseError(f"latest stable {latest[0]} is older than the newest {keep} stable "
+                           "releases; raise --keep so the flasher's default is mirrored")
+    index = {
+        "schema": MIRROR_INDEX_SCHEMA,
+        "latest": latest[0] if latest else None,
+        "releases": releases,
+    }
+    (out_dir / "index.json").write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+    return index
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -249,6 +328,9 @@ def main():
     ds.add_argument("--sha", required=True, help="the staging commit (full sha)")
     ds.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-staging"))
     sub.add_parser("latest-stable")
+    mi = sub.add_parser("mirror")
+    mi.add_argument("--out", required=True, help="directory to (re)create; served as /firmware/")
+    mi.add_argument("--keep", type=int, default=5, help="newest stable releases to mirror")
     args = ap.parse_args()
     try:
         if args.cmd == "download":
@@ -262,6 +344,13 @@ def main():
                               "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())
+        elif args.cmd == "mirror":
+            index = mirror(args.out, args.keep)
+            if index["latest"] is None:
+                print("WARNING: no stable release yet; the web flasher will refuse to flash",
+                      file=sys.stderr)
+            print(json.dumps({"latest": index["latest"],
+                              "mirrored": [e["tag"] for e in index["releases"]]}))
     except ReleaseError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

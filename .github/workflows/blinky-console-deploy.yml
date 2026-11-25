@@ -2,8 +2,9 @@ name: Deploy Blinky Console
 
 # The console also serves the web flasher's firmware: every build mirrors the
 # newest stable releases of Jdubz/blinky-firmware into public/firmware/
-# (firmware/tools/firmware_release.py mirror, through the firmware/ submodule,
-# #357). Releases live in that repo now, so their events can't trigger this one:
+# (blinky-server/hosttools/firmware_release.py mirror, through the GitHub API; no
+# firmware checkout since decoupling step 2). Releases live in that repo, so
+# their events can't trigger this one:
 #   - promotion and rollback: blinky-firmware's release_promote.py dispatches
 #     this workflow (gh workflow run -R Jdubz/blinky_time);
 #   - a daily run catches anything else (a release deleted by hand);
@@ -13,13 +14,13 @@ on:
     branches: [master]
     paths:
       - 'blinky-console/**'
-      - 'firmware'
+      - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
   pull_request:
     branches: [master]
     paths:
       - 'blinky-console/**'
-      - 'firmware'
+      - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
   schedule:
     - cron: '17 9 * * *'
@@ -44,11 +45,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The release client (firmware_release.py mirror), at the commit blinky_time pins.
-      - name: Firmware submodule
-        working-directory: .
-        run: git submodule update --init --depth 1 firmware
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -58,7 +54,8 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 firmware/tools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
+          BLINKY_FIRMWARE_REPO: Jdubz/blinky-firmware
+        run: python3 blinky-server/hosttools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install
@@ -91,10 +88,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Firmware submodule
-        working-directory: .
-        run: git submodule update --init --depth 1 firmware
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -104,7 +97,8 @@ jobs:
         working-directory: .
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 firmware/tools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
+          BLINKY_FIRMWARE_REPO: Jdubz/blinky-firmware
+        run: python3 blinky-server/hosttools/firmware_release.py mirror --out "$GITHUB_WORKSPACE/blinky-console/public/firmware" --keep 5
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install

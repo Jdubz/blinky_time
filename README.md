@@ -15,7 +15,7 @@ Audio-reactive LED fixtures for wearable art and installations (hats, tubes, buc
 
 Clone with `git clone --recurse-submodules https://github.com/Jdubz/blinky_time.git`, or run `git submodule update --init firmware corpus` in a clone. The firmware's own bootloader submodule isn't needed here.
 
-The submodules are pinned: blinky-firmware follows its `master` (hardware-tested firmware), blinky-corpus its `main`. A pin moves by an ordinary PR (CI and review run on it; Dependabot is not used for repos we own). The server and `deploy.sh` use their own host tools (`blinky-server/hosttools/`); only CI's parity check and the console's release mirror still read the firmware checkout, until the decoupling removes the firmware submodule (`docs/ROADMAP.md`).
+The submodules are pinned: blinky-firmware follows its `master` (hardware-tested firmware), blinky-corpus its `main`. A pin moves by an ordinary PR (CI and review run on it; Dependabot is not used for repos we own). The server and `deploy.sh` use their own host tools (`blinky-server/hosttools/`); no CI job reads the firmware checkout either (mel parity runs against a shared spec, the console's release mirror through the GitHub API), and the decoupling removes the firmware submodule (`docs/ROADMAP.md`).
 
 ## What's here
 

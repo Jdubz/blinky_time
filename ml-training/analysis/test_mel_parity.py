@@ -1,151 +1,79 @@
-"""Mel parity: training's front end against the firmware's (#295).
+"""Mel parity: training's front end against the mel front-end contract (#295).
 
-Three checks, cheapest first:
-  1. spec/mel_frontend_v1.json carries the firmware's MEL_BANDS[] and constants, read from
-     blinky-things/audio/SharedSpectralAnalysis.{cpp,h}, and its version is the firmware's
-     MEL_FRONTEND_VERSION, the number a model header must record (#291);
-  2. scripts/mel_frontend.py (what training uses) reproduces spec/mel_golden_v1.npz, mel the
-     firmware computed on golden magnitude frames: numpy only, no compiler;
-  3. with --harness, the firmware itself (tests/parity/parity_harness) still produces those
-     golden values, so a change on either side fails here.
+The contract is spec/mel_frontend_v1.json and the golden vectors it names (`_golden`,
+spec/mel_golden_v1.npz: magnitude frames and the mel the firmware computed on them).
+blinky-firmware carries an identical copy and checks its own side (its MEL_BANDS[], constants,
+MEL_FRONTEND_VERSION, and that its SharedSpectralAnalysis.cpp still produces the golden mel:
+tests/parity/test_mel_contract.py). This repo reads no firmware source; it checks, numpy only:
+  1. the contract is whole: the golden file is the one the spec names (sha256), shaped as the
+     spec says, and the spec's file name is its version;
+  2. scripts/mel_frontend.py (what training uses) reproduces the golden mel within the
+     spec's tolerance;
+  3. the golden frames still separate the old librosa HTK filterbank, and training's configs
+     default to the table.
 
 Usage (from ml-training/):
-  python -m analysis.test_mel_parity                       # 1 and 2
-  python -m analysis.test_mel_parity --harness PATH        # 1, 2 and 3 (CI)
-  python -m analysis.test_mel_parity --harness PATH --regenerate   # rewrite the golden file
+  python -m analysis.test_mel_parity
+
+A front-end change starts in blinky-firmware (new version, regenerated vectors); then copy its
+tests/parity/spec/ files here.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
-import subprocess
+import hashlib
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
 
 ML = Path(__file__).resolve().parents[1]
-REPO = ML.parent
 sys.path.insert(0, str(ML))
 
-from scripts.mel_frontend import filterbank, load_spec, mel_from_magnitudes  # noqa: E402
-
-CPP = REPO / "firmware" / "blinky-things" / "audio" / "SharedSpectralAnalysis.cpp"
-HEADER = REPO / "firmware" / "blinky-things" / "audio" / "SharedSpectralAnalysis.h"
-GOLDEN = ML / "spec" / "mel_golden_v1.npz"
-
-# Python is float64, the firmware float32; the [0, 1] outputs agree to ~1e-6.
-ATOL = 2e-5
+from scripts.mel_frontend import SPEC_PATH, filterbank, load_spec, mel_from_magnitudes  # noqa: E402
 
 
-def firmware_bands() -> list[list[int]]:
-    body = re.search(r"static const MelBandDef MEL_BANDS\[[^\]]*\]\s*=\s*\{(.*?)\n\};",
-                     CPP.read_text(), re.S)
-    if body is None:
-        raise AssertionError(f"MEL_BANDS[] not found in {CPP}")
-    return [[int(a), int(b), int(c)]
-            for a, b, c in re.findall(r"\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}", body.group(1))]
+def golden_path(spec: dict) -> Path:
+    return SPEC_PATH.parent / spec["_golden"]["file"]
 
 
-def header_constant(name: str) -> float:
-    text = HEADER.read_text()
-    if name == "NUM_BINS":  # `NUM_BINS = FFT_SIZE / 2`
-        assert re.search(r"constexpr int NUM_BINS = FFT_SIZE / 2;", text), "NUM_BINS changed"
-        return header_constant("FFT_SIZE") / 2
-    m = re.search(rf"constexpr\s+\w+\s+{name}\s*=\s*([0-9.]+)f?\s*;", text)
-    if m is None:
-        raise AssertionError(f"{name} not found in {HEADER}")
-    return float(m.group(1))
-
-
-def check_spec_matches_firmware(spec: dict) -> None:
-    fw = firmware_bands()
-    assert fw == spec["bands"], (
-        f"spec bands differ from {CPP.name} MEL_BANDS[] at "
-        f"{[i for i, (a, b) in enumerate(zip(fw, spec['bands'])) if a != b] or 'length'}")
-    for key, name in (("n_mels", "NUM_MEL_BANDS"), ("fmin", "MEL_MIN_FREQ"),
-                      ("fmax", "MEL_MAX_FREQ"), ("db_range", "MEL_DB_RANGE"),
-                      ("n_fft", "FFT_SIZE"), ("num_bins", "NUM_BINS")):
-        assert float(spec[key]) == header_constant(name), f"spec {key} != firmware {name}"
-    cpp = CPP.read_text()
-    for value, what in ((spec["silence_threshold"], "silenceThreshold"),
-                        (spec["log_epsilon"], "epsilon")):
-        m = re.search(rf"const float {what} = ([0-9.e+-]+)f;", cpp)
-        assert m and float(m.group(1)) == value, f"spec {what} != firmware"
-    # The number a model header records and FrameOnsetNN.h compares (#291).
-    assert header_constant("MEL_FRONTEND_VERSION") == spec["version"], (
-        f"spec version {spec['version']} != firmware MEL_FRONTEND_VERSION "
-        f"{header_constant('MEL_FRONTEND_VERSION'):g}: bump both together")
-    from scripts.mel_frontend import SPEC_PATH
+def check_contract(spec: dict) -> None:
+    g = spec["_golden"]
     assert SPEC_PATH.name == f"mel_frontend_v{spec['version']}.json", \
         f"{SPEC_PATH.name} holds version {spec['version']}"
-    print(f"ok  spec matches the firmware's MEL_BANDS[] ({len(fw)} bands) and constants")
-
-
-def golden_frames(num_bins: int) -> np.ndarray:
-    """Deterministic magnitude frames that pin each part of the front end."""
-    frames = [np.zeros(num_bins)]
-    # 9.5e-7: below the 1e-6 silence floor, yet above where the log map alone reaches 0.
-    for level in (5e-7, 9.5e-7, 3e-6, 1e-4, 1e-2, 1.0, 10.0, 100.0):  # silence .. clipping
-        frames.append(np.full(num_bins, level))
-    eye = np.eye(num_bins)  # one bin at a time: each band's exact support and weights
-    frames.extend(eye[b] * 0.5 for b in range(num_bins))
-    rng = np.random.default_rng(295)
-    frames.extend(10.0 ** rng.uniform(-6, 1, size=(24, num_bins)))
-    # A kick-like frame and a noise burst, through the firmware's window and FFT size.
-    n = 2 * (num_bins)
-    t = np.arange(n) / 16000
-    window = 0.54 - 0.46 * np.cos(2 * np.pi * np.arange(n) / (n - 1))
-    for sig in (0.8 * np.sin(2 * np.pi * 55 * t) * np.exp(-t / 0.05),
-                0.3 * rng.standard_normal(n)):
-        frames.append(np.abs(np.fft.rfft(sig * window))[:num_bins])
-    return np.asarray(frames, dtype=np.float32)
-
-
-def run_harness(harness: Path, mags: np.ndarray) -> np.ndarray:
-    with tempfile.TemporaryDirectory() as d:
-        inp, out = Path(d) / "mags.bin", Path(d) / "out.csv"
-        with open(inp, "wb") as f:
-            np.array([mags.shape[1], mags.shape[0]], dtype=np.int32).tofile(f)
-            mags.astype(np.float32).tofile(f)
-        r = subprocess.run([str(harness), str(inp), str(out)], capture_output=True, text=True)
-        if r.returncode != 0:
-            raise AssertionError(f"{harness} exited {r.returncode}: {r.stderr.strip()[-500:]}")
-        header = out.read_text().splitlines()[0].split(",")
-        cols = [i for i, h in enumerate(header) if h.startswith("mel")]
-        data = np.loadtxt(out, delimiter=",", skiprows=1, ndmin=2)
-    return data[:, cols].astype(np.float32)
+    assert g["file"] == f"mel_golden_v{spec['version']}.npz", \
+        f"{g['file']} for version {spec['version']}"
+    assert spec["num_bins"] == spec["n_fft"] // 2, "num_bins is n_fft/2 (the Nyquist bin dropped)"
+    assert all(0 <= a <= b <= c for a, b, c in spec["bands"]), "bands are [start, center, end]"
+    path = golden_path(spec)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert digest == g["sha256"], (
+        f"{path.name} hashes to {digest}, the spec names {g['sha256']}: copy both files from "
+        f"blinky-firmware tests/parity/spec/ together")
+    data = np.load(path)
+    assert data["mags"].shape == (g["frames"], spec["num_bins"]), data["mags"].shape
+    assert data["mel"].shape == (g["frames"], spec["n_mels"]), data["mel"].shape
+    print(f"ok  the contract is whole: {SPEC_PATH.name} ({len(spec['bands'])} bands) and "
+          f"{path.name} ({g['frames']} frames, sha256 {digest[:12]})")
 
 
 def check_python_matches_golden(spec: dict) -> None:
-    g = np.load(GOLDEN)
+    g = np.load(golden_path(spec))
     got = mel_from_magnitudes(g["mags"], spec)
     err = np.abs(got - g["mel"])
     worst = np.unravel_index(int(err.argmax()), err.shape)
-    assert err.max() <= ATOL, (
+    assert err.max() <= spec["_golden"]["atol"], (
         f"training's mel differs from the firmware's by {err.max():.3g} "
         f"(frame {worst[0]}, band {worst[1]}): python {got[worst]:.6f}, firmware {g['mel'][worst]:.6f}")
     print(f"ok  python matches the firmware on {len(g['mags'])} golden frames "
           f"(max |diff| {err.max():.2g})")
 
 
-def check_firmware_matches_golden(harness: Path) -> None:
-    g = np.load(GOLDEN)
-    fw = run_harness(harness, g["mags"])
-    err = np.abs(fw - g["mel"])
-    assert err.max() <= 1e-6, (
-        f"the firmware's mel no longer matches {GOLDEN.name} (max |diff| {err.max():.3g}). "
-        f"If that change is intended, update spec/mel_frontend_v1.json and regenerate the "
-        f"golden file with --regenerate.")
-    print(f"ok  the firmware still produces {GOLDEN.name}")
-
-
 def check_librosa_is_not_the_firmware(spec: dict) -> None:
     """The librosa HTK filterbank must stay measurably different, or the golden frames have
     stopped testing what #295 found."""
-    g = np.load(GOLDEN)
+    g = np.load(golden_path(spec))
     try:
         import librosa
     except ImportError:
@@ -178,21 +106,10 @@ def check_configs() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--harness", type=Path, help="tests/parity build's parity_harness")
-    ap.add_argument("--regenerate", action="store_true", help="rewrite the golden file")
-    a = ap.parse_args(argv)
+    argparse.ArgumentParser(description=__doc__.split("\n\n")[0]).parse_args(argv)
     spec = load_spec()
-    check_spec_matches_firmware(spec)
+    check_contract(spec)
     assert np.allclose(filterbank(spec).sum(axis=1), 1.0)
-    if a.regenerate:
-        if not a.harness:
-            ap.error("--regenerate needs --harness: the golden values come from the firmware")
-        mags = golden_frames(spec["num_bins"])
-        np.savez_compressed(GOLDEN, mags=mags, mel=run_harness(a.harness, mags))
-        print(f"wrote {GOLDEN} ({len(mags)} frames)")
-    if a.harness:
-        check_firmware_matches_golden(a.harness)
     check_python_matches_golden(spec)
     check_librosa_is_not_the_firmware(spec)
     check_configs()
