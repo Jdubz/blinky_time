@@ -353,6 +353,26 @@ def test_a_crashed_or_cancelled_job_is_a_failure(job: dict[str, Any]) -> None:
     )
 
 
+def test_a_flash_failure_names_each_devices_reason() -> None:
+    flash = {"per_device": {"87DE9B58C90A": {"flash": "error", "message": "verify timed out"}}}
+    dep = {
+        "pass": False,
+        "failed_step": "flash",
+        "message": "flash: 0/1",
+        "steps": {"flash": {"status": "error", "detail": flash}},
+    }
+    text = prq.render(
+        {
+            "sha": A1,
+            "passed": False,
+            "version": "b211-dev-aaaaaaaa",
+            "devices": ["X"],
+            "deploy": dep,
+        }
+    )
+    assert "- 87DE9B58C90A: verify timed out" in text and "`b211-dev-aaaaaaaa`" in text
+
+
 def test_a_deploy_failure_renders_its_step() -> None:
     text = prq.render(
         {

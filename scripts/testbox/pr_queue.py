@@ -194,6 +194,9 @@ def render(report: dict[str, Any]) -> str:
     dep = report.get("deploy") or {}
     if not dep.get("pass"):
         lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]
+        flash = (dep.get("steps") or {}).get("flash") or {}
+        per_device = (flash.get("detail") or flash).get("per_device") or {}
+        lines += [f"- {dev}: {r.get('message') or r.get('flash')}" for dev, r in per_device.items()]
         return "\n".join(lines) + "\n"
     minutes = (report.get("limits") or {}).get("stable_minutes")
     if minutes is not None:

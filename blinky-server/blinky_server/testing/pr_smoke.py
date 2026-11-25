@@ -107,6 +107,8 @@ async def pr_smoke(req: dict[str, Any]) -> dict[str, Any]:
             flash=flash_devices,
             dev_build=build_id,
         )
+        # The build's version, known once the package verified, even if the flash then fails.
+        report["version"] = ((deploy.get("steps") or {}).get("release") or {}).get("version")
         ok = deploy.get("status") == "ok"
         if ok and deploy.get("sha") != sha:
             # The route checked the build's commit; this is the package that was flashed.
