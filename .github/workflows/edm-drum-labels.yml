@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       corpus_ref:
-        description: blinky-corpus commit to label (default: the submodule pin)
+        description: "blinky-corpus commit to label (default: the submodule pin)"
         required: false
         default: ""
 
