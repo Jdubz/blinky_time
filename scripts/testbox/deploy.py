@@ -327,6 +327,15 @@ def install_units(slot: Path, only_missing: bool = False) -> list[str]:
     return changed
 
 
+def read_live_alloy_config() -> str | None:
+    """The installed Alloy config, or None if there is none. Read through sudo, like the writes:
+    the alloy package makes /etc/alloy root:alloy 0770, so the deploy user can't open the file
+    itself (every pass failed with EACCES until this read went through sudo)."""
+    script = 'if [ -e "$1" ]; then printf 1; cat "$1"; else printf 0; fi'
+    out = run("sudo", "-n", "sh", "-c", script, "sh", str(ALLOY_CONFIG), cwd=HOME, timeout=30)
+    return out[1:] if out.startswith("1") else None
+
+
 def install_alloy_config(slot: Path) -> bool:
     """Install ``slot``'s Alloy config where it differs from the live one, and reload Alloy.
     True if it changed. Alloy not installed (no /etc/alloy): say so and leave it, since installing
@@ -336,7 +345,7 @@ def install_alloy_config(slot: Path) -> bool:
         log(f"Alloy isn't installed ({ALLOY_CONFIG.parent} missing): config left; run setup.sh")
         return False
     text = (slot / ALLOY_CONFIG_SRC).read_text()
-    previous = ALLOY_CONFIG.read_text() if ALLOY_CONFIG.is_file() else None
+    previous = read_live_alloy_config()
     if previous == text:
         return False
     run("sudo", "-n", "tee", str(ALLOY_CONFIG), cwd=HOME, timeout=30, stdin=text)

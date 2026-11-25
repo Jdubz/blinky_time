@@ -235,6 +235,34 @@ def test_switch_installs_units_stops_then_moves_the_link_then_starts(
     assert events == ["stop on blinky-deploy-b", "start on blinky-deploy-b"]
 
 
+def sudo_read(cmd: tuple[str, ...]) -> str:
+    """read_live_alloy_config's sudo sh: "1" + the file, or "0" if there is none."""
+    p = Path(cmd[-1])
+    return "1" + p.read_text() if p.exists() else "0"
+
+
+def test_the_live_alloy_config_is_read_through_sudo(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/etc/alloy is root:alloy 0770, so a direct read by the deploy user fails with EACCES:
+    the read goes through sudo like the writes (before, every pass failed and blinky-server's
+    /metrics never reached Prometheus)."""
+    live = tmp_path / "etc-alloy" / "config.alloy"
+    monkeypatch.setattr(deploy, "ALLOY_CONFIG", live)
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*cmd: str, **kw: Any) -> str:
+        calls.append(cmd)
+        return sudo_read(cmd)
+
+    monkeypatch.setattr(deploy, "run", fake_run)
+    assert deploy.read_live_alloy_config() is None  # none installed
+    live.parent.mkdir()
+    live.write_text("// live\n")
+    assert deploy.read_live_alloy_config() == "// live\n"
+    assert len(calls) == 2 and all(c[:3] == ("sudo", "-n", "sh") for c in calls)
+
+
 def test_the_alloy_config_installs_when_it_changes_and_reloads_alloy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -247,6 +275,8 @@ def test_the_alloy_config_installs_when_it_changes_and_reloads_alloy(
     events: list[str] = []
 
     def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:4] == ("sudo", "-n", "sh", "-c"):
+            return sudo_read(cmd)
         if cmd[:3] == ("sudo", "-n", "tee"):
             Path(cmd[3]).write_text(kw["stdin"])
             events.append(f"tee {Path(cmd[3]).name}")
@@ -280,6 +310,8 @@ def test_a_failed_alloy_reload_restores_the_old_config_so_the_next_pass_retries(
     monkeypatch.setattr(deploy, "ALLOY_CONFIG", etc / "config.alloy")
 
     def fake_run(*cmd: str, **kw: Any) -> str:
+        if cmd[:4] == ("sudo", "-n", "sh", "-c"):
+            return sudo_read(cmd)
         if cmd[:3] == ("sudo", "-n", "tee"):
             Path(cmd[3]).write_text(kw["stdin"])
         elif "reload-or-restart" in cmd:
