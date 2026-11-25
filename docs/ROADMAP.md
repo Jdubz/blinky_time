@@ -51,16 +51,12 @@ Heavy work runs on the Spark or devtop, never on the box.
 - **CI only runs what a change touches** (#397, blinky-firmware#55).
 - **Serial:** a quiet device is no longer dropped as dead (#401).
 - **The box can SSH to devtop** (owner-authorized key, 2026-11-24) and fixed the org's CI runners there (homelab-stacks#10).
+- **blinky_time and blinky-firmware are decoupled** (owner, 2026-11-24: "they need to be completely decoupled"): no submodule, no source dependency, and neither repo reads the other's tree (#411, #413, #414 and the submodule's removal). They share three things: blinky-firmware's published artifacts (releases `bN` and staging builds with their manifest), which blinky-server and the console mirror download through blinky-server's own host tools (`blinky-server/hosttools/`); the mel contract files (`ml-training/spec/mel_frontend_v1.json` and `mel_golden_v1.npz`), carried identically by both and checked on each side in CI; and service APIs (the box's `Hardware test (staging)` status and promotion PRs, firmware's `release_promote.py` dispatching the console deploy, its `uf2_upload.py` calling blinky-server's HTTP API). A model reaches the firmware by a blinky-firmware PR that copies ml-training's exported header in.
 
 **Next:**
-- **Decouple blinky_time from blinky-firmware** (owner, 2026-11-24: "they need to be completely decoupled"): no submodule and no source dependency; the repos meet only through published artifacts and service APIs (releases and staging artifacts with their manifests, the box's `Hardware test (staging)` status, the documented serial/BLE protocols). blinky_time owns its host flash tool; blinky-firmware keeps its own copy for bench use.
-  1. **Server runtime (done):** blinky-server and `deploy.sh` run their own release client and UF2 flash tool (`blinky-server/hosttools/`, vendored from blinky-firmware `33e0059`, with Microsoft's uf2conv), never the firmware checkout. The dead server-side compile path is gone.
-  2. **CI (done):** no workflow checks out or reads `firmware/`. Mel parity is checked against a contract both repos carry identical copies of (`ml-training/spec/mel_frontend_v1.json` and its golden vectors; blinky-firmware's `tests/parity/spec/`): here training's front end against the vectors, there the firmware's table, constants and C++. Server tests check out only `corpus`. The console's release mirror is `blinky-server/hosttools/firmware_release.py mirror` (GitHub API), byte-identical to firmware's.
-  3. **Box setup (done):** `deploy.py` checks out only `corpus` in a slot, makes no toolchain links, and a firmware pin bump no longer restarts the server (`firmware` left `SERVER_PATHS`); older slots keep their `firmware/` checkout and links, unread. `setup.sh` clones only `corpus` and installs no firmware toolchain (arduino-cli and the core, cppcheck, GCC 13, adafruit-nrfutil, tflite); firmware development on the box uses blinky-firmware's own `scripts/setup_toolchain.sh`.
-  4. **Cleanup:** ml-training's model export writes to its own output, not into `firmware/blinky-things/`; the serial MCP's simulator from a release asset (or dropped); docs in both repos; then remove the submodule.
-- A firmware submodule bump (by hand) to a blinky-firmware master that includes blinky-firmware#46 and #47, then the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
-- The ESP32-S3 ([#405](https://github.com/Jdubz/blinky_time/issues/405)): its wiring and device config from the owner, a flash path on the box (P3 overlaps).
-- Per-server device ownership ([#403](https://github.com/Jdubz/blinky_time/issues/403)): each device belongs to exactly one server; BLE testing on the box waits on it.
+- Once blinky-firmware's master includes blinky-firmware#46 and #47: the grid's registry entry (`testbox_grid_v1`, orientation 5) and registry-driven config for box chips.
+- The ESP32-S3 ([blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50)): its wiring and device config from the owner, a flash path on the box (P3 overlaps).
+- Per-server device ownership (`TEST_BOX.md`, "Needed: per-server device ownership"): each device belongs to exactly one server; BLE testing on the box waits on it.
 - Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
 - Recovery: USB auto-recovery on the box's enrolled chip ([#219](https://github.com/Jdubz/blinky_time/issues/219)), server-triggered SWD, and the bootloader gate runner.
@@ -85,7 +81,7 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 - [blinky-firmware#23](https://github.com/Jdubz/blinky-firmware/issues/23): JSON stream formatting runs on the render loop. The box streams during tests.
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
 - **[blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59): the ~30 ms detection-to-light tail (measured 2026-11-24):** ACF tempo detection runs inline in the audio update every 100 ms (`acfPeriodMs`) before the frame is drawn, and costs **17-19.5 ms per run** (PLP adds ~1-2 ms; blinky-firmware#57 reports `acfUs`/`acfMaxUs`/`plpUs`/`plpMaxUs`). That makes the chip's 31 ms `maxFrameMs` even with streaming off, and ~17 % of its CPU. Options, owner to choose: draw the onset before the tempo work runs (smallest), or spread / cheapen the ACF (needs a tempo-accuracy check). Camera before/after and the tracker harness per the audio rules. The ~15 ms median is validation's own streaming halving the loop rate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`).
-- Then tighten the staging frame-time gate ([#404](https://github.com/Jdubz/blinky_time/issues/404)). It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
+- Then tighten the staging frame-time gate. It allows 100 ms today, which the release docs call a visible freeze. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
@@ -118,5 +114,5 @@ Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate ob
 
 Still open:
 
-- **The frame-time gate:** the target threshold once the P2 stalls are fixed ([#404](https://github.com/Jdubz/blinky_time/issues/404)).
+- **The frame-time gate:** the target threshold once the P2 stalls are fixed (it waits on blinky-firmware#59, ACF).
 - **The ACF tail ([blinky-firmware#59](https://github.com/Jdubz/blinky-firmware/issues/59)):** draw the onset before the tempo work, or spread / cheapen the ACF.

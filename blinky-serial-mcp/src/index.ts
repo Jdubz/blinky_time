@@ -13,8 +13,8 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { spawn } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { existsSync, readFileSync, statSync } from 'fs';
+import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { del, get, monitorWs, post, put, resolveDeviceId } from './http-client.js';
@@ -28,6 +28,25 @@ const __dirname = dirname(__filename);
 // Set BLINKY_TRACK_DIR to override (e.g., /home/blinkytime/blinky_time/corpus/edm).
 const DEFAULT_TRACK_DIR = process.env.BLINKY_TRACK_DIR
   || join(__dirname, '..', '..', 'corpus', 'edm');
+
+// render_preview runs blinky-firmware's simulator, which this repo doesn't build or ship:
+// BLINKY_SIMULATOR is its binary in a blinky-firmware checkout
+// (<checkout>/blinky-simulator/build/blinky-simulator, built by blinky-simulator/build.sh).
+const SIMULATOR_HELP =
+  'Set BLINKY_SIMULATOR to blinky-firmware\'s built simulator: in a blinky-firmware checkout, ' +
+  'run blinky-simulator/build.sh, then BLINKY_SIMULATOR=<checkout>/blinky-simulator/build/blinky-simulator';
+
+function simulatorPath(): { path: string } | { error: string } {
+  const configured = process.env.BLINKY_SIMULATOR;
+  if (!configured) {
+    return { error: `BLINKY_SIMULATOR is not set. ${SIMULATOR_HELP}` };
+  }
+  const path = resolve(configured);
+  if (!existsSync(path) || !statSync(path).isFile()) {
+    return { error: `BLINKY_SIMULATOR is ${path}, which is not a file. ${SIMULATOR_HELP}` };
+  }
+  return { path };
+}
 
 // JSON response helper
 function ok(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
@@ -253,7 +272,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'render_preview',
-      description: 'Render a visual preview of an LED effect to animated GIFs. Runs actual firmware generator code in simulation.',
+      description: 'Render a visual preview of an LED effect to animated GIFs. Runs actual firmware generator code in simulation: blinky-firmware\'s simulator, at the path in BLINKY_SIMULATOR on the machine this MCP server runs on.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -649,16 +668,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           output_dir?: string;
         };
 
-        // The simulator is blinky-firmware's, at the firmware/ submodule (#357).
-        const SIMULATOR_DIR = join(__dirname, '..', '..', 'firmware', 'blinky-simulator');
-        const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', 'blinky-simulator');
-
-        if (!existsSync(SIMULATOR_PATH)) {
-          return ok({ error: 'Simulator not built. Run: cd firmware/blinky-simulator && ./build.sh' });
+        // The simulator is blinky-firmware's; this repo doesn't build or ship it. Point
+        // BLINKY_SIMULATOR at a blinky-firmware checkout's built binary.
+        const sim = simulatorPath();
+        if ('error' in sim) {
+          return ok({ error: sim.error });
         }
+        const SIMULATOR_PATH = sim.path;
+        // It runs from its own directory (blinky-simulator/, above build/). The output dir is
+        // always passed, so where the files land doesn't depend on that layout.
+        const SIMULATOR_DIR = dirname(dirname(SIMULATOR_PATH));
+        const outputBase = resolve(output_dir || join(SIMULATOR_DIR, 'previews'));
 
         const cliArgs = ['-g', generator, '-e', effect, '-p', pattern, '-d', device, '-t', duration_ms.toString(), '-f', fps.toString()];
-        if (output_dir) cliArgs.push('-o', output_dir);
+        cliArgs.push('-o', outputBase);
         if (effect === 'hue' && hue_shift > 0) cliArgs.push('--hue', hue_shift.toString());
         if (params) cliArgs.push('--params', params);
 
@@ -682,7 +705,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Read output files
-        const outputBase = output_dir || join(SIMULATOR_DIR, 'previews');
         const response: Record<string, unknown> = { status: 'ok', generator, effect, pattern, device };
         for (const file of ['metrics.json', 'params.json']) {
           const p = join(outputBase, file);

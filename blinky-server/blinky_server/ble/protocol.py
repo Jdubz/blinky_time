@@ -1,6 +1,6 @@
 """Wire format for fleet-broadcast packets.
 
-Mirrors ``blinky-things/comms/BleProtocol.h`` so the bytes the firmware's
+Mirrors blinky-firmware's ``blinky-things/comms/BleProtocol.h`` so the bytes the firmware's
 ``BleScanner`` decodes are exactly what the server emits. Do NOT change a
 number here without changing the firmware header at the same time — the
 firmware silently drops packets whose protocol version it doesn't know.

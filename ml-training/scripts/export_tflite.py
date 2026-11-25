@@ -4,8 +4,15 @@
 Loads PyTorch weights, rebuilds equivalent TF/Keras model, and converts
 to TFLite INT8. TF is used only for export (CPU-only is fine).
 
+Everything is written into --output-dir (by convention the run's export/):
+the .tflite, the config's versioned header (export.header_name) and the same
+header under the name the firmware includes (<c_array_name>.h). Nothing is
+written into a firmware tree. A model reaches the firmware by a PR in
+blinky-firmware that copies that header in (ml-training/README.md,
+"Exporting a model").
+
 Usage:
-    python scripts/export_tflite.py --config configs/default.yaml
+    python scripts/export_tflite.py --config configs/default.yaml --output-dir outputs/<run>/export
     python scripts/export_tflite.py --config configs/default.yaml --model outputs/best_model.pt
     python scripts/export_tflite.py --inference-frames 32  # Smaller context = less device RAM
 """
@@ -985,11 +992,15 @@ def estimate_tensor_arena(tflite_path: str) -> tuple[int, int]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export model to TFLite INT8 C header")
+    parser = argparse.ArgumentParser(
+        description="Export model to TFLite INT8 and a C header, all into --output-dir. "
+                    "A model reaches the firmware by a blinky-firmware PR that copies the "
+                    "header in; this never writes into a firmware tree.")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--model", default="outputs/best_model.pt", help="PyTorch model path")
     parser.add_argument("--data-dir", default=None, help="Processed data dir (for calibration)")
-    parser.add_argument("--output-dir", default="outputs", help="Output directory")
+    parser.add_argument("--output-dir", default="outputs",
+                        help="Where the .tflite and headers go (by convention outputs/<run>/export)")
     parser.add_argument("--no-quantize", action="store_true", help="Skip INT8 quantization")
     parser.add_argument("--no-fuse-bn", action="store_true",
                         help="Don't fuse BatchNorm into Conv (keep separate ADD/MUL ops)")
@@ -1003,6 +1014,11 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if "output_header" in cfg.get("export", {}):
+        # Before the repos were decoupled, this was a path into the firmware tree.
+        print("Error: export.output_header is gone: set export.header_name to a file name; "
+              "the header is written into --output-dir", file=sys.stderr)
+        sys.exit(1)
 
     data_dir = Path(args.data_dir or cfg["data"]["processed_dir"])
     output_dir = Path(args.output_dir)
@@ -1298,7 +1314,12 @@ def main():
     # Export TFLite
     max_size_kb = cfg["export"]["max_model_size_kb"]
     c_array_name = cfg["export"]["c_array_name"]
-    header_path = cfg["export"]["output_header"]
+    header_name = cfg["export"]["header_name"]
+    if Path(header_name).name != header_name:
+        print(f"Error: export.header_name must be a file name, not a path: {header_name}",
+              file=sys.stderr)
+        sys.exit(1)
+    header_path = str(output_dir / header_name)
 
     quantize = not args.no_quantize
     tflite_name = f"{c_array_name}_int8.tflite" if quantize else f"{c_array_name}_fp32.tflite"
@@ -1347,7 +1368,6 @@ def main():
         sys.exit(1)
 
     # Export C header
-    Path(header_path).parent.mkdir(parents=True, exist_ok=True)
     use_pcen = cfg.get("features", {}).get("use_pcen", False)
     tflite_to_c_header(tflite_bytes, c_array_name, header_path, mel_frontend, use_pcen=use_pcen)
     print(f"C header: {header_path}")
@@ -1357,13 +1377,13 @@ def main():
     tflite_copy.write_bytes(tflite_bytes)
     print(f"TFLite copy: {tflite_copy}")
 
-    # Update the canonical (un-versioned) header that the firmware actually
-    # `#include`s. Discovered 2026-04-25: previously only the versioned
-    # header (e.g. frame_onset_model_data_v32_mel_only.h) was written, while
-    # FrameOnsetNN.h `#include`s frame_onset_model_data.h — so the active
-    # firmware was running whatever model was last copied to that name,
-    # which silently drifted from the versioned exports. b146 was deployed
-    # thinking it carried v32 but actually had v30 baked in.
+    # The same header under the name the firmware actually `#include`s, so the
+    # blinky-firmware PR copies this one file. Discovered 2026-04-25: only the
+    # versioned header (e.g. frame_onset_model_data_v32_mel_only.h) was
+    # written, while FrameOnsetNN.h `#include`s frame_onset_model_data.h — so
+    # the active firmware was running whatever model was last copied to that
+    # name, which silently drifted from the versioned exports. b146 was
+    # deployed thinking it carried v32 but actually had v30 baked in.
     active_header = Path(header_path).parent / f"{c_array_name}.h"
     if active_header.resolve() != Path(header_path).resolve():
         tflite_to_c_header(

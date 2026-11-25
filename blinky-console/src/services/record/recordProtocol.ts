@@ -1,7 +1,7 @@
 /**
  * Record-mode wire protocol (phone ⇄ device over BLE).
  *
- * Mirror of the canonical layout in blinky-things/comms/RecordStream.h —
+ * Mirror of the canonical layout in blinky-firmware's blinky-things/comms/RecordStream.h —
  * keep in sync, and bump RECORD_PROTOCOL_VERSION there and here together.
  * See docs/PHONE_RECORD_MODE_PLAN.md.
  *

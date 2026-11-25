@@ -39,3 +39,16 @@ def test_no_config_names_a_machine_mount(monkeypatch):
     offenders = [p.name for p in sorted((ML / "configs").glob("*.yaml"))
                  if "/mnt/" in str(load_config(str(p)))]
     assert offenders == [], f"configs still hardcode a mount: {offenders}"
+
+
+def test_no_config_exports_outside_its_run():
+    """export_tflite.py writes the header into its --output-dir, named by export.header_name.
+    A config names a file, never a path: the old export.output_header pointed into the
+    firmware tree, and the repos share no source now (2026-11-24 decoupling)."""
+    offenders = []
+    for p in sorted((ML / "configs").glob("*.yaml")):
+        export = load_config(str(p)).get("export", {})
+        name = export.get("header_name", "")
+        if "output_header" in export or not name.endswith(".h") or Path(name).name != name:
+            offenders.append(p.name)
+    assert offenders == [], f"configs export outside the run: {offenders}"

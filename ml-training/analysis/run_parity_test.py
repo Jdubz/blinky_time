@@ -1,7 +1,11 @@
 """Drive the native C++ parity harness and assert per-feature MAE.
 
+The harness is blinky-firmware's (its tests/parity/), not this repo's: pass --harness (a
+built parity_harness) or --build-dir (a blinky-firmware checkout's tests/parity/build). CI
+checks mel parity against the contract in ml-training/spec/ instead (analysis.test_mel_parity).
+
 Flow:
-  1. Build tests/parity/parity_harness via CMake if it's missing or stale.
+  1. Build blinky-firmware's tests/parity/parity_harness via CMake if it's missing or stale.
   2. Load the audio file, run compute_stft() → (n_frames, N_FFT/2) magnitudes,
      prepend a DC bin of zeros (DC is skipped by features.py but the firmware
      still stores it in preWhitenMagnitudes_[0]), write the binary file in
@@ -194,12 +198,13 @@ def main(argv: list[str] | None = None) -> int:
         "--harness",
         type=Path,
         default=None,
-        help="Path to prebuilt parity_harness. Default: build it under firmware/tests/parity/build.",
+        help="Path to a prebuilt parity_harness (blinky-firmware's tests/parity/).",
     )
     parser.add_argument(
         "--build-dir",
         type=Path,
-        default=_ROOT.parent / "firmware" / "tests" / "parity" / "build",
+        default=None,
+        help="Build the harness here: a blinky-firmware checkout's tests/parity/build.",
     )
     parser.add_argument("--force-rebuild", action="store_true")
     parser.add_argument("--keep-temp", action="store_true")
@@ -211,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    if args.harness is None and args.build_dir is None:
+        parser.error("the parity harness is blinky-firmware's: pass --harness <parity_harness> "
+                     "or --build-dir <blinky-firmware>/tests/parity/build")
     harness_path = args.harness or build_harness(args.build_dir, args.force_rebuild)
 
     audio, _ = librosa.load(str(args.audio), sr=SR, mono=True)

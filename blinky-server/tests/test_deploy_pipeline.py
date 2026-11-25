@@ -57,7 +57,7 @@ class FakeDevice:
         self.state = state
         self.platform = platform
         self.device_name = device_id
-        self.device_type = device_id  # the configured id test_devices.json lists
+        self.device_type = device_id  # configured: a staging target must be (require_test_devices)
         self.protocol = FakeProtocol(
             info
             if info is not None

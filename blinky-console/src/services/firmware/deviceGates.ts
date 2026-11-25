@@ -3,7 +3,7 @@ import { FirmwareError } from './errors';
 import { buildOf, type ReleaseEntry, type ReleaseIndex } from './releases';
 
 /**
- * Pre-flight and post-flash gates, ported from tools/deploy_local.py so a
+ * Pre-flight and post-flash gates, ported from blinky-firmware's tools/deploy_local.py so a
  * browser flash is held to the same bar as a workstation flash.
  */
 

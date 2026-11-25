@@ -16,7 +16,7 @@ import type { OtaRelease, ReleaseIndex } from './releases';
 import { reconnectApp } from './usbFlash';
 
 /**
- * Update one device through its running app (signed OTA,
+ * Update one device through its running app (signed OTA, blinky-firmware's
  * blinky-things/ota/QspiOtaStaging.h), over USB (Web Serial) or Bluetooth
  * (Web Bluetooth to the app's Nordic UART service). No bootloader drive, no
  * file picker, and the old firmware keeps running until the device has the

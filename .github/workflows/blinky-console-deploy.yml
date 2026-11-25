@@ -2,8 +2,8 @@ name: Deploy Blinky Console
 
 # The console also serves the web flasher's firmware: every build mirrors the
 # newest stable releases of Jdubz/blinky-firmware into public/firmware/
-# (blinky-server/hosttools/firmware_release.py mirror, through the GitHub API; no
-# firmware checkout since decoupling step 2). Releases live in that repo, so
+# (blinky-server/hosttools/firmware_release.py mirror, through the GitHub API; this
+# repo has no firmware checkout). Releases live in that repo, so
 # their events can't trigger this one:
 #   - promotion and rollback: blinky-firmware's release_promote.py dispatches
 #     this workflow (gh workflow run -R Jdubz/blinky_time);

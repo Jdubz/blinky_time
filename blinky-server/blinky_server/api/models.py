@@ -40,7 +40,9 @@ class DeployRequest(BaseModel):
 class StagingDeployRequest(BaseModel):
     sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The staging commit (full sha).")
     device_ids: list[str] = Field(
-        ..., min_length=1, description="Explicit TEST device IDs (devices/test_devices.json)."
+        ...,
+        min_length=1,
+        description="Explicit device IDs: configured chips on the test box (a --staging server).",
     )
 
 

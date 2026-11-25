@@ -2,8 +2,8 @@ import { FirmwareError, hex32 } from './errors';
 import { APP_START } from './flashLayout';
 
 /**
- * Client-side reading of the signed OTA manifest (152 bytes, layout in
- * blinky-things/ota/OtaManifest.h, produced only by tools/ota_manifest.py).
+ * Client-side reading of the signed OTA manifest (152 bytes, layout in blinky-firmware's
+ * blinky-things/ota/OtaManifest.h, produced only by its tools/ota_manifest.py).
  *
  * The page cannot check the signature meaningfully (it would only be
  * trusting the same mirror it downloaded from); the DEVICE verifies it with

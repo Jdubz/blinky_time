@@ -4,7 +4,7 @@ This guide covers the tooling in this repo: blinky-server, blinky-console and th
 
 ## First-time setup
 
-Clone with the submodules (`git clone --recurse-submodules`, or `git submodule update --init firmware corpus`). blinky-server needs only `corpus`; its release client and UF2 flash tool are its own (`blinky-server/hosttools/`), neither CI nor the test box checks out `firmware`, and the `firmware` submodule is being removed (`ROADMAP.md`, decoupling). Then install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
+Clone, then check out the one submodule, `corpus` (`git submodule update --init corpus`): blinky-server imports its scorers. There is no firmware submodule; blinky-server's release client and UF2 flash tool are its own (`blinky-server/hosttools/`). Then install the git pre-push hook so blinky-server ruff (lint + format) and mypy run before every push. Without this, format-only failures only get caught on CI, costing a round-trip.
 
 ```bash
 ./scripts/install-hooks.sh

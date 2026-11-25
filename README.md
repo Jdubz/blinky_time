@@ -10,12 +10,12 @@ Audio-reactive LED fixtures for wearable art and installations (hats, tubes, buc
 | Repo | What's in it | Here as |
 |------|--------------|---------|
 | **blinky_time** (this one) | blinky-server, blinky-console, ml-training, blinky-serial-mcp, test box scripts, fleet deploys, device configs | |
-| **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)** | the firmware (`blinky-things/`), bootloader, simulator, host tests, and the staging → hardware test → release flow | `firmware/` submodule |
+| **[blinky-firmware](https://github.com/Jdubz/blinky-firmware)** | the firmware (`blinky-things/`), bootloader, simulator, host tests, and the staging → hardware test → release flow | not at all: releases and staging artifacts only |
 | **[blinky-corpus](https://github.com/Jdubz/blinky-corpus)** | the validation corpus (`edm/`) and its scorers (`blinky_scoring`) | `corpus/` submodule |
 
-Clone with `git clone --recurse-submodules https://github.com/Jdubz/blinky_time.git`, or run `git submodule update --init firmware corpus` in a clone. The firmware's own bootloader submodule isn't needed here.
+Clone with `git clone https://github.com/Jdubz/blinky_time.git`, then `git submodule update --init corpus` in the clone. The corpus is the only submodule; its pin follows blinky-corpus `main` and moves by an ordinary PR (CI and review run on it; Dependabot is not used for repos we own).
 
-The submodules are pinned: blinky-firmware follows its `master` (hardware-tested firmware), blinky-corpus its `main`. A pin moves by an ordinary PR (CI and review run on it; Dependabot is not used for repos we own). The server and `deploy.sh` use their own host tools (`blinky-server/hosttools/`); no CI job reads the firmware checkout either (mel parity runs against a shared spec, the console's release mirror through the GitHub API), and the decoupling removes the firmware submodule (`docs/ROADMAP.md`).
+This repo has no copy of the firmware (2026-11-24 decoupling). It meets blinky-firmware only through published artifacts (releases and staging builds with their manifest, downloaded by `blinky-server/hosttools/`), the mel contract files in `ml-training/spec/` that both repos carry, and service APIs (the box's hardware-test status, the console deploy dispatch, blinky-server's HTTP API). See `docs/ROADMAP.md`.
 
 ## What's here
 
@@ -30,7 +30,6 @@ blinky_time/
 ├── scripts/              # deploy.sh (fleet deploys), testbox/ (deployer, staging runner)
 ├── tools/                # Fleet and analysis tools (BLE DFU push, device eval, visual metrics)
 ├── docs/                 # Tooling docs (see docs/README.md)
-├── firmware/             # blinky-firmware (submodule)
 └── corpus/               # blinky-corpus (submodule)
 ```
 

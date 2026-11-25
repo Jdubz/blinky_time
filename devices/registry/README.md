@@ -16,7 +16,7 @@ other.
 
 | Device ID | Description | LEDs | Layout | File |
 |-----------|-------------|------|--------|------|
-| `hat_v1` | Festival Hat v1 | 89 (linear string) | LINEAR, single strand on D10. Battery-powered. The release test device (`devices/test_devices.json`). | `hat_v1.json` |
+| `hat_v1` | Festival Hat v1 | 89 (linear string) | LINEAR, single strand on D10. Battery-powered. A test device for candidates and `--dev` builds (blinky-firmware's `devices/test_devices.json`). | `hat_v1.json` |
 | `sourpuss_hat` | Sourpuss Hat | 70 (linear string) | LINEAR, single strand on D10. Battery-powered. New hat, distinct from `hat_v1`. | `sourpuss_hat.json` |
 | `scarf` | Scarf | 141 (linear string) | LINEAR, single strand on D0. Battery-powered. | `scarf.json` |
 | `shannon_hat` | Shannon Hat | 79 (linear string) | LINEAR, single strand on D0. Battery-powered. Same build as `scarf` apart from LED count. | `shannon_hat.json` |
@@ -102,7 +102,7 @@ A single boolean field — `"battery": true` — switches on monitoring +
 fast charge for battery-equipped devices (tube_v2, hat_v1, sourpuss_hat,
 scarf, shannon_hat today). The
 threshold values are NOT configurable per device; they're chemistry-
-constants in `blinky-things/hal/PlatformConstants.h`:
+constants in blinky-firmware's `blinky-things/hal/PlatformConstants.h`:
 
 - **VOLTAGE_FULL**: 4.2 V (fully charged, LiPo)
 - **VOLTAGE_LOW** = `DEFAULT_LOW_THRESHOLD`: 3.5 V (~10%, alert)

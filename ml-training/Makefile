@@ -145,7 +145,7 @@ train:
 		--epochs $(EPOCHS)
 
 # ============================================================
-# Step 7: Export TFLite INT8 (writes the config's output_header)
+# Step 7: Export TFLite INT8 + C header into the run's export/ (never a firmware tree)
 # ============================================================
 export:
 	$(REQUIRE_CONFIG)
@@ -153,7 +153,7 @@ export:
 		--config $(CONFIG) \
 		--model $(OUTPUT_DIR)/best_model.pt \
 		--data-dir $(PROCESSED_DIR) \
-		--output-dir $(OUTPUT_DIR) \
+		--output-dir $(OUTPUT_DIR)/export \
 		$(INFERENCE_FRAMES_FLAG)
 
 # ============================================================
@@ -233,7 +233,7 @@ help:
 	@echo "  label            Generate onset consensus labels (resumes)"
 	@echo "  prepare          Extract mel features + augmentation"
 	@echo "  train            Train the onset CNN"
-	@echo "  export           Export TFLite INT8 model (writes the config's output_header)"
+	@echo "  export           Export TFLite INT8 + C header into \$$OUTPUT_DIR/export (the config's header_name)"
 	@echo "  eval             Evaluate on test tracks"
 	@echo "  status           Show dataset/pipeline status"
 	@echo "  calibrate        Mic calibration pipeline"

@@ -147,10 +147,12 @@ quantization:
 
 # Export defaults (model configs may override)
 export:
-  # Not the firmware's active header (frame_onset_model_data.h): a config that
-  # falls back to this default must not overwrite the shipped model. Model
-  # configs set their own versioned header (#271).
-  output_header: "../firmware/blinky-things/audio/frame_onset_model_data_unversioned.h"
+  # The header's file name. export_tflite.py writes it into its --output-dir
+  # (the run's export/), never into a firmware tree: a model reaches the
+  # firmware by a blinky-firmware PR that copies the header in (README.md,
+  # "Exporting a model"). Model configs set their own versioned name (#271);
+  # this default says it came from none.
+  header_name: "frame_onset_model_data_unversioned.h"
   c_array_name: "frame_onset_model_data"
 
 # Storage tiering (see docs/ML_STORAGE_LAYOUT.md):

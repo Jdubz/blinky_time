@@ -15,7 +15,7 @@ This is the tooling repo (#357). The firmware has its own flow in [blinky-firmwa
 - **Branch from / merge to**: `master`. One change per branch; delete it after merge.
 
 ### Submodule pin bumps
-The `corpus/` (blinky-corpus `main`) and `firmware/` (blinky-firmware `master`, until the decoupling removes it) pins move by ordinary PRs, with the same CI and review as any change. Dependabot is not used for repos we own: its cooldown and schedule exist to hold back third-party releases, and they only delayed our own changes.
+The `corpus/` pin (blinky-corpus `main`, the only submodule) moves by ordinary PRs, with the same CI and review as any change. Dependabot is not used for repos we own: its cooldown and schedule exist to hold back third-party releases, and they only delayed our own changes.
 
 ## Workflow
 

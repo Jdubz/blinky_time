@@ -52,7 +52,7 @@ while [[ $# -gt 0 ]]; do
         --release=*)     RELEASE="${1#--release=}"; shift ;;
         --dev|--skip-compile|--no-bump)
             echo "deploy.sh flashes stable releases only ($1 removed). For a test device use" >&2
-            echo "tools/deploy_local.py --dev / --release bN (docs/RELEASE_PROCESS.md)." >&2
+            echo "blinky-firmware's tools/deploy_local.py --dev / --release bN (its docs/RELEASE_PROCESS.md)." >&2
             exit 6 ;;
         --devices)       DEVICES_ARG="$2"; shift 2 ;;
         --devices=*)     DEVICES_ARG="${1#--devices=}"; shift ;;
@@ -62,7 +62,8 @@ Usage: ./scripts/deploy.sh --devices <list> [--release bN]
 
   (default)          latest stable release (docs/RELEASE_PROCESS.md)
   --release bN       a specific STABLE release. Candidates and dev builds go
-                     through tools/deploy_local.py on a test device only.
+                     through blinky-firmware's tools/deploy_local.py on a test
+                     device only.
 
   --devices <list>   Comma-separated device IDs OR the literal 'all' to
                      deploy to every flashable device in range. Required.

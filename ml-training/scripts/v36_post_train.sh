@@ -70,10 +70,10 @@ make export \
     PROCESSED_DIR=/mnt/nvme/processed_v36 \
     | tee "${V36_OUT}/export.log"
 
-[ -f "${V36_OUT}/frame_onset_model_data_int8.tflite" ] || \
+[ -f "${V36_OUT}/export/frame_onset_model_data_int8.tflite" ] || \
     { echo "ERROR: v36 export produced no .tflite"; exit 1; }
 
-TFLITE_KB=$(du -k "${V36_OUT}/frame_onset_model_data_int8.tflite" | cut -f1)
+TFLITE_KB=$(du -k "${V36_OUT}/export/frame_onset_model_data_int8.tflite" | cut -f1)
 echo "v36 tflite size: ${TFLITE_KB} KB (config max: 35 KB)"
 [ "${TFLITE_KB}" -le 35 ] || \
     { echo "ERROR: v36 tflite ${TFLITE_KB} KB > 35 KB budget"; exit 1; }
@@ -118,11 +118,11 @@ echo "=== Done. ==="
 echo "  v36 vs v34d:  ${V36_OUT}/comparison_v34d_v36.txt"
 echo "  v36 vs v33:   ${V36_OUT}/comparison_v33_v36.txt"
 echo
-echo "Next steps if v36 beats v33 on edm/ Onset F1:"
+echo "Next steps if v36 beats v33 on edm/ Onset F1 (steps 1-3 are a blinky-firmware PR):"
 echo "  1. Regenerate MEL_BANDS table:"
 echo "     python3 scripts/generate_mel_bands.py \\"
 echo "       --n-mels 80 --fmin 30 --fmax 14000 --n-fft 512 --sr 31250 \\"
-echo "       --output ../firmware/blinky-things/audio/mel_bands_v36.cpp.fragment"
+echo "       --output ${V36_OUT}/export/mel_bands_v36.cpp.fragment"
 echo "  2. Update SpectralConstants in SharedSpectralAnalysis.h:"
 echo "     NUM_MEL_BANDS 30→80, MEL_MAX_FREQ 8000→14000,"
 echo "     FFT_SIZE 256→512, SAMPLE_RATE 16000→31250"

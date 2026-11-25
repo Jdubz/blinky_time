@@ -4,8 +4,8 @@ import { crc16, toBase64, toHex } from './otaManifest';
 import type { OtaRelease } from './releases';
 
 /**
- * Host side of the firmware's signed OTA protocol (blinky-things/ota/
- * QspiOtaStaging.h): send the signed manifest, stream the image in order
+ * Host side of the firmware's signed OTA protocol (blinky-firmware's
+ * blinky-things/ota/QspiOtaStaging.h): send the signed manifest, stream the image in order
  * with a CRC per chunk, then commit. The device verifies the signature,
  * hashes the image as it lands, re-reads it before committing, and only
  * then asks the bootloader to install it. Until `commit`, the running
