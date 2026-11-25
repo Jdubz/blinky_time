@@ -223,7 +223,7 @@ Private config lives in `~/.config/blinky/` (dir 700, files 600; `KEY=value`, pa
 
 | File | Keys |
 |---|---|
-| `hosts.env` (template `scripts/hosts.env.example`) | `BLINKY_SERVER_URL` (fleet server; `deploy.sh`), `BLINKY_TESTBOX_URL` (the test box; staging report links), `BLINKY_SERIAL_SSH` (fleet server ssh target; `.mcp.json` expands it from the environment, so export it) |
+| `hosts.env` (template `scripts/hosts.env.example`) | `BLINKY_FLEET_URL` (fleet server; `deploy.sh`), `BLINKY_TESTBOX_URL` (the test box; staging report links), `BLINKY_SERIAL_SSH` (fleet server ssh target; `.mcp.json` expands it from the environment, so export it) |
 | `observability.env` (template `scripts/testbox/observability.env.example`) | `LOKI_PUSH_URL`, `PROM_RW_URL`, `TEMPO_OTLP_ENDPOINT` (test box Alloy) |
 | `spark.env` | `SPARK_JOB_API`, `SPARK_API_KEY`, `SPARK_WEBHOOK_SECRET` |
 | `build.env` | `BLINKY_BUILD_URL`, `BLINKY_BUILD_TOKEN` (build service, `docs/DEV_LOOP.md`) |

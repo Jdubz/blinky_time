@@ -17,7 +17,7 @@
 #   ./scripts/deploy.sh --devices=ID --release b214    # a specific stable release
 #
 # Requires: blinky-server running on the fleet server. Its URL is private config, never in this
-#   public repo: BLINKY_SERVER_URL from the environment, else from ~/.config/blinky/hosts.env
+#   public repo: BLINKY_FLEET_URL from the environment, else from ~/.config/blinky/hosts.env
 #   (template: scripts/hosts.env.example).
 # API key: reads from ~/.blinky-api-key or BLINKY_API_KEY env var
 #
@@ -33,7 +33,7 @@
 #       prints recovery steps before exiting; see also
 #       memory: feedback_brick_diagnosis_first_rule.md)
 #   6 = a removed flag (--dev, --skip-compile, --no-bump)
-#   7 = no fleet server URL (BLINKY_SERVER_URL in ~/.config/blinky/hosts.env)
+#   7 = no fleet server URL (BLINKY_FLEET_URL in ~/.config/blinky/hosts.env)
 
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -84,7 +84,7 @@ done
 
 fail() { echo "DEPLOY FAILED: $1" >&2; exit "$2"; }
 
-# The fleet server's URL: the environment's BLINKY_SERVER_URL, else the private hosts file's.
+# The fleet server's URL: the environment's BLINKY_FLEET_URL, else the private hosts file's.
 # Parsed, never sourced. No default: a real host never goes in this public repo.
 HOSTS_ENV="${BLINKY_HOSTS_ENV:-$HOME/.config/blinky/hosts.env}"
 hosts_value() {  # hosts_value KEY: KEY=value or KEY="value" from $HOSTS_ENV, the last one wins
@@ -96,13 +96,13 @@ hosts_value() {  # hosts_value KEY: KEY=value or KEY="value" from $HOSTS_ENV, th
     if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
     printf '%s' "$v"
 }
-BLINKY_SERVER="${BLINKY_SERVER_URL:-$(hosts_value BLINKY_SERVER_URL)}"
+BLINKY_SERVER="${BLINKY_FLEET_URL:-$(hosts_value BLINKY_FLEET_URL)}"
 BLINKY_SERVER="${BLINKY_SERVER%/}"
 if [[ ! $BLINKY_SERVER =~ ^https?://[^[:space:]\<\>]+$ ]]; then
     echo "deploy.sh: no fleet server URL (got '${BLINKY_SERVER}')." >&2
-    echo "  Set BLINKY_SERVER_URL=http://<fleet-server>:8420 in $HOSTS_ENV" >&2
+    echo "  Set BLINKY_FLEET_URL=http://<fleet-server>:8420 in $HOSTS_ENV" >&2
     echo "  (mkdir -m 700 ~/.config/blinky; copy scripts/hosts.env.example there as hosts.env," >&2
-    echo "  chmod 600; the value is in the owner's private notes), or export BLINKY_SERVER_URL." >&2
+    echo "  chmod 600; the value is in the owner's private notes), or export BLINKY_FLEET_URL." >&2
     exit 7
 fi
 
