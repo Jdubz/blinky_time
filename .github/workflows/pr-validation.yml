@@ -160,16 +160,17 @@ jobs:
       # ruff/mypy scope, but tested here.
       run: venv/bin/python -m pytest -v hosttools/tests/
 
-    - name: Test box deployer, staging runner and dev loop client (scripts/testbox/)
+    - name: Test box deployer, hardware runners and dev loop client (scripts/testbox/)
       # They decide what the test box runs and what reaches master (#349), so they are
       # tested like the server.
       run: |
         venv/bin/python -m ruff check --line-length 100 ../scripts/testbox/
         venv/bin/python -m ruff format --check --line-length 100 ../scripts/testbox/
         venv/bin/python -m mypy --strict --ignore-missing-imports \
-          ../scripts/testbox/deploy.py ../scripts/testbox/staging.py ../scripts/testbox/dev.py
+          ../scripts/testbox/deploy.py ../scripts/testbox/staging.py ../scripts/testbox/dev.py \
+          ../scripts/testbox/pr_queue.py
         venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py ../scripts/testbox/test_staging.py \
-          ../scripts/testbox/test_dev.py
+          ../scripts/testbox/test_dev.py ../scripts/testbox/test_pr_queue.py
 
   testbox-camera:
     name: Test box camera analysis

@@ -1,22 +1,26 @@
 """The test box's mode: ``queue`` or ``dev`` (docs/DEV_LOOP.md, "Box modes").
 
-- ``queue`` (the default): the hardware runners (scripts/testbox/staging.py; the PR queue
-  later) submit their work in order.
+- ``queue`` (the default): the hardware runners (scripts/testbox/staging.py and
+  scripts/testbox/pr_queue.py) submit their work, whichever item has waited longest first.
 - ``dev``: the runners submit nothing, and the dev endpoints (``/api/dev/*``) flash and test
-  build-service builds. ``POST /api/test/staging`` answers 409.
+  build-service builds. ``POST /api/test/staging`` and ``/api/test/pr-smoke`` answer 409.
 
 No expiry and no automatic transition (owner, 2026-11-25): leaving dev mode is a conscious
 switch. So the work waiting behind it must be obvious: each runner reports what it holds back
 (``PUT /api/box/queue/{runner}``), and that shows in ``GET /api/box/mode``, in the runners'
 pending commit statuses, in ``dev.py status`` and at ``/metrics`` (``blinky_box_mode``,
-``blinky_hw_queue_depth``, ``blinky_hw_queue_oldest_seconds``).
+``blinky_hw_queue_depth``, ``blinky_hw_queue_oldest_seconds``). In queue mode a runner reports
+what waits for the box too (built, but another runner's test is running or older), and each
+item carries the time its runner last reported (``reported_at``): a runner yields to another's
+older item only while that runner is still reporting, so a stopped runner never blocks one
+that runs.
 
-Switching to dev while a staging suite runs waits for it: the box is ``switching`` (still
-``queue``, but the runners hold back and the suite route refuses), and becomes ``dev`` when the
-suite ends. ``preempt`` cancels the suite instead (it stops at its next step boundary; a flash
-in flight finishes) and puts its commit back in the queue: the runner sees its job among
-``preempted`` and tests that head again. The state is a JSON file in the server's data dir, so
-it survives restarts.
+Switching to dev while a hardware test runs (the staging suite, a PR smoke test) waits for it:
+the box is ``switching`` (still ``queue``, but the runners hold back and the test routes
+refuse), and becomes ``dev`` when the test ends. ``preempt`` cancels the test instead (it stops
+at its next step boundary; a flash in flight finishes) and puts its commit back in its runner's
+queue: the runner sees its job among ``preempted`` and tests that head again. The state is a
+JSON file in the server's data dir, so it survives restarts.
 """
 
 from __future__ import annotations
@@ -35,8 +39,14 @@ FILE = "box-mode.json"
 MODES = ("queue", "dev")
 PREEMPTED_KEEP = 20
 MAX_WAITING = 50
+# The hardware tests a switch to dev waits for or preempts: job kind (TEST_JOBS) -> the runner
+# that submits it (its name in PUT /api/box/queue/{runner}).
+SUITES = {"staging": "staging", "pr-smoke": "pr"}
 
 _cache: tuple[Path, dict[str, Any]] | None = None
+# When each runner last reported (wall time). In memory: after a restart a runner counts as
+# stopped until its next pass reports, which only means nobody yields to it for that long.
+_reported_at: dict[str, float] = {}
 
 
 class ModeError(RuntimeError):
@@ -91,9 +101,16 @@ def _save(state: dict[str, Any]) -> None:
 def waiting() -> list[dict[str, Any]]:
     """Every runner's waiting work, oldest first."""
     items = [
-        {**item, "runner": runner} for runner, held in _state()["waiting"].items() for item in held
+        {**item, "runner": runner, **_last_report(runner)}
+        for runner, held in _state()["waiting"].items()
+        for item in held
     ]
     return sorted(items, key=lambda i: float(i.get("since") or 0.0))
+
+
+def _last_report(runner: str) -> dict[str, float]:
+    at = _reported_at.get(runner)
+    return {"reported_at": at} if at is not None else {}
 
 
 def snapshot() -> dict[str, Any]:
@@ -110,12 +127,13 @@ def snapshot() -> dict[str, Any]:
 
 
 async def _active_suites() -> list[str]:
+    """The hardware tests not yet finished (SUITES' kinds)."""
     from ..work import durable, jobs
     from .workflows import TEST_JOBS
 
     if not durable.launched():
         return []
-    return await jobs.active(TEST_JOBS, "staging")
+    return [job for kind in SUITES for job in await jobs.active(TEST_JOBS, kind)]
 
 
 async def current() -> dict[str, Any]:
@@ -126,7 +144,7 @@ async def current() -> dict[str, Any]:
     if sw and not await _active_suites() and st["switching"] is sw:
         st.update(mode="dev", since=time.time(), switching=None)
         _save(st)
-        log.info("box mode: dev (the staging suite it waited for has ended)")
+        log.info("box mode: dev (the hardware test it waited for has ended)")
     return snapshot()
 
 
@@ -140,21 +158,23 @@ def in_dev() -> bool:
     return bool(_state()["mode"] == "dev")
 
 
-async def _suite_sha(job_id: str) -> str | None:
+async def _suite_of(job_id: str) -> tuple[str | None, str]:
+    """A hardware test's commit (None if unreadable) and the runner that submitted it."""
     from dbos import DBOS
 
     try:
         sts = await DBOS.list_workflows_async(workflow_ids=[job_id], load_output=False)
+        runner = SUITES.get(str(sts[0].name).removeprefix("test."), "staging") if sts else "staging"
         req = sts[0].input["args"][0] if sts and sts[0].input else {}
         sha = req.get("sha") if isinstance(req, dict) else None
-        return str(sha) if sha else None
+        return (str(sha) if sha else None), runner
     except Exception as e:  # the sha is for the queue's display; never fail the switch on it
-        log.warning("box mode: no sha for preempted suite %s: %s", job_id, e)
-        return None
+        log.warning("box mode: no sha for preempted test %s: %s", job_id, e)
+        return None, "staging"
 
 
 async def set_mode(mode: str, note: str | None = None, preempt: bool = False) -> dict[str, Any]:
-    """Switch. To dev with a staging suite running: wait for it (``switching``), or with
+    """Switch. To dev with a hardware test running: wait for it (``switching``), or with
     ``preempt`` cancel it and queue its commit again. Call under routes_firmware._deploy_lock,
     so no suite starts between the check and the switch."""
     if mode not in MODES:
@@ -177,20 +197,20 @@ async def set_mode(mode: str, note: str | None = None, preempt: bool = False) ->
         from dbos import DBOS
 
         for job in suites:
-            sha = await _suite_sha(job)
+            sha, runner = await _suite_of(job)
             await DBOS.cancel_workflow_async(job)
-            log.warning("box mode: dev preempts staging suite %s (%s)", job, (sha or "?")[:12])
+            log.warning("box mode: dev preempts %s test %s (%s)", runner, job, (sha or "?")[:12])
             st["preempted"] = [*st["preempted"], {"job": job, "sha": sha, "at": now}][
                 -PREEMPTED_KEEP:
             ]
             if sha:
-                held = [i for i in st["waiting"].get("staging", []) if i.get("sha") != sha]
-                st["waiting"]["staging"] = [*held, {"sha": sha, "since": now, "preempted": True}]
+                held = [i for i in st["waiting"].get(runner, []) if i.get("sha") != sha]
+                st["waiting"][runner] = [*held, {"sha": sha, "since": now, "preempted": True}]
         suites = []
     st["note"] = note
     if suites:
         st["switching"] = {"to": "dev", "requested_at": now, "waiting_for": suites}
-        log.info("box mode: switching to dev once staging suite %s ends", ", ".join(suites))
+        log.info("box mode: switching to dev once hardware test %s ends", ", ".join(suites))
     else:
         st.update(mode="dev", since=now, switching=None)
         log.info("box mode: dev%s", f" ({note})" if note else "")
@@ -201,6 +221,7 @@ async def set_mode(mode: str, note: str | None = None, preempt: bool = False) ->
 def set_waiting(runner: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     """What ``runner`` holds back now (replaces its previous list; empty clears it)."""
     st = _state()
+    _reported_at[runner] = time.time()
     items = items[:MAX_WAITING]
     if st["waiting"].get(runner, []) != items:  # the staging runner reports every 2 min
         if items:

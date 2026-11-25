@@ -1,6 +1,6 @@
 # Test box
 
-The test box is a Raspberry Pi 5 with one test chip, a speaker and a camera. It runs blinky-server from merged master, hardware-tests blinky-firmware's `staging` head, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
+The test box is a Raspberry Pi 5 with one test chip, a speaker and a camera. It runs blinky-server from merged master, hardware-tests blinky-firmware's `staging` head and the firmware PRs to it, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
 
 The box routes data and captures tests. Heavy work (training, stem separation, label generation, long analysis) goes to CI or to the DGX Spark through its job API, not to the Pi.
 
@@ -136,6 +136,31 @@ The suite deploys the staging build through the deploy pipeline, checks health (
 
 blinky-firmware's `tools/deploy_local.py` and `tools/release_gate.py` (and `devices/test_devices.json`) live in blinky-firmware and run against a chip on the machine's own USB. On the box blinky-server owns the chip's port, so the staging suite is how the box tests firmware.
 
+## PR hardware queue
+
+`blinky-pr-queue.timer` runs `scripts/testbox/pr_queue.py` every 2 minutes from the deploy worktree, next to the staging runner and sharing its helpers. It smoke-tests each firmware PR to blinky-firmware's `staging` on the box's test chips before it merges, and posts the commit status `Hardware test (PR)` on the PR's head (design: [DEV_LOOP.md](DEV_LOOP.md), "PR hardware queue"). Each pass takes the open PRs to `staging`:
+
+- **Drafts** are ignored.
+- **Fork PRs** (the head repo isn't `Jdubz/blinky-firmware`) are never built or tested on the box (DEV_LOOP.md, "Trust"). They get `success`, "fork PR: not hardware-tested before merge; the staging suite tests it after merge", so a required status can't block them forever.
+- **PRs with no change under the firmware's paths** (`tools/firmware_paths.json` at the head, against the merge-base with `staging`) get `success`, "no firmware change: hardware test skipped".
+- **Everything else is queued:** the newest head of each PR, oldest PR first. A head superseded while it waits or runs drops out (a running test is cancelled), is marked `success` "superseded by <sha8> before its hardware test", and its successor keeps its place in the queue.
+
+In queue mode each queued head is built on the build service by sha (a branch of the repo, so the service's trust check passes; a failed build posts `failure` and the log's tail in the PR comment), then the oldest PR's built head goes to the box as a smoke test (`POST /api/test/pr-smoke`, `blinky_server/testing/pr_smoke.py`), a durable job holding the audio lock:
+
+1. deploy: the build's dev package through the same verified `run_deploy` path as `/api/dev/deploy` (test chips only, stored non-stable, the API key, never `X-Deploy-Tool`), refused until each chip has run 60 s since its last reset;
+2. health: 2 min of the suite's health checks;
+3. the `json info` timers;
+4. three tracks, scored: techno-machine-drum, dnb-energetic-breakbeat and garage-uk-2step by default (`tracks` in the request);
+5. asserts: the version unchanged, no reboot and no `[ASSERT]`/`[FALLBACK]` since the flash.
+
+The LEDs are lit for the run and dark afterwards. **Pass = deploy + health + asserts**; the scores are reported with the corpus pin, never gating (owner, 2026-11-25). The result is `success`/`failure` on the head and one comment per tested head, headed `## Hardware test (PR) — <sha>` so a re-run of that head updates it instead of adding another.
+
+- **Dev mode:** nothing is submitted, builds included. Each queued head gets the pending status `queued: box in dev mode since HH:MM (N waiting)`, posted only when the text changes, and the queue shows in `dev.py status`, `GET /api/box/mode` and the metrics. `dev.py mode dev --preempt` cancels a running smoke test too; its head goes back in the queue and is tested again in queue mode.
+- **Sharing the box with the staging runner:** the server runs one hardware test at a time (a busy box answers 409, and the runner tries again next pass). Each runner reports its own waiting items, ready ones marked `ready`, and yields to the other's ready item that has waited longer, while the other is still reporting (a stopped runner never blocks one that runs).
+- **Closed or merged PRs:** dropped from the queue; a running smoke test is cancelled (`DELETE /api/test/pr-smoke/{id}`); nothing more is posted.
+- State: `pr_queue.py --status` (`~/.local/share/blinky-server/pr-queue.json`); log: `journalctl -u blinky-pr-queue`. Config: `build.env` ("Build service client" above); without it nothing is built and the pass says so in the log.
+- **Not yet required.** `Hardware test (PR)` is informational until the owner makes it a required status on blinky-firmware's `staging` ruleset, once it has proven reliable.
+
 ## Dev loop
 
 A firmware change can be built, flashed to the box's test chip and checked in a few minutes, before any push or CI (design: [DEV_LOOP.md](DEV_LOOP.md)). From a blinky-firmware checkout on the box (or `--repo PATH`):
@@ -143,7 +168,7 @@ A firmware change can be built, flashed to the box's test chip and checked in a 
 ```
 python3 ~/blinky-deploy/scripts/testbox/dev.py try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
 python3 ~/blinky-deploy/scripts/testbox/dev.py status          # mode, what waits behind it, the chips
-python3 ~/blinky-deploy/scripts/testbox/dev.py mode queue      # leave dev mode: the staging runner carries on
+python3 ~/blinky-deploy/scripts/testbox/dev.py mode queue      # leave dev mode: the hardware runners carry on
 python3 ~/blinky-deploy/scripts/testbox/dev.py mode dev [--note TEXT] [--preempt]
 python3 ~/blinky-deploy/scripts/testbox/dev.py build [REF] [--wip]
 python3 ~/blinky-deploy/scripts/testbox/dev.py flash BUILD_ID
@@ -152,7 +177,7 @@ python3 ~/blinky-deploy/scripts/testbox/dev.py test info health=2 validate=techn
 
 - **`try` is the one command.** It switches the box to dev mode if it isn't (and says so), builds the commit on the build service, flashes it, runs the info check plus the ones asked for, and prints the version, the flash result, each check and the `json info` timers. Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) pass or fail; scores are reported, never gating. `--camera` then runs `camera_review.py` on the tracks.
 - **No push needed.** An unpushed commit goes to the build service as a git bundle on its merge-base with `origin/staging` (then `origin/master`). A dirty tree is refused unless `--wip`, which builds the working tree as a throwaway commit at `refs/dev/wip` without touching your branch, index or stash.
-- **Dev mode has no expiry.** While the box is in it, the staging runner holds the staging head with a pending status (`queued: box in dev mode since HH:MM (N waiting)`), and the wait shows in `dev.py status`, `GET /api/box/mode` and the metrics `blinky_box_mode`, `blinky_hw_queue_depth` and `blinky_hw_queue_oldest_seconds`. Switching to dev while a staging suite runs waits for it; `--preempt` cancels it, and the staging runner tests that head again in queue mode. Switch back with `dev.py mode queue` when done.
+- **Dev mode has no expiry.** While the box is in it, the hardware runners (staging and the PR queue) hold their heads with a pending status (`queued: box in dev mode since HH:MM (N waiting)`), and the wait shows in `dev.py status`, `GET /api/box/mode` and the metrics `blinky_box_mode`, `blinky_hw_queue_depth` and `blinky_hw_queue_oldest_seconds`. Switching to dev while a hardware test (a staging suite or a PR smoke test) runs waits for it; `--preempt` cancels it, and its runner tests that head again in queue mode. Switch back with `dev.py mode queue` when done.
 - **Server side:** `GET`/`PUT /api/box/mode`; `POST /api/dev/deploy {build_id, device_ids}` (the staging deploy pipeline with the build service's package, verified like a staging artifact: test chips only, stored non-stable) and `POST /api/dev/run {device_ids, checks}` (`info`, `health`, `validate`, `pace`, `commands`, in order, in one test session), both 409 outside dev mode. Each chip keeps the firmware's 60 s between resets: a dev deploy is refused (with Retry-After) until the chip has run 60 s.
 - **Config:** `~/.config/blinky/build.env` ("Build service client" above); the server and `dev.py` both read it, the environment overriding it. Without it, dev deploys answer 503.
 

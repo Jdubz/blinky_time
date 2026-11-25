@@ -73,6 +73,8 @@ UNITS = (
     "blinky-deploy.timer",
     "blinky-staging.service",  # the staging hardware test (staging.py, #349)
     "blinky-staging.timer",
+    "blinky-pr-queue.service",  # the PR hardware queue (pr_queue.py, docs/DEV_LOOP.md)
+    "blinky-pr-queue.timer",
 )
 # Alloy (the box's telemetry forwarder to the central LGTM stack): its config ships in the slot and
 # is installed verbatim when it differs, then Alloy reloads (SIGHUP). setup.sh installs Alloy itself

@@ -327,11 +327,11 @@ async def test_preempt_cancels_the_suite_and_queues_its_commit(
     async def cancel(job: str) -> None:
         cancelled.append(job)
 
-    async def sha(job: str) -> str:
-        return SHA
+    async def sha(job: str) -> tuple[str, str]:
+        return SHA, "staging"
 
     monkeypatch.setattr(DBOS, "cancel_workflow_async", cancel)
-    monkeypatch.setattr(box_mode, "_suite_sha", sha)
+    monkeypatch.setattr(box_mode, "_suite_of", sha)
     suites.append("suite-1")
     st = await box_mode.set_mode("dev", preempt=True)
     assert cancelled == ["suite-1"] and st["mode"] == "dev"
@@ -655,3 +655,180 @@ async def test_the_info_check_waits_out_a_metrics_window(monkeypatch: pytest.Mon
     out = await fn(["grid"])
     assert events[0] == ("sleep", dev_run.INFO_SETTLE_S) and dev_run.INFO_SETTLE_S > 5
     assert events[1] == ("info", "grid") and out["grid"]["version"] == "b1-dev-x"
+
+
+# -- the PR hardware queue (docs/DEV_LOOP.md, phase 2) ----------------------------------------
+
+
+async def test_preempt_queues_a_pr_smoke_test_under_the_pr_runner(
+    suites: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbos import DBOS
+
+    async def cancel(job: str) -> None:
+        pass
+
+    async def of(job: str) -> tuple[str, str]:
+        return SHA, "pr"
+
+    monkeypatch.setattr(DBOS, "cancel_workflow_async", cancel)
+    monkeypatch.setattr(box_mode, "_suite_of", of)
+    suites.append("smoke-1")
+    st = await box_mode.set_mode("dev", preempt=True)
+    assert st["preempted"][0]["job"] == "smoke-1"
+    assert [(w["runner"], w["sha"]) for w in st["waiting"]] == [("pr", SHA)]
+
+
+def test_each_waiting_item_carries_when_its_runner_last_reported() -> None:
+    box_mode._reported_at.clear()
+    st = box_mode.set_waiting("pr", [{"sha": "b" * 40, "since": 10.0, "ready": True}])
+    (w,) = st["waiting"]
+    assert w["ready"] is True and time.time() - w["reported_at"] < 5
+    box_mode._reported_at.clear()  # a restart: unknown until the runner's next pass
+    assert "reported_at" not in box_mode.snapshot()["waiting"][0]
+
+
+async def test_the_queue_route_keeps_the_ready_flag(box: tuple[AsyncClient, FakeFleet]) -> None:
+    c, _ = box
+    item = {"sha": SHA, "since": 1.0, "what": "PR #5", "ready": True}
+    await c.put("/api/box/queue/pr", json={"waiting": [item]})
+    (w,) = (await c.get("/api/box/mode")).json()["waiting"]
+    assert w["ready"] is True and w["what"] == "PR #5" and w["runner"] == "pr"
+
+
+@pytest.fixture
+def tracks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    from blinky_server.testing import pr_smoke
+
+    monkeypatch.setattr(routes_dev, "default_track_dir", lambda: tmp_path)
+    names = [*pr_smoke.DEFAULT_TRACKS, "edm-other"]
+    monkeypatch.setattr(routes_testing, "discover_tracks", lambda d: [{"name": n} for n in names])
+    return tmp_path
+
+
+async def test_a_pr_smoke_test_in_queue_mode(
+    box: tuple[AsyncClient, FakeFleet],
+    service: FakeBuildService,
+    submitted: list[Any],
+    tracks: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from blinky_server.testing import pr_smoke
+
+    c, fleet = box
+    service.add("b1", b"")
+    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"], "pr": 5}
+    r = await c.post("/api/test/pr-smoke", json=body)
+    assert r.status_code == 200, r.text
+    name, req = submitted[0]
+    assert name == "pr_smoke" and req["tracks"] == list(pr_smoke.DEFAULT_TRACKS)
+    assert req["track_dir"] == str(tracks) and req["pr"] == 5 and "limits" not in req
+    r = await c.post(
+        "/api/test/pr-smoke", json={**body, "tracks": ["edm-other"], "health_minutes": 1}
+    )
+    assert r.status_code == 200 and submitted[1][1]["limits"] == {"stable_minutes": 1.0}
+    service.add("b2", b"", sha="ef" * 20)
+    service.add("b3", b"", state="building")
+    bad = [
+        ({"tracks": ["missing"]}, 400),
+        ({"build_id": "b2"}, 400),  # a build of another commit
+        ({"build_id": "b3"}, 409),  # not built yet
+        ({"build_id": "nope"}, 502),  # the service doesn't know it
+        ({"device_ids": ["nope"]}, 400),
+        ({"track_dir": "/etc"}, 400),
+        ({"build_id": "../x"}, 422),
+        ({"health_minutes": 0}, 422),
+    ]
+    for over, code in bad:
+        r = await c.post("/api/test/pr-smoke", json={**body, **over})
+        assert r.status_code == code, (over, r.text)
+    # The 60 s rule between resets, as a dev deploy.
+    fleet.devices["grid"].last_info = {"millis": 20_000}  # type: ignore[attr-defined]
+    r = await c.post("/api/test/pr-smoke", json=body)
+    assert r.status_code == 409 and "60 s between resets" in r.json()["detail"]
+    assert "Retry-After" in r.headers
+    fleet.devices["grid"].last_info = {"millis": 3_600_000}  # type: ignore[attr-defined]
+
+    # Busy: another deploy or hardware test holds the box.
+    async def active() -> bool:
+        return True
+
+    monkeypatch.setattr(routes_firmware, "_deploy_active", active)
+    r = await c.post("/api/test/pr-smoke", json=body)
+    assert r.status_code == 409 and "already running" in r.json()["detail"]
+    assert len(submitted) == 2
+
+
+async def test_a_pr_smoke_test_is_refused_in_dev_mode_and_off_the_box(
+    box: tuple[AsyncClient, FakeFleet],
+    service: FakeBuildService,
+    submitted: list[Any],
+    tracks: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    c, fleet = box
+    service.add("b1", b"")
+    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"]}
+    await c.put("/api/box/mode", json={"mode": "dev"})
+    r = await c.post("/api/test/pr-smoke", json=body)
+    assert r.status_code == 409 and "dev mode" in r.json()["detail"]
+    await c.put("/api/box/mode", json={"mode": "queue"})
+    monkeypatch.setattr(build_service, "ENV_FILE", tmp_path / "none.env")
+    assert (await c.post("/api/test/pr-smoke", json=body)).status_code == 503
+    fleet.staging_enabled = False
+    assert (await c.post("/api/test/pr-smoke", json=body)).status_code == 403
+    assert submitted == []
+
+
+async def test_only_a_pr_smoke_job_is_cancelled_by_its_route(
+    box: tuple[AsyncClient, FakeFleet], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dbos import DBOS
+
+    from blinky_server.work import jobs
+
+    c, _ = box
+    got: dict[str, dict[str, Any]] = {
+        "smoke-1": {"kind": "pr-smoke", "status": "running"},
+        "smoke-2": {"kind": "pr-smoke", "status": "complete"},
+        "suite-1": {"kind": "staging", "status": "running"},
+    }
+    cancelled: list[str] = []
+
+    async def get(family: Any, job_id: str) -> dict[str, Any] | None:
+        return got.get(job_id)
+
+    async def cancel(job_id: str) -> None:
+        cancelled.append(job_id)
+
+    monkeypatch.setattr(jobs, "get", get)
+    monkeypatch.setattr(DBOS, "cancel_workflow_async", cancel)
+    monkeypatch.setattr(routes_testing, "_require_store", lambda: None)
+    r = await c.delete("/api/test/pr-smoke/smoke-1")
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    r = await c.delete("/api/test/pr-smoke/smoke-2")
+    assert r.status_code == 200 and r.json()["status"] == "complete"
+    assert (await c.delete("/api/test/pr-smoke/suite-1")).status_code == 404
+    assert (await c.delete("/api/test/pr-smoke/none")).status_code == 404
+    assert cancelled == ["smoke-1"]
+
+
+def test_the_pr_smoke_verdict_is_deploy_health_and_asserts_only() -> None:
+    from blinky_server.testing.pr_smoke import verdict
+
+    report: dict[str, Any] = {
+        "deploy": {"pass": True},
+        "health": {"g": {"fps": {"pass": True}, "stability": {"pass": True}}},
+        "validation": {"results": [{"track": "t", "failed": True}]},  # a score: never gates
+        "final": {"g": {"no_reboot": {"pass": True}, "alerts": {"pass": True}}},
+    }
+    assert verdict(report) is True
+    for path in (("deploy",), ("health", "g", "fps"), ("final", "g", "alerts")):
+        bad = json.loads(json.dumps(report))
+        node = bad
+        for k in path:
+            node = node[k]
+        node["pass"] = False
+        assert verdict(bad) is False, path
+    assert verdict({"deploy": {"pass": True}}) is False  # nothing measured is no pass

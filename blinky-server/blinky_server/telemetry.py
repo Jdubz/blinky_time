@@ -208,8 +208,9 @@ def register_fleet(get_devices: Callable[[], list[Any]]) -> None:
 
 
 class BoxCollector(Collector):
-    """``blinky_box_mode{mode}`` (1 for the mode the box is in), and the work waiting behind
-    dev mode: ``blinky_hw_queue_depth`` and ``blinky_hw_queue_oldest_seconds`` (0 when none).
+    """``blinky_box_mode{mode}`` (1 for the mode the box is in), and the work waiting for the
+    box (behind dev mode, or for its turn in queue mode): ``blinky_hw_queue_depth`` and
+    ``blinky_hw_queue_oldest_seconds`` (0 when none).
     A switch to dev still waiting for its suite counts as queue (it is, until the suite ends)."""
 
     def collect(self) -> Iterator[GaugeMetricFamily]:
@@ -229,12 +230,12 @@ class BoxCollector(Collector):
             mode.add_metric([m], 1.0 if st["mode"] == m else 0.0)
         waiting = st["waiting"]
         depth = GaugeMetricFamily(
-            "blinky_hw_queue_depth", "Hardware runs waiting behind the box's dev mode."
+            "blinky_hw_queue_depth", "Hardware runs waiting for the box (dev mode, or their turn)."
         )
         depth.add_metric([], float(len(waiting)))
         oldest = GaugeMetricFamily(
             "blinky_hw_queue_oldest_seconds",
-            "How long the oldest hardware run has waited behind dev mode (0: none waiting).",
+            "How long the oldest hardware run has waited for the box (0: none waiting).",
         )
         since = [float(i.get("since") or 0.0) for i in waiting]
         oldest.add_metric([], max(0.0, time.time() - min(since)) if since else 0.0)

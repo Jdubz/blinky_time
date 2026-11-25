@@ -2,7 +2,7 @@
 test_durable_work.py can kill it for real and start it again (#325). WORKFLOW names another
 test job instead; ``staging`` runs the staging suite (#349) with the deploy, json info, the
 stream and json rhythm faked, its validation playbacks counted like validate's; ``dev-run`` runs
-the dev loop's targeted checks the same way.
+the dev loop's targeted checks the same way, and ``pr-smoke`` the PR hardware queue's smoke test.
 
     python -m tests.durable_harness start  OUT KILL   # KILL: none | crash:N | drain:N
     python -m tests.durable_harness resume OUT [late]  # late: devices reconnect 1.5 s in
@@ -28,7 +28,7 @@ from blinky_server.api.deps import set_fleet
 from blinky_server.device.device import DeviceState
 from blinky_server.firmware import deploy_pipeline
 from blinky_server.paths import data_dir
-from blinky_server.testing import dev_run, staging, workflows
+from blinky_server.testing import dev_run, pr_smoke, staging, workflows
 from blinky_server.work import durable
 
 TRACKS = ["alpha", "bravo", "charlie"]
@@ -185,8 +185,12 @@ STAGING_VERSION = "b300-dev-abababab"
 
 
 async def fake_deploy(*a: Any, **k: Any) -> dict[str, Any]:
+    out = {"status": "ok", "version": STAGING_VERSION, "steps": {"store": {"flash_t": 0.0}}}
+    if k.get("dev_build"):  # the PR smoke test's build-service package, of its commit
+        effect(f"deploy build {k['dev_build']}")
+        return {**out, "build_id": k["dev_build"], "sha": PR_SMOKE_REQ["sha"]}
     effect(f"deploy {k['staging_sha'][:8]}")
-    return {"status": "ok", "version": STAGING_VERSION, "steps": {"store": {"flash_t": 0.0}}}
+    return out
 
 
 async def fake_info(device_id: str) -> dict[str, Any]:
@@ -242,6 +246,18 @@ DEV_RUN_REQ = {
 }
 
 
+# The PR hardware queue's smoke test (docs/DEV_LOOP.md): deploy, health, info, tracks, asserts.
+PR_SMOKE_REQ = {
+    "sha": "cd" * 20,
+    "build_id": "b-1",
+    "device_ids": DEVICES,
+    "pr": 7,
+    "tracks": TRACKS,
+    "track_dir": "/fake",
+    "limits": STAGING_REQ["limits"],
+}
+
+
 async def reconnect_late() -> None:
     """As after a real restart: discovery connects the devices a while after the start."""
     for d in devices.values():
@@ -284,6 +300,8 @@ async def main() -> None:
             wid = await durable.submit(staging.staging_suite, STAGING_REQ)
         elif WORKFLOW == "dev-run":
             wid = await durable.submit(dev_run.dev_run, DEV_RUN_REQ)
+        elif WORKFLOW == "pr-smoke":
+            wid = await durable.submit(pr_smoke.pr_smoke, PR_SMOKE_REQ)
         elif WORKFLOW == "capture-nn":
             wid = await durable.submit(workflows.capture_nn, "dev-a", 1000.0, str(out / "c.jsonl"))
         else:

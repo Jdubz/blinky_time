@@ -75,6 +75,16 @@ class StagingSuiteRequest(BaseModel):
     limits: dict[str, float] | None = None
 
 
+class PrSmokeRequest(BaseModel):
+    sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The PR head (full sha).")
+    build_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$", description="Its build.")
+    device_ids: list[str] = Field(..., min_length=1, description="Explicit TEST device IDs.")
+    pr: int | None = Field(None, ge=1, description="The PR's number (display only)")
+    tracks: list[str] | None = Field(None, min_length=1, max_length=10)
+    health_minutes: float | None = Field(None, gt=0, le=30)
+    track_dir: str | None = Field(None, description="default: the server's corpus/edm")
+
+
 class ParamSweepRequest(BaseModel):
     device_ids: list[str] = Field(..., min_length=1)
     param_name: str = Field(..., min_length=1)
@@ -171,6 +181,101 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
         return await _submit(staging_suite, body.model_dump())
+
+
+@router.post("/pr-smoke", dependencies=[Depends(require_api_key)])
+async def pr_smoke(body: PrSmokeRequest) -> dict[str, Any]:
+    """The PR hardware queue's smoke test (docs/DEV_LOOP.md; testing/pr_smoke.py): deploy a
+    build-service build of the PR head to the test chips, then health, the info timers, a few
+    tracks and the asserts. Queue mode only, on a server started with --staging; the same lock
+    and refusals as /test/staging, and the 60 s rule between resets as /dev/deploy. Returns a
+    job_id; poll /test/jobs/{id}. ``passed`` is deploy + health + asserts; scores never gate."""
+    import asyncio
+    from pathlib import Path
+
+    from ..firmware import build_service, deploy_pipeline
+    from ..testing import box_mode
+    from ..testing.pr_smoke import DEFAULT_TRACKS
+    from ..testing.pr_smoke import pr_smoke as wf
+    from . import routes_dev, routes_firmware
+
+    if not get_fleet().staging_enabled:
+        raise HTTPException(
+            403, "PR smoke tests are off on this server (start it with --staging: the test box)"
+        )
+    if build_service.config() is None:
+        raise HTTPException(503, build_service.disabled_reason())
+    dev_mode = "the box is in dev mode: PR smoke tests wait for queue mode"
+    if box_mode.holds_queue():
+        raise HTTPException(409, dev_mode)
+    track_dir = Path(body.track_dir) if body.track_dir else routes_dev.default_track_dir()
+    resolved = track_dir.resolve()
+    if not any(resolved.is_relative_to(d) for d in (Path.home(), Path("/tmp"))):
+        raise HTTPException(400, f"track_dir must be under home or /tmp: {resolved}")
+    tracks = list(body.tracks or DEFAULT_TRACKS)
+    try:
+        have = {t["name"] for t in discover_tracks(str(track_dir))}
+    except FileNotFoundError as e:
+        raise HTTPException(400, f"no tracks: {e}") from e
+    if missing := sorted(set(tracks) - have):
+        raise HTTPException(400, f"unknown tracks in {track_dir}: {missing}")
+    try:
+        rec = await asyncio.to_thread(build_service.build, body.build_id)
+    except build_service.BuildServiceError as e:
+        raise HTTPException(502, str(e)) from e
+    if rec.get("sha") != body.sha:
+        raise HTTPException(400, f"build {body.build_id} is not of {body.sha[:12]}")
+    if rec.get("state") != "done":
+        raise HTTPException(409, f"build {body.build_id} is {rec.get('state')!r}, not done")
+    async with routes_firmware._deploy_lock:
+        if box_mode.holds_queue():
+            # Again under the lock, as the staging route: a switch to dev may have won it.
+            raise HTTPException(409, dev_mode)
+        if await routes_firmware._deploy_active():
+            raise HTTPException(409, "A deploy or hardware test is already running")
+        try:
+            devices = deploy_pipeline.resolve_targets(get_fleet(), body.device_ids)
+            deploy_pipeline.require_test_devices(get_fleet(), devices)
+        except deploy_pipeline.DeployError as e:
+            raise HTTPException(400, str(e)) from e
+        wait = max(routes_dev.reset_wait(d) for d in devices)
+        if wait > 0:
+            raise HTTPException(
+                409,
+                f"a chip reset {routes_dev.RESET_GAP_S - wait:.0f} s ago; the firmware's rule "
+                f"is {routes_dev.RESET_GAP_S:.0f} s between resets: retry in {wait:.0f} s",
+                headers={"Retry-After": str(int(wait) + 1)},
+            )
+        req: dict[str, Any] = {
+            "sha": body.sha,
+            "build_id": body.build_id,
+            "device_ids": body.device_ids,
+            "pr": body.pr,
+            "tracks": tracks,
+            "track_dir": str(track_dir),
+        }
+        if body.health_minutes is not None:
+            req["limits"] = {"stable_minutes": body.health_minutes}
+        return await _submit(wf, req)
+
+
+@router.delete("/pr-smoke/{job_id}", dependencies=[Depends(require_api_key)])
+async def cancel_pr_smoke(job_id: str) -> dict[str, Any]:
+    """Cancel a PR smoke test (its PR was closed, merged or superseded). It stops at its next
+    step boundary (a flash in flight finishes); the LEDs go dark and the lock is released as
+    on any other end. Only PR smoke jobs: nothing else is cancelled here."""
+    from dbos import DBOS
+
+    from ..testing.workflows import TEST_JOBS
+
+    _require_store()
+    job = await jobs.get(TEST_JOBS, job_id)
+    if not job or job["kind"] != "pr-smoke":
+        raise HTTPException(404, f"no PR smoke job {job_id}")
+    if job["status"] in ("complete", "error", "cancelled"):
+        return {"job_id": job_id, "status": job["status"]}
+    await DBOS.cancel_workflow_async(job_id)
+    return {"job_id": job_id, "status": "cancelled"}
 
 
 @router.post("/param-sweep")

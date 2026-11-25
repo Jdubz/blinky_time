@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: the build service ([build-service/](../build-service/README.md), phase 1A) and the box side of phase 1 (box modes, dev deploy and targeted checks, `dev.py`).
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`) and phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py` and the server's `test.pr-smoke` job; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue"). `Hardware test (PR)` is not a required status yet: the owner makes it one once it has proven reliable.
 
 ## Why
 
@@ -65,15 +65,15 @@ Code reads the location from config and never has a default address.
 ### 2. Box modes: `dev` and `queue`
 
 - **Where the mode lives:** in blinky-server, persisted (`GET`/`PUT /api/box/mode`). The default is `queue`.
-- **`queue` mode:** the hardware runners (staging, and the PR queue from phase 2) submit their work in order, as the staging runner does today.
+- **`queue` mode:** the hardware runners (staging and the PR queue) submit their work, whichever ready item has waited longest first.
 - **`dev` mode:** the runners submit nothing. Each waiting commit gets a pending status saying why: `queued: box in dev mode since 14:05 (3 waiting)`. The same shows in `dev.py status`, in metrics on the box's Grafana dashboard (`blinky_box_mode`, `blinky_hw_queue_depth`, `blinky_hw_queue_oldest_seconds`), and in the staging reports.
 - **No expiry:** the box stays in dev mode until someone switches it back.
 - **Switching into dev mode while a suite runs** waits for the suite to finish, or `--preempt` cancels it and puts it back in the queue.
 - **How it is built** (`blinky_server/testing/box_mode.py`, `scripts/testbox/staging.py`):
   - the mode is a JSON file in the server's data dir, so it survives restarts;
   - while a switch waits for its suite the box is "switching": still `queue`, but the runners hold back and `POST /api/test/staging` answers 409 (closing the race of a runner that read the mode just before the switch);
-  - each runner reports what it holds back (`PUT /api/box/queue/{runner}`), which is what `GET /api/box/mode`, `dev.py status` and the metrics show;
-  - a preempted suite is cancelled at its next step boundary (a flash in flight finishes) and listed in the mode's `preempted`; the staging runner sees its job there, records no failure, and tests that head again.
+  - each runner reports what it holds back (`PUT /api/box/queue/{runner}`), which is what `GET /api/box/mode`, `dev.py status` and the metrics show. In queue mode it reports what waits for the box too, ready items marked `ready`; the server stamps each runner's last report (`reported_at`), and a runner yields to another's older ready item only while that runner still reports;
+  - a preempted hardware test (a staging suite or a PR smoke test) is cancelled at its next step boundary (a flash in flight finishes) and listed in the mode's `preempted`; its runner sees its job there, records no failure, and tests that head again.
 
 ### 3. Dev flash and targeted tests (dev mode only)
 
@@ -107,11 +107,14 @@ Code reads the location from config and never has a default address.
 - **The Claude review** already skips drafts.
 - **During dev work,** builds come from the build service, not CI.
 
-### 5. PR hardware queue
+### 5. PR hardware queue (built)
 
-- **What it takes:** ready PRs to `staging` whose head is a branch of the repo and that change firmware paths (`tools/firmware_paths.json`).
-- **Order:** the newest head of each PR, oldest PR first. A superseded head drops out.
-- **Smoke test:** flash, health, a few tracks, then no reboot and no `[ASSERT]`/`[FALLBACK]`. It posts `Hardware test (PR)` on the head. **Health must pass, and that status is required.** Scores are in the report and never block.
+- **What it takes:** ready PRs to `staging` whose head is a branch of the repo and that change firmware paths (`tools/firmware_paths.json`, against the merge-base with `staging`). Drafts are ignored. A fork PR is never built or tested on the box; it gets `success` saying so ("fork PR: not hardware-tested before merge; the staging suite tests it after merge"), so a required status can't block it forever. A PR with no firmware change gets `success`, "no firmware change: hardware test skipped".
+- **Order:** the newest head of each PR, oldest PR first. A superseded head drops out (a running test is cancelled) and is marked superseded; its successor keeps its place.
+- **Build:** on the build service by sha, queue mode only. A failed build posts `failure` with the log's tail in the PR comment.
+- **Smoke test** (`POST /api/test/pr-smoke`, `blinky_server/testing/pr_smoke.py`, a durable job, queue mode only): the dev package through the `/api/dev/deploy` path, 2 min of health, the `json info` timers, three tracks (techno-machine-drum, dnb-energetic-breakbeat, garage-uk-2step by default), then no reboot and no `[ASSERT]`/`[FALLBACK]` since the flash. The staging suite's and the dev run's own functions, the audio lock end to end, the LEDs lit for the run. It posts `Hardware test (PR)` on the head and one report comment per tested head (`## Hardware test (PR) — <sha>`, updated on a re-run). **Deploy, health and the asserts must pass.** Scores are in the report with the corpus pin and never block. The status becomes required once it has proven reliable (the owner's call).
+- **Dev mode:** nothing submitted; each queued head pending with `queued: box in dev mode since HH:MM (N waiting)`. A PR closed or merged while queued or running is dropped (its test cancelled) with nothing more posted; a preempted test goes back in the queue.
+- **The box is shared** with the staging runner: one hardware test at a time (409: next pass), whichever ready item has waited longest first.
 - **Staging** keeps the full suite with the same rule (health blocks, scores don't), and keeps skipping images whose firmware fingerprint is unchanged.
 
 ### 6. Stable candidates from scores
@@ -128,7 +131,7 @@ Code reads the location from config and never has a default address.
    - box modes;
    - dev flash and targeted tests, and `dev.py`;
    - drafts run no heavy jobs.
-2. **The PR hardware queue:** health-gated `Hardware test (PR)`.
+2. **The PR hardware queue:** health-gated `Hardware test (PR)` (built; required once proven, by the owner).
 3. **The build service takes the heavy CI jobs for owner commits; score-ranked stable proposals.**
 
 Leaving dev mode stays manual until phase 1 has been used enough to show what should trigger it.
