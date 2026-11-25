@@ -15,7 +15,8 @@ Rules:
            Use the documentation ranges instead (192.0.2.x, 198.51.100.x, 203.0.113.x) and
            example.invalid for names.
 
-Exceptions go in .topology-allowlist at the repo root, one per line:
+Findings print the offending line locally; in CI (CI set) only path, line and rule, because CI
+logs are public. Exceptions go in .topology-allowlist at the repo root, one per line:
     <path glob> <regex matched against the offending line>
 with a comment above each saying why. Usage: python3 scripts/check_topology.py [paths...]
 """
@@ -47,7 +48,7 @@ NAME_LENGTHS = range(4, 32)
 TOKEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 PATTERNS = {
     # <host>.local, but not ~/.local, .env.local (Vite) or threading.local().
-    "mdns": re.compile(r"\b(?!env\.local\b)[A-Za-z0-9][A-Za-z0-9-]*\.local\b(?!\s*\()"),
+    "mdns": re.compile(r"\b(?!env\.local\b)[A-Za-z0-9][A-Za-z0-9-]*\.local\b(?!\s*\()", re.IGNORECASE),
     "tailnet": re.compile(r"\b[A-Za-z0-9-]+\.ts\.net\b", re.IGNORECASE),
     "address": re.compile(
         r"(?<![\w.])(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))"
@@ -86,8 +87,10 @@ def private_names() -> set[str]:
                 host = urlsplit(value).hostname or ""
             elif "@" in value:
                 host = value.rsplit("@", 1)[1].split(":", 1)[0]
-            elif (m := bare.fullmatch(value)) and "." in m.group(1):
-                host = m.group(1)
+            elif (m := bare.fullmatch(value)) and (
+                "." in m.group(1) or re.search(r"HOST|SSH|SERVER|ADDR|ENDPOINT", key, re.IGNORECASE)
+            ):
+                host = m.group(1)  # a dotted name or address, or any host[:port] in a host-valued key
             else:
                 continue
             host = host.lower()
@@ -164,8 +167,13 @@ def scan(root: Path, paths: list[str]) -> list[str]:
                 continue
             if any(fnmatch.fnmatch(rel, g) and rx.search(line) for g, rx in allow):
                 continue
-            # A private name is never echoed: CI logs are public.
-            shown = "<line withheld: names a private host>" if "private" in rules else line.strip()[:160]
+            # CI logs are public: never echo a finding there, nor a private name anywhere.
+            if "private" in rules:
+                shown = "<line withheld: names a private host>"
+            elif os.environ.get("CI"):
+                shown = "<line withheld in CI: run the check locally to see it>"
+            else:
+                shown = line.strip()[:160]
             findings.append(f"{rel}:{n}: [{','.join(sorted(set(rules)))}] {shown}")
     return findings
 

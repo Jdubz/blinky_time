@@ -314,8 +314,12 @@ host_config() {
         "$HERE/hosts.env" "$HOSTS_ENV" || return 1
     log "seeded $HOSTS_ENV from $HERE/hosts.env (delete that copy from the card)"
   fi
+  # The file, not the environment: the staging timer's unit has no environment of its own, so
+  # staging.py on the box finds the URL only in the file.
   local v=""
   [[ -f "$HOSTS_ENV" ]] && v=$(sed -n 's/^[[:space:]]*BLINKY_TESTBOX_URL[[:space:]]*=[[:space:]]*//p' "$HOSTS_ENV" | tail -n 1)
+  v="${v%$'\r'}"                           # a file saved on Windows
+  v="${v%"${v##*[![:space:]]}"}"            # trailing whitespace
   if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
   if [[ ! $v =~ ^https?://[^[:space:]\<\>]+$ ]]; then
     echo "$HOSTS_ENV: BLINKY_TESTBOX_URL missing or a placeholder. Copy the repo's" >&2
