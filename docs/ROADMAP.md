@@ -42,6 +42,8 @@ Umbrella: [#386](https://github.com/Jdubz/blinky_time/issues/386). The loop:
 
 Heavy work runs on the Spark or devtop, never on the box.
 
+**Next: the dev loop** (owner, 2026-11-25; design in [`DEV_LOOP.md`](DEV_LOOP.md)). Build a commit on a devtop build service, flash it to the box's test chip, run only the checks a change needs, then send it through CI. The box gets `dev` and `queue` modes (no expiry; work waiting behind dev mode is visible). Drafts run no heavy CI. Smoke tests block on health, never on scores. Top-scoring builds are proposed for stable. Nothing from a fork reaches the owner's machines.
+
 **Done when** (owner, 2026-11-24): a full dev loop is iterable with adequate observability. Measured 2026-11-24: a firmware PR to promoted master takes about an hour (CI and review ~15-35 min, the box's hardware test ~30 min, promotion ~6-8 min).
 
 **Where it stands (2026-11-24).** The box has its permanent test chip, a XIAO nRF52840 Sense Plus driving an 8x8 grid, and since 2026-11-24 a second chip, a XIAO ESP32-S3 (unconfigured, old firmware; `TEST_BOX.md`). Every chip on the box is a test chip (#382). The staging suite passes end to end, with the flash race fixed (#385, blinky-firmware#47), the health settle (#384) and review verdicts in the report (#383). Built since:
