@@ -1,0 +1,74 @@
+name: edm drum labels (ADTOF)
+
+# Labels the 18 edm/ full mixes (the corpus submodule, blinky-corpus) with ADTOF, the generator
+# scripts/adtof_labels.py pins, and uploads them as an artifact in the kick_weighted schema. They
+# go into blinky-corpus by PR there: the automatic starting point for hand-curated ground truth
+# (blinky-corpus#4). Run by hand; nothing here commits. CPU torch on a GitHub runner, as the
+# adtof-labeler job in pr-validation.yml does; nothing runs on the test box.
+
+on:
+  workflow_dispatch:
+    inputs:
+      corpus_ref:
+        description: blinky-corpus commit to label (default: the submodule pin)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Corpus submodule
+      run: |
+        git submodule update --init --depth 1 corpus
+        if [ -n "${{ inputs.corpus_ref }}" ]; then
+          git -C corpus fetch --depth 1 origin "${{ inputs.corpus_ref }}"
+          git -C corpus checkout --detach FETCH_HEAD
+        fi
+        echo "corpus at $(git -C corpus rev-parse HEAD)"
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install CPU torch and the pinned port
+      working-directory: ml-training
+      run: |
+        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install 'numpy>=1.26,<3' scipy pyyaml librosa tqdm soundfile pretty_midi
+        pip install "$(python -c 'from scripts.adtof_labels import ADTOF_PYTORCH; print(ADTOF_PYTORCH)')"
+
+    - name: Label the edm/ mixes
+      working-directory: ml-training
+      run: |
+        python - <<'PY'
+        import json, subprocess
+        from pathlib import Path
+        from scripts.drum_label_suite import label_edm_mixes
+        out = label_edm_mixes(Path("../edm-drums-adtof"))
+        files = sorted(out.glob("*.kick_weighted.json"))
+        if len(files) != 18:
+            raise SystemExit(f"expected 18 label files, got {len(files)}")
+        corpus = subprocess.check_output(["git", "-C", "../corpus", "rev-parse", "HEAD"], text=True).strip()
+        (out / "PROVENANCE.json").write_text(json.dumps({
+            "corpus_commit": corpus,
+            "generator": json.loads(files[0].read_text())["generator"],
+            "workflow_run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "blinky_time_commit": "${{ github.sha }}",
+        }, indent=2))
+        for f in files:
+            d = json.loads(f.read_text())
+            print(f.name, "kicks", d.get("kick_count"), "snares", d.get("snare_count"), "skipped" if d.get("skipped") else "")
+        PY
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: edm-drums-adtof
+        path: edm-drums-adtof/
+        if-no-files-found: error
