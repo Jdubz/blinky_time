@@ -259,3 +259,9 @@ async def test_the_status_route(api_client: Any) -> None:
     assert [r["name"] for r in got["rules"]] == [r.name for r in strict_rules.RULES]
     assert got["readiness"]["frame_time"]["streak"] == 1
     assert got["readiness"]["fps"]["streak"] == 0
+
+
+def test_the_clock_carries_rounded_milliseconds_into_the_second() -> None:
+    t = float(int(T0)) + 59.9996
+    assert strict_rules.clock(t) == time.strftime("%H:%M:%S", time.localtime(int(T0) + 60)) + ".000"
+    assert strict_rules.clock(float(int(T0)) + 0.25).endswith(".250")

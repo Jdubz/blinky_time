@@ -105,7 +105,8 @@ def table() -> list[dict[str, Any]]:
 
 def clock(t: float) -> str:
     """hh:mm:ss.mmm, the box's local time."""
-    return time.strftime("%H:%M:%S", time.localtime(t)) + f".{round(t % 1 * 1000) % 1000:03d}"
+    ms = round(t * 1000)  # rounded once, so .9996 s carries into the next second
+    return time.strftime("%H:%M:%S", time.localtime(ms // 1000)) + f".{ms % 1000:03d}"
 
 
 # -- measuring ---------------------------------------------------------------------------------
