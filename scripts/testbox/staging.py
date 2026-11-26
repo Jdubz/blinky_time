@@ -898,6 +898,7 @@ def finish_hw(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
         rig = state.get("rig") if (state.get("rig") or {}).get("sha") == sha else None
         n = int((rig or {}).get("n") or 0) + 1
         state["rig"] = {"sha": sha, "n": n, "retry_at": time.time() + rig_backoff(n) - 60}
+        # "rig error N in a row" is matched by the LGTM alert BlinkyHardwareCheckRigError (N >= 6).
         log(f"{sha[:12]}: {desc} (rig error {n} in a row)")
         return
     state.pop("rig", None)
