@@ -52,7 +52,9 @@ def test_the_table_is_the_release_gates_limits_all_warning_today() -> None:
     assert got["overrun_growth"] == (0.0, "warn")
     assert got["beat_pace"] == (0.03, "warn")
     assert {r.mode for r in strict_rules.RULES} == {"warn"}
-    assert strict_rules.BY_NAME["frame_time"].issues == (23,)
+    assert got["stream_dropped"] == (0.0, "warn")
+    # blinky-firmware#23 (the stream stalls) is fixed: no rule waits on an open issue.
+    assert strict_rules.BY_NAME["frame_time"].issues == ()
 
 
 # -- frame time: every window counts --------------------------------------------------------
@@ -103,6 +105,23 @@ async def test_a_reconnected_protocol_still_records_alerts() -> None:
 
 
 # -- the other rules ---------------------------------------------------------------------------
+
+
+def test_stream_dropped_counts_skipped_lines_and_needs_the_field() -> None:
+    def dropped(t: float, n: int | None, ms: int | None = None) -> dict[str, Any]:
+        return {**win(t, ms=ms), "stream_dropped": n}
+
+    clean = [dropped(T0, 0), dropped(T0 + 4, 0), dropped(T0 + 8, 0)]
+    assert rows(clean)["stream_dropped"]["status"] == "pass"
+    skipped = [dropped(T0, 0), dropped(T0 + 4, 3), dropped(T0 + 8, 5)]
+    got = rows(skipped)["stream_dropped"]
+    assert got["status"] == "warn" and got["worst"] == 5.0
+    # Firmware before blinky-firmware#85 doesn't report it: no data, never a pass.
+    old = [win(T0), win(T0 + 4)]
+    assert rows(old)["stream_dropped"]["status"] == strict_rules.NO_DATA
+    # Across a reboot the counter restarts, like audioOverruns.
+    rebooted = [dropped(T0, 7), dropped(T0 + 4, 0, ms=1000), dropped(T0 + 8, 0, ms=5000)]
+    assert rows(rebooted)["stream_dropped"]["worst"] == 0.0
 
 
 def test_fps_overruns_and_music_rules() -> None:

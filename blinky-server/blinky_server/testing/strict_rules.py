@@ -70,11 +70,23 @@ RULES: tuple[Rule, ...] = (
         100.0,
         "ms",
         "max",
-        (23,),
+        (),
         WARN,
     ),
-    Rule("fps", "loop fps in every 5 s window, sustained", 60.0, "fps", "min", (23,), WARN),
-    Rule("overrun_growth", "audioOverruns growth across the run", 0.0, "", "max", (23,), WARN),
+    Rule("fps", "loop fps in every 5 s window, sustained", 60.0, "fps", "min", (), WARN),
+    Rule("overrun_growth", "audioOverruns growth across the run", 0.0, "", "max", (), WARN),
+    # Stream lines the firmware skipped whole because the host wasn't draining its serial
+    # buffer (blinky-firmware#85: ``streamDropped`` in ``json info``). Any skip means the
+    # server missed analysis data the run judged on.
+    Rule(
+        "stream_dropped",
+        "stream lines skipped by the firmware across the run (streamDropped growth)",
+        0.0,
+        "",
+        "max",
+        (),
+        WARN,
+    ),
     Rule("beat_pace", "beats counted vs the tempo over 60 s of music", 0.03, "", "max", (), WARN),
     Rule("music_level", "mean mic level with music playing", 0.05, "", "min", (), WARN),
     Rule("music_onsets", "pulse onsets with music playing", 1.0, "/s", "min", (), WARN),
@@ -132,6 +144,7 @@ def window(info: dict[str, Any], t: float, where: str) -> dict[str, Any]:
         "fps": info.get("fps"),
         "max_frame_ms": info.get("maxFrameMs"),
         "overruns": info.get("audioOverruns"),
+        "stream_dropped": info.get("streamDropped"),  # firmware before blinky-firmware#85: None
         "where": where,
     }
     span = window_span(info, t)
@@ -209,12 +222,11 @@ def _fps(windows: list[dict[str, Any]]) -> dict[str, Any]:
     return _row(rule, v, _within(rule, v), at=clock(w["t"]), where=w.get("where"), samples=len(got))
 
 
-def _overruns(windows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Growth summed over consecutive reads, skipping a pair across a reboot (the counter
-    restarts; the reboot itself is the blocking checks' to judge)."""
-    rule = BY_NAME["overrun_growth"]
+def _growth(rule: Rule, key: str, windows: list[dict[str, Any]]) -> dict[str, Any]:
+    """A counter's growth summed over consecutive reads, skipping a pair across a reboot (the
+    counter restarts; the reboot itself is the blocking checks' to judge)."""
     got = sorted(
-        (w for w in windows if w.get("overruns") is not None and w.get("ms") is not None),
+        (w for w in windows if w.get(key) is not None and w.get("ms") is not None),
         key=lambda x: float(x["t"]),
     )
     if len(got) < 2:
@@ -222,7 +234,7 @@ def _overruns(windows: list[dict[str, Any]]) -> dict[str, Any]:
     growth = 0
     for a, b in itertools.pairwise(got):
         if int(b["ms"]) >= int(a["ms"]):
-            growth += max(0, int(b["overruns"]) - int(a["overruns"]))
+            growth += max(0, int(b[key]) - int(a[key]))
     return _row(
         rule,
         float(growth),
@@ -231,6 +243,14 @@ def _overruns(windows: list[dict[str, Any]]) -> dict[str, Any]:
         where=f"{got[0].get('where')} to {got[-1].get('where')}",
         samples=len(got),
     )
+
+
+def _overruns(windows: list[dict[str, Any]]) -> dict[str, Any]:
+    return _growth(BY_NAME["overrun_growth"], "overruns", windows)
+
+
+def _stream_dropped(windows: list[dict[str, Any]]) -> dict[str, Any]:
+    return _growth(BY_NAME["stream_dropped"], "stream_dropped", windows)
 
 
 def _music(music: dict[str, Any] | None, pace: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -291,6 +311,7 @@ def evaluate(
         _frame_time(windows),
         _fps(windows),
         _overruns(windows),
+        _stream_dropped(windows),
         *_music(music, pace),
         _detection(latency),
     ]
