@@ -37,7 +37,7 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
    ```
    - It needs `gh` logged in on the host, the same as the test box's deployer. That's host-side only: the container never sees a token.
    - Optionally, `~/.config/blinky-build-host/deployer.env` can set `LOKI_PUSH_URL` (the Alloy stack's Loki push endpoint), so the deployer's log also goes to Loki.
-   - Record the commit you deployed by hand, so the next pass doesn't redeploy it: `python3 deployer.py --accept $(git rev-parse HEAD)`.
+   - Its first pass deploys master's head through the gate. If that's the commit you just deployed by hand, the rerun of `deploy.sh` changes nothing (same image, no recreate).
 
 ## Day to day
 

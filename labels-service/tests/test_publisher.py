@@ -128,6 +128,22 @@ def test_an_outside_change_on_main_wins(env):
     assert len(env.app.store.view("c")["onsets"]) == 18 and not env.app.store.edited_since_base("c")
 
 
+def test_edits_after_an_adopt_survive(env):
+    """After a track takes main's version, editing it again must not make it adopt again."""
+    env.edit("c", {"op": "del", "id": "h1"})
+    env.push_to_main({"edm/drums_human/c.drums.json": human(env.edm, "c", KICKS[:9])}, "the owner's fix")
+    env.app.tick()
+    env.edit("c", {"op": "del", "id": "h2"})
+    env.app.tick()
+    env.app.tick()
+    assert len(env.events("adopted_main")) == 1 and len(env.app.store.view("c")["onsets"]) == 17
+    assert list(env.app.export()["tracks"]) == ["edm/drums_human/c.drums.json"]
+    # and a later outside change still wins
+    env.push_to_main({"edm/drums_human/c.drums.json": human(env.edm, "c", KICKS[:8])}, "another fix")
+    env.app.tick()
+    assert len(env.events("adopted_main")) == 2 and len(env.app.store.view("c")["onsets"]) == 17
+
+
 def test_a_track_that_started_from_main_is_not_overwritten_by_it(env):
     env.push_to_main({A: human(env.edm, "a", KICKS)}, "a human file")
     env.app.tick()
@@ -154,6 +170,9 @@ def test_reverting_a_published_batch_sticks(env):
     assert adopted == {A: False, B: True}
     assert len(env.app.store.view("a")["onsets"]) == 19 and env.app.store.view("b")["seed"] == "drums_adtof"
     assert env.app.export()["tracks"] == {}, "the reverted labels must not be offered again"
+    env.edit("a", {"op": "del", "id": "h2"})  # editing after the revert works
+    env.app.tick()
+    assert len(env.events("adopted_main")) == 2 and len(env.app.store.view("a")["onsets"]) == 18
 
 
 def test_vandalism_is_held_back(env):

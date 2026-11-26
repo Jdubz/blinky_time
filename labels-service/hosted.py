@@ -328,6 +328,6 @@ class Publication:
                 if mb != ours_before_landing:  # changed on main from outside: it wins
                     adopt(p, self.co.git("cat-file", "blob", mb))
                     self.st["published"][p] = [mb, now_iso()]
-                    self.st["exported"].pop(p, None)
+                    self.st["exported"][p] = [mb]  # the state now starts from it: later edits build on it
                     self.log.emit("adopted_main", path=p)
             self._save()
