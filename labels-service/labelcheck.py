@@ -434,8 +434,16 @@ def check_pr(repo: Path, base: str, seeds_file: Path | None, override: bool,
         if not m or not STEM_RE.match(m.group(1)):
             problems.append(f"{path} is not a human label file (edm/{HUMAN_DIR}/<track>{HUMAN_SUFFIX})")
             continue
+        if status == "D" and override and not only_labels:
+            # Git history is the undo: reverting a batch that added a track's first human file is a
+            # deletion (the track goes back to its seed). Only with the owner's labels-override
+            # label on an ordinary PR, never on a labels/ batch branch.
+            print(f"{path}: deleted (labels-override: the track goes back to its seed)")
+            continue
         if status not in ("A", "M"):
-            problems.append(f"{path}: status {status}; a human label file may only be added or modified")
+            problems.append(f"{path}: status {status}; a human label file may only be added or modified"
+                            + ("" if status != "D" or only_labels else
+                               " (deleting one needs the owner's labels-override label)"))
             continue
         stem = m.group(1)
         if not (edm / f"{stem}.mp3").is_file():
