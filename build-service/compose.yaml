@@ -1,6 +1,6 @@
 # The build service, run from this directory (CI's end-to-end job; a local try).
-# The deployment is NOT this file: it lives in the platform's private infrastructure repo,
-# which builds these images at a pinned commit and binds the api to a private address.
+# The deployment is NOT this file: it is deploy/build-host/build/ (the build host's pull deployer
+# runs it from master), whose private host values live only in a gitignored build.env there.
 #
 # Everything about where it runs comes from the environment; nothing has a default:
 #   BLINKY_BUILD_BIND          host address to publish the api on

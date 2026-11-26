@@ -82,3 +82,5 @@ spark.env
 
 # The labels stack's host values (deploy/build-host/labels/labels.env.example)
 deploy/build-host/labels/labels.env
+# The build service's host values (deploy/build-host/build/build.env.example)
+deploy/build-host/build/build.env

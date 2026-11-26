@@ -71,8 +71,8 @@ jobs:
         check ml '^(ml-training/|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         check console '^(blinky-console/|\.github/workflows/pr-validation\.yml$)'
         check build_service '^(build-service/|blinky-server/hosttools/firmware_release\.py$|\.github/workflows/pr-validation\.yml$)'
-        # labels_service: the labels service, its build-host deployment and the pull deployer (which
-        # reuses scripts/testbox/deploy.py's gate).
+        # labels_service: the labels service, the build host's deployments (labels and the build
+        # service) and the pull deployer (which reuses scripts/testbox/deploy.py's gate).
         check labels_service '^(labels-service/|deploy/build-host/|scripts/testbox/deploy\.py$|\.github/workflows/pr-validation\.yml$)'
 
   documentation:
@@ -556,9 +556,10 @@ jobs:
       run: docker compose down -v --remove-orphans || true
 
   labels-service:
-    # labels-service/README.md: the shared-labels service, its page, its build-host deployment and
-    # the build host's pull deployer. The deployer requires this check green on the master commit
-    # before it deploys (deploy/build-host/deployer/services.json).
+    # labels-service/README.md: the shared-labels service, its page, the build host's deployments
+    # (labels and the build service's deploy/build-host/build/) and its pull deployer. The deployer
+    # requires this check green on the master commit before it deploys
+    # (deploy/build-host/deployer/services.json).
     name: Labels service
     runs-on: ubuntu-latest
     needs: changes
@@ -577,7 +578,14 @@ jobs:
     - name: The build host's pull deployer
       run: python -m pytest -v deploy/build-host/deployer/
     - name: Deploy scripts parse (shellcheck)
-      run: shellcheck deploy/build-host/labels/*.sh
+      run: shellcheck deploy/build-host/*/*.sh
+    - name: The build service's deployment keeps the sandbox (check_config.py)
+      # The same check deploy.sh runs before every deploy, on placeholder host values.
+      working-directory: deploy/build-host/build
+      run: |
+        BLINKY_BUILD_BIND=192.0.2.10 BLINKY_BUILD_PORT=18080 BLINKY_BUILD_CPUSET=0-1 \
+        BLINKY_BUILD_TOKEN=placeholder BLINKY_BUILD_SERVICE_VERSION="$(git rev-parse HEAD:build-service)" \
+          docker compose --env-file /dev/null config --format json | python3 check_config.py
 
   labels-service-e2e:
     # The image in the production sandbox (non-root, read-only rootfs, no capabilities) against a bare

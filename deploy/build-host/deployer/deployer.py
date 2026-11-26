@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The build host's pull deployer: deploy blinky_time services from master once CI and review pass.
 
-The build host runs services from this public repo (services.json: today the labels service). No
+The build host runs services from this public repo (services.json: the labels service, the firmware
+build service, and this deployer's own code, whose "deploy" is just the checkout). No
 GitHub runner ever does that (docs/DEV_LOOP.md, "Trust": public-repo jobs never run on the owner's
 machines), so the host pulls instead, like the test box's deployer (scripts/testbox/deploy.py,
 whose gate checks this reuses). blinky-build-host-deploy.timer runs one pass every 2 minutes:
@@ -13,7 +14,8 @@ whose gate checks this reuses). blinky-build-host-deploy.timer runs one pass eve
    review (the workflow's sha-stamped verdict says "No issues found"). Running: wait for the next
    pass. Red or findings: refuse the commit (recorded; `--accept SHA` deploys it anyway).
 3. Check the commit out in this clone (detached; the clone is the deployer's own, never a dev
-   tree) and run the service's deploy script. The script builds, restarts and health-checks; its
+   tree) and run the service's deploy script (none for the deployer itself: the checkout is the
+   deploy, and the next pass runs the new code). The script builds, restarts and health-checks; its
    persistent state (volumes, firewall) is untouched by a redeploy.
 4. The script fails: check out the commit the service ran before and run its script again (roll
    back), and refuse the new commit.
@@ -113,6 +115,9 @@ def changes(old: str | None, new: str, paths: list[str]) -> list[str]:
 
 def run_deploy(svc: dict[str, Any], sha: str, runner: Callable[[list[str]], int]) -> bool:
     git("checkout", "--quiet", "--detach", sha)
+    if not svc["deploy"]:  # checkout only: the deployer's own code (services.json)
+        log("deploy_ran", service=svc["name"], sha=sha[:12], code=0, seconds=0, checkout_only=True)
+        return True
     t0 = time.monotonic()
     code = runner([str(REPO / svc["deploy"][0]), *svc["deploy"][1:]])
     log("deploy_ran", service=svc["name"], sha=sha[:12], code=code, seconds=round(time.monotonic() - t0))

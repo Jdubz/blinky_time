@@ -148,3 +148,28 @@ def test_the_state_is_saved_after_each_decision(repo):
     dep.deploy_pass([SVC], state, fake_fetch(), runner=lambda c: 0, now=NOW,
                     save=lambda s: saved.append(s["labels"]["deployed"]))
     assert saved == [new]
+
+
+def test_the_deployer_entry_only_checks_out(repo):
+    """The deployer's own code moves with a gated change to it, though no service is due for it."""
+    svc = {"name": "deployer", "paths": ["deploy/build-host/deployer/"], "required": ["Labels service"], "deploy": []}
+    state = {"labels": {"deployed": g(repo, "rev-parse", "HEAD"), "refused": {}},
+             "deployer": {"deployed": g(repo, "rev-parse", "HEAD"), "refused": {}}}
+    new = commit(repo, "deploy/build-host/deployer/services.json")
+    ran = []
+    dep.deploy_pass([SVC, svc], state, fake_fetch(), runner=lambda c: ran.append(c) or 0, now=NOW)
+    assert ran == [] and state["deployer"]["deployed"] == new and state["labels"]["deployed"] != new
+    assert dep.git("rev-parse", "HEAD").strip() == new
+
+
+def test_services_json_names_real_scripts():
+    services = __import__("json").loads((HERE / "services.json").read_text())["services"]
+    repo = HERE.parents[2]
+    assert services[-1]["name"] == "deployer", "the deployer entry goes last (services.json _doc)"
+    assert len({s["name"] for s in services}) == len(services)
+    for s in services:
+        for p in s["paths"]:
+            assert (repo / p).exists(), f"{s['name']}: {p} does not exist"
+        if s["deploy"]:
+            script = repo / s["deploy"][0]
+            assert script.is_file() and script.stat().st_mode & 0o111, f"{s['name']}: {script} is not executable"

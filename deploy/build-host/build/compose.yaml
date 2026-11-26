@@ -1,0 +1,111 @@
+# The firmware build service on the build host (project `blinky-build`). Deployed by deploy.sh, which
+# the pull deployer (deploy/build-host/deployer) runs for a gated blinky_time master commit that changes
+# build-service/ or this directory. RUNBOOK.md.
+#
+# What it is: the dev loop's build service (docs/DEV_LOOP.md, build-service/README.md). The test box
+# sends a blinky-firmware commit (a SHA on one of its branches, or a git bundle of unpushed commits) and
+# gets back the same dev package a staging build makes, which it verifies and flashes onto its test chip.
+#
+# TRUST (docs/DEV_LOOP.md, "Trust"); check_config.py refuses a config that loosens any of it:
+#   * the api builds only commits on the firmware repo's own branches (its mirror fetches refs/heads/*,
+#     never a commit by SHA), or bundles from the box. It runs no repository code.
+#   * the worker runs the firmware's build scripts with NO NETWORK, as uid 10001, with no capabilities,
+#     no new privileges, no docker socket and no host mounts (only its two named volumes), on the
+#     host's non-prod cores and capped on memory and PIDs. It holds no secret.
+#   * the api is published on one private address of the host only (build.env), behind a bearer token
+#     rendered from 1Password by deploy.sh.
+#   * nothing here is a GitHub runner, and nothing ever registers as one.
+#
+# Every host-specific value comes from build.env (gitignored; build.env.example). The project, service,
+# network and volume names are load-bearing: they are the names the stack has always run under, so a
+# deploy recreates the same containers (blinky-build-api-1, blinky-build-worker-1) on the same volumes.
+name: blinky-build
+
+x-fenced: &fenced
+  restart: unless-stopped
+  user: "10001:10001"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  cpuset: "${BLINKY_BUILD_CPUSET:?set in build.env}"
+  cpu_shares: 256   # loses to everything else on contention (the default is 1024)
+  logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+  labels:
+    - "com.centurylinklabs.watchtower.enable=false"
+    - "spark.protected=true"   # the host's docker-gc prunes what isn't labelled
+
+services:
+  api:
+    <<: *fenced
+    image: blinky-build-api:latest
+    build:
+      context: ../../../build-service
+      dockerfile: docker/Dockerfile.api
+      labels:
+        org.opencontainers.image.revision: ${BLINKY_BUILD_SERVICE_VERSION:?deploy.sh sets it}
+    environment:
+      BLINKY_BUILD_HOST: 0.0.0.0   # inside the container; published below
+      BLINKY_BUILD_PORT: ${BLINKY_BUILD_PORT:?set in build.env}
+      # Read from 1Password by deploy.sh into its own environment; never written to a file.
+      BLINKY_BUILD_TOKEN: ${BLINKY_BUILD_TOKEN:?run deploy.sh (it reads the token from 1Password)}
+    ports:
+      # ONE private address of this host (deploy.sh checks it is one of this host's; never a wildcard).
+      - "${BLINKY_BUILD_BIND:?set in build.env}:${BLINKY_BUILD_PORT:?}:${BLINKY_BUILD_PORT:?}"
+    volumes:
+      - mirror:/data   # the firmware repo's bare mirror (refs/heads/* + refs/dev/*)
+      - jobs:/jobs     # shared with the worker
+    read_only: true
+    tmpfs: ["/tmp:size=256m"]
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/v1/healthz' % os.environ['BLINKY_BUILD_PORT'], timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    <<: *fenced
+    image: blinky-build-worker:latest
+    build:
+      context: ../../../build-service
+      dockerfile: docker/Dockerfile.worker
+      args:
+        # A blinky-firmware commit ON A BRANCH whose tools/firmware_toolchain.json (+ TFLITE_REF,
+        # patches/) the worker bakes in (b211 on staging). When the firmware's toolchain pin moves,
+        # builds fail with "toolchain mismatch: rebuild the worker image": move this (and the
+        # arduino-cli args in docker/Dockerfile.worker if arduino_cli moved) in a PR; the deployer
+        # rebuilds on merge. CI's pin is FIRMWARE_SHA in .github/workflows/pr-validation.yml.
+        FIRMWARE_TOOLCHAIN_REF: c28e0a29331e6163cd590bb4c506402e2aa84545
+      labels:
+        org.opencontainers.image.revision: ${BLINKY_BUILD_SERVICE_VERSION:?deploy.sh sets it}
+    network_mode: none   # ALWAYS. The source arrives through the job volume.
+    volumes:
+      - jobs:/jobs
+      - cache:/cache     # the warm arduino-cli build cache, one tree per toolchain
+    # Not read_only: the build tree sits next to the root-owned toolchain inside the image
+    # (build-service/README.md). Everything else in the image is root-owned.
+    tmpfs: ["/tmp:size=2g"]
+    mem_limit: 6g
+    memswap_limit: 6g    # == mem_limit, or the limit is escapable via swap
+    pids_limit: 2048
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.path.getmtime('/jobs/.worker/heartbeat') > 60)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# The api's network (the worker has none), labelled so docker-gc's network prune leaves it alone.
+networks:
+  default:
+    labels:
+      spark.protected: "true"
+
+# Named, so docker-gc's `volume prune` (anonymous only) never takes them. None is precious (RUNBOOK.md).
+volumes:
+  mirror:
+    name: blinky-build-mirror
+  jobs:
+    name: blinky-build-jobs
+  cache:
+    name: blinky-build-cache
