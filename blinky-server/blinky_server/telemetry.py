@@ -19,6 +19,7 @@ transports and outcomes. Never job ids or SHAs.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -72,6 +73,71 @@ STAGING_CHECK = Gauge(
     "Each check of the last staging suite, per device: 1 passed, 0 failed.",
     ["device", "section", "check"],
 )
+
+# The strict rules (testing/strict_rules.py): non-blocking warnings until the owner makes each
+# one blocking. Per rule and the kind of run that measured it last (hardware-checks, quality,
+# dev); a rule with no data in that run has no sample.
+STRICT_PASS = Gauge(
+    "blinky_strict_rule_pass",
+    "Each strict rule in the last run of its source: 1 passed, 0 warned or failed.",
+    ["rule", "source"],
+)
+STRICT_WORST = Gauge(
+    "blinky_strict_rule_worst",
+    "Each strict rule's worst measured value in the last run of its source (its unit).",
+    ["rule", "source"],
+)
+STRICT_EXCLUDED = Gauge(
+    "blinky_strict_rule_excluded_windows",
+    "Loop windows the last run of its source excluded from the rule (a settings save).",
+    ["rule", "source"],
+)
+STRICT_BLOCKING = Gauge(
+    "blinky_strict_rule_blocking", "1 if the rule blocks (mode block), 0 if it warns.", ["rule"]
+)
+STRICT_STREAK = Gauge(
+    "blinky_strict_rule_streak",
+    "Distinct firmware builds in a row on which the rule passed (readiness).",
+    ["rule"],
+)
+STRICT_READY = Gauge(
+    "blinky_strict_rule_ready",
+    "1 once the rule has passed on enough builds in a row to be made blocking.",
+    ["rule"],
+)
+
+
+def record_strict(source: str, strict: dict[str, Any]) -> None:
+    """A run's strict section (strict_rules.report): its rules' gauges for ``source``."""
+    for r in strict.get("rules") or []:
+        labels = (r["rule"], source)
+        STRICT_BLOCKING.labels(r["rule"]).set(1 if r["mode"] == "block" else 0)
+        STRICT_EXCLUDED.labels(*labels).set(len(r.get("excluded") or []))
+        if r["status"] == "no data":
+            for g in (STRICT_PASS, STRICT_WORST):
+                with contextlib.suppress(KeyError):
+                    g.remove(*labels)
+            continue
+        STRICT_PASS.labels(*labels).set(1 if r["status"] == "pass" else 0)
+        STRICT_WORST.labels(*labels).set(float(r["worst"]))
+
+
+def record_streaks(ready: dict[str, Any]) -> None:
+    """strict_rules.readiness: each rule's streak and readiness."""
+    for rule, r in ready.items():
+        STRICT_BLOCKING.labels(rule).set(1 if r["mode"] == "block" else 0)
+        STRICT_STREAK.labels(rule).set(r["streak"])
+        STRICT_READY.labels(rule).set(1 if r["ready"] else 0)
+
+
+def restore_strict() -> None:
+    """At startup: the streaks from the run record, so a restart doesn't zero them."""
+    from .testing import strict_rules
+
+    try:
+        record_streaks(strict_rules.readiness())
+    except (OSError, ValueError, KeyError) as e:
+        log.warning("strict rule metrics not restored: %s", e)
 
 
 def record_flash(job: Any) -> None:

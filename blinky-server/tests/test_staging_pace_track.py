@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from blinky_scoring.track_discovery import discover_tracks, load_track_manifest
 
-from blinky_server.testing import audio_player, staging, workflows
+from blinky_server.testing import audio_player, staging, strict_rules, workflows
 
 EDM = Path(__file__).resolve().parents[2] / "corpus" / "edm"
 
@@ -39,14 +39,15 @@ def test_the_seek_counts_against_the_room() -> None:
     assert staging.choose_pace_track(ts, LIMITS, secs) == 1
 
 
-def test_no_track_long_enough_fails_music_and_pace_and_the_report() -> None:
+def test_no_track_long_enough_leaves_music_and_pace_unmeasured_and_says_so() -> None:
     ts, secs = tracks(("a", 91.0, 0.0), ("b", 100.0, 0.0))
     assert staging.choose_pace_track(ts, LIMITS, secs) is None
     music = staging.no_pace_track(["dev-a"])
-    assert music["dev-a"]["music"]["pass"] is False
-    assert music["dev-a"]["beatpace"]["pass"] is False
-    report = {"deploy": {"pass": True}, "music": music, "validation": {"pass": True}}
-    assert staging._passed(report) is False
+    assert "no track long enough" in music["dev-a"]["music"]["detail"]
+    # Judged by the strict rules: nothing measured is "no data", never a pass.
+    rows = strict_rules.report({}, {}, music)["rules"]
+    got = {r["rule"]: r["status"] for r in rows}
+    assert got["music_level"] == got["music_onsets"] == got["beat_pace"] == strict_rules.NO_DATA
 
 
 def test_the_real_corpus_has_a_track_for_the_music_check() -> None:

@@ -17,10 +17,11 @@ the staging suite's own functions (testing/staging.py, testing/workflows.py):
 
 Validation and pace stream from the chips while they play; health and info read ``json info``
 with no stream, as the suite measures them. At the end: no reboot since the start and no
-firmware ``[ASSERT]``/``[FALLBACK]`` line.
+firmware ``[ASSERT]``/``[FALLBACK]`` line, and the strict rules (testing/strict_rules.py) over
+every loop window the run read (info, health, one after each validated track) and its pace.
 
-Pass = every health check and those asserts pass. Scores (validation, music, beat pace) are
-reported, never gating.
+Pass = every health check (no reboot) and those asserts pass, and no strict rule in block mode
+fails. Strict warnings and scores (validation, music, beat pace) are reported, never gating.
 
 Restarts: the settings restore is a step, not per-run setup, so a resumed run keeps what its
 ``commands`` checks set (a server restart doesn't reset the chips; a chip reset fails the run's
@@ -38,7 +39,7 @@ from typing import Any
 
 from ..device.device import alerts_since
 from ..work import durable, jobs
-from . import staging
+from . import staging, strict_rules
 from .audio_player import kill_orphan_audio, stop_audio
 from .test_runner import _configure_device, _start_streaming, _stop_streaming
 from .workflows import _connected, lit, plan, reserve, validation_run
@@ -48,6 +49,7 @@ KINDS = ("info", "health", "validate", "pace", "commands")
 # usually starts right after a deploy, whose settings restore + save stalls the loop ~100 ms
 # (blinky-firmware#49). Wait out one full window plus a margin, as deploy.sh's
 # LOOP_METRICS_SETTLE_S does, so the info check reports a window that began after the run did.
+# A window that may still hold the save is listed as excluded by the strict rules, not hidden.
 INFO_SETTLE_S = 6.0
 # json info fields reported by the info check: every timer (…Us, …MaxUs, the frame times) and
 # the memory and audio counters a firmware change can move.
@@ -95,7 +97,34 @@ async def info(device_ids: list[str]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for i in device_ids:
         got = await staging._info(i)
-        out[i] = {"version": got.get("version"), "timers": timers(got)}
+        out[i] = {
+            "version": got.get("version"),
+            "timers": timers(got),
+            "loop": strict_rules.window(got, time.time(), "info"),
+        }
+    return out
+
+
+@durable.step
+async def strict(
+    device_ids: list[str], windows: dict[str, list[dict[str, Any]]], music: dict[str, Any]
+) -> dict[str, Any]:
+    """The strict rules over the run's loop windows and its pace check, if any."""
+    return strict_rules.judge(device_ids, windows, "dev", music)
+
+
+def loop_windows(checks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Every loop window the run's checks read, per device, in order."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for c in checks:
+        if c["kind"] == "info":
+            for i, d in (c.get("devices") or {}).items():
+                out.setdefault(i, []).append(d["loop"])
+        elif c["kind"] == "health":
+            for i, d in (c.get("devices") or {}).items():
+                out.setdefault(i, []).extend(d["windows"])
+        for i, ws in (c.get("loop") or {}).items():
+            out.setdefault(i, []).extend(ws)
     return out
 
 
@@ -170,6 +199,7 @@ async def _check(
         return {"kind": kind, "detail": p["error"]}
     if kind == "validate":
         results = []
+        loop: dict[str, list[dict[str, Any]]] = {}
         async with _streaming(p["devices"]):
             for track in p["tracks"]:
                 jobs.report(None, f"validate: {track['name']}")
@@ -177,8 +207,17 @@ async def _check(
                     p["devices"], track, 1, limits["validation_ms"], 0.0, False
                 )
                 results.append(r if r is not None else {"track": track["name"], "failed": True})
+                after = await staging.loop_reads(p["devices"], f"after {track['name']}")
+                for dev, w in after.items():
+                    loop.setdefault(dev, []).append(w)
         played = sum(1 for r in results if not r.get("failed"))
-        return {"kind": kind, "tracks": len(p["tracks"]), "played": played, "results": results}
+        return {
+            "kind": kind,
+            "tracks": len(p["tracks"]),
+            "played": played,
+            "results": results,
+            "loop": loop,
+        }
     # pace: from the track's start (seek), not after a validation window.
     i = await staging.pace_track(p["tracks"], {**limits, "validation_ms": 0.0})
     if i is None:
@@ -191,9 +230,14 @@ async def _check(
 
 
 def verdict(report: dict[str, Any]) -> bool:
-    """Every health check and the final asserts pass; scores never gate."""
+    """Every health check and the final asserts pass, and no block-mode strict rule fails;
+    strict warnings and scores never gate."""
     health = [c for c in report["checks"] if c["kind"] == "health"]
-    return all(staging._passed(c) for c in health) and staging._passed(report.get("final"))
+    return (
+        all(staging._passed(c) for c in health)
+        and staging._passed(report.get("final"))
+        and not strict_rules.failures(report.get("strict"))
+    )
 
 
 @durable.workflow("test.dev-run")
@@ -210,6 +254,12 @@ async def dev_run(req: dict[str, Any]) -> dict[str, Any]:
                 jobs.report(100 * (n - 1) // len(checks), f"{check['kind']} ({n}/{len(checks)})")
                 report["checks"].append(await _check(device_ids, check, req["track_dir"], limits))
             report["final"] = await asserts(device_ids, start)
+            pace = next(
+                (c for c in report["checks"] if c["kind"] == "pace" and "devices" in c), None
+            )
+            report["strict"] = await strict(
+                device_ids, loop_windows(report["checks"]), (pace or {}).get("devices") or {}
+            )
     report["passed"] = verdict(report)
     jobs.report(100, "passed" if report["passed"] else "FAILED")
     return report

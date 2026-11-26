@@ -21,6 +21,12 @@ depends on the earlier ones (no lights, and the camera can't judge anything late
 
 Which checks a chip gets is its board's list (BOARDS, by device type).
 
+**The strict rules** (testing/strict_rules.py): every ``json info`` read the phases make is kept
+as a loop window (upload's stability wait, audio's before and after the noise, interfaces' first
+read after the response stream and its last), and the rules are judged over them at the end:
+non-blocking warnings in the report until the owner makes a rule block, when a failing one is a
+failing check here. A run that passes on a PR or staging head goes in the readiness record.
+
 **A rig error is not a firmware failure.** The camera or its region map unusable, the speaker
 or ffplay failing, the build service or a package download failing: the job ends with
 ``rig_error`` set and no verdict on the firmware, and the runner tries again later. A preflight
@@ -57,7 +63,7 @@ from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir, firmware_dir
 from ..work import durable, jobs
-from . import leds, stimulus
+from . import leds, stimulus, strict_rules
 from .audio_player import kill_orphan_audio, play_audio, stop_audio
 from .test_runner import _configure_device, _start_streaming, _stop_streaming, _sync_clock
 from .workflows import _connected, _fleet, lit, reserve
@@ -300,14 +306,17 @@ async def _upload_checks(
     an uptime that falls back)."""
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
+    loop: dict[str, list[dict[str, Any]]] = {}
     for d in await _chips(device_ids):
         board = BOARDS.get(board_of.get(d.id) or "")
+        ws = loop.setdefault(d.id, [])
         try:
             info = await _info(d)
         except Exception as e:
             for name in ("version", "configured", "stable", "info"):
                 out.append(check("upload", name, d.id, NO, "json info answers", f"no reply: {e}"))
             continue
+        ws.append(strict_rules.window(info, time.time(), "upload"))
         version = info.get("version")
         if expected:
             out.append(
@@ -343,15 +352,19 @@ async def _upload_checks(
         while last < STABLE_UPTIME_S * 1000:
             await asyncio.sleep(min(5.0, max(0.5, STABLE_UPTIME_S - last / 1000)))
             try:
-                ms = int((await _info(d)).get("millis", 0))
+                got = await _info(d)
             except Exception as e:
                 rebooted, last = True, 0
                 log.warning("hardware checks: %s stopped answering while stabilising: %s", d.id, e)
                 break
+            ws.append(strict_rules.window(got, time.time(), "upload"))
+            ms = int(got.get("millis", 0))
             if ms < last:
                 rebooted = True
             last = ms
         info2 = await _info(d) if not rebooted else info
+        if not rebooted:
+            ws.append(strict_rules.window(info2, time.time(), "upload"))
         reason = info2.get("resetReason")
         out.append(
             check(
@@ -381,7 +394,7 @@ async def _upload_checks(
                 f"heap {info2.get('heapUsed')}/{info2.get('heapTotal')}",
             )
         )
-    return {"checks": out, "seconds": round(time.monotonic() - t0, 1)}
+    return {"checks": out, "seconds": round(time.monotonic() - t0, 1), "loop": loop}
 
 
 INFO_KEYS = ("version", "millis", "audioOverruns", "audioSamplesLost", "fps", "maxFrameMs")
@@ -702,6 +715,7 @@ async def _audio(device_ids: list[str]) -> dict[str, Any]:
     for d in devices:
         await _configure_device(d, None)  # runtime defaults, as a test session (never saved)
     before = {d.id: await _info(d) for d in devices}
+    loop = {i: [strict_rules.window(v, time.time(), "audio")] for i, v in before.items()}
     silence = await capture(devices, None, SILENCE_S)
     wav = await asyncio.to_thread(stimulus.ensure, "noise", data_dir() / "stimuli")
     noise = await capture(devices, str(wav), stimulus.NOISE_S)
@@ -712,10 +726,17 @@ async def _audio(device_ids: list[str]) -> dict[str, Any]:
             "seconds": round(time.monotonic() - t0, 1),
         }
     after = {d.id: await _info(d) for d in devices}
+    for i, v in after.items():
+        loop[i].append(strict_rules.window(v, time.time(), "audio, streaming"))
     out: list[dict[str, Any]] = []
     for d in devices:
         out += judge_audio(d.id, silence, noise, before[d.id], after[d.id])
-    return {"checks": out, "rig_error": None, "seconds": round(time.monotonic() - t0, 1)}
+    return {
+        "checks": out,
+        "rig_error": None,
+        "seconds": round(time.monotonic() - t0, 1),
+        "loop": loop,
+    }
 
 
 # -- 4. response -------------------------------------------------------------------------------
@@ -1182,10 +1203,14 @@ async def _interfaces(
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
+    loop: dict[str, list[dict[str, Any]]] = {}
     adapter = host_bluetooth()
     alerts = alerts_since(device_ids, float(start["alert_t"]))
     for d in await _chips(device_ids):
         board = BOARDS.get(board_of.get(d.id) or "")
+        # The window the response phase's stream just loaded (blinky-firmware#23).
+        first = await _info(d)
+        loop[d.id] = [strict_rules.window(first, time.time(), "after the response stream")]
         out.append(await _serial(d))
         out.append(await _stream(d))
         out.append(await _settings(d))
@@ -1193,6 +1218,7 @@ async def _interfaces(
             out.append(await _ble_stack(d))
         out.append(await _ble_scan(d, adapter))
         info = await _info(d)
+        loop[d.id].append(strict_rules.window(info, time.time(), "interfaces"))
         ms = int(info.get("millis", 0))
         want = start["ms"].get(d.id, 0) + (time.time() - start["t"]) * 1000 - REBOOT_SLACK_MS
         lines = alerts.get(d.id, [])
@@ -1217,7 +1243,7 @@ async def _interfaces(
                 lines=lines[:20],
             )
         )
-    return {"checks": out, "seconds": round(time.monotonic() - t0, 1)}
+    return {"checks": out, "seconds": round(time.monotonic() - t0, 1), "loop": loop}
 
 
 async def _serial(d: Any) -> dict[str, Any]:
@@ -1479,6 +1505,40 @@ async def baseline(device_ids: list[str], alert_t: float) -> dict[str, Any]:
 
 
 @durable.step
+async def strict(device_ids: list[str], windows: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """The strict rules over every loop window the phases read (strict_rules.judge)."""
+    return strict_rules.judge(device_ids, windows, "hardware-checks")
+
+
+def strict_checks(strict_: dict[str, Any]) -> list[dict[str, Any]]:
+    """A block-mode rule that failed, as a failing check (a warn-mode one never is)."""
+    return [
+        check(
+            "strict",
+            r["rule"],
+            r.get("device") or "",
+            NO,
+            f"strict rule (block): {r['worst_is']} {r['threshold']:g} {r['unit']}".rstrip(),
+            f"worst {r['worst']:g} {r['unit']}".rstrip() + f" ({r.get('where')}, {r.get('at')})",
+        )
+        for r in strict_rules.failures(strict_)
+    ]
+
+
+@durable.step
+async def record_strict(report: dict[str, Any]) -> None:
+    """A run that passed on a PR or staging head (a runner's): a line in the strict rules'
+    readiness record."""
+    strict_rules.record_run(
+        report["strict"],
+        source="hardware-checks",
+        sha=str(report["sha"]),
+        version=report.get("version"),
+        pr=report.get("pr"),
+    )
+
+
+@durable.step
 async def write_report(key: str, report: dict[str, Any]) -> str:
     d = data_dir() / "hardware-checks"
     d.mkdir(parents=True, exist_ok=True)
@@ -1507,6 +1567,7 @@ def verdict(report: dict[str, Any]) -> bool:
         not report.get("rig_error")
         and [p["name"] for p in report["phases"]] == list(report["plan"])
         and all(p["result"] == YES for p in report["phases"])
+        and not strict_rules.failures(report.get("strict"))
     )
 
 
@@ -1531,7 +1592,9 @@ async def hardware_checks(req: dict[str, Any]) -> dict[str, Any]:
         "phases": [],
         "checks": [],
         "rig_error": None,
+        "runner": req.get("runner"),
     }
+    loops: dict[str, list[dict[str, Any]]] = {}
     async with reserve(device_ids):
         t_start = await run_start()
         board_of = await boards(device_ids)
@@ -1620,8 +1683,13 @@ async def hardware_checks(req: dict[str, Any]) -> dict[str, Any]:
                     report["response"] = {"meta": res.get("meta"), "capture": res.get("capture")}
                 else:
                     res = await interfaces(device_ids, board_of, start)
+                for i, ws in (res.get("loop") or {}).items():
+                    loops.setdefault(i, []).extend(ws)
                 if not _record_phase(report, name, res):
                     break
+        if not report["rig_error"] and loops:
+            report["strict"] = await strict(device_ids, loops)
+            report["checks"] += strict_checks(report["strict"])
     return await _done(report)
 
 
@@ -1662,6 +1730,8 @@ async def _deploy(source: dict[str, Any], device_ids: list[str]) -> dict[str, An
 
 async def _done(report: dict[str, Any]) -> dict[str, Any]:
     report["passed"] = verdict(report)
+    if report["passed"] and report.get("runner") and report.get("sha") and report.get("strict"):
+        await record_strict(report)
     key = f"{report.get('sha') or 'dev'}-{'pass' if report['passed'] else 'rig' if report['rig_error'] else 'fail'}"
     report["path"] = await write_report(key, report)
     jobs.report(

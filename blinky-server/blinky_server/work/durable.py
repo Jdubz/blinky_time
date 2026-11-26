@@ -51,8 +51,10 @@ from .. import telemetry
 log = logging.getLogger(__name__)
 
 # 2: test.staging plays each track once (pace_track). 3: test.pr-smoke gone (the hardware
-# checks replace it), test.staging records its corpus pin first.
-SCHEMA_VERSION = "blinky-work-3"
+# checks replace it), test.staging records its corpus pin first. 4: the strict rules
+# (testing/strict_rules.py): health returns its loop windows, test.staging reads one after each
+# track, and test.staging, test.hardware-checks and test.dev-run end with a strict step.
+SCHEMA_VERSION = "blinky-work-4"
 DB_FILE = "work.sqlite"
 # A step that hasn't finished after this long while draining is a hung step, not a long one
 # (a track is at most a few minutes, a flash a few more): give up waiting, loudly. It runs

@@ -1710,8 +1710,7 @@ class FleetManager:
             transport = _create_transport(disc)
             device.transport = transport
             device.protocol = DeviceProtocol(transport)
-            device.protocol.on_stream_line(device._route_stream_line)
-            device.protocol.on_raw_line(device._on_raw_line)
+            device.wire_protocol()
             await device.connect()
             return True
         except Exception as e:
@@ -2258,8 +2257,7 @@ class FleetManager:
         transport = _create_transport(disc)
         device.transport = transport
         device.protocol = DeviceProtocol(transport)
-        device.protocol.on_stream_line(device._route_stream_line)
-        device.protocol.on_raw_line(device._on_raw_line)
+        device.wire_protocol()
         device.port = disc.address
         device.state = DeviceState.DFU_RECOVERY
 
@@ -2503,8 +2501,7 @@ class FleetManager:
                 transport = _create_transport(disc)
                 device.transport = transport
                 device.protocol = DeviceProtocol(transport)
-                device.protocol.on_stream_line(device._route_stream_line)
-                device.protocol.on_raw_line(device._on_raw_line)
+                device.wire_protocol()
                 await device.connect()
                 # Success — reset failure counter
                 self._reconnect_failures.pop(device_id, None)
