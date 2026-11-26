@@ -59,6 +59,7 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
 
 - **Vandalism that got through:**
   - Revert the merged commit on blinky-corpus `main` with an ordinary PR. The service takes `main`'s version of the track (`adopted_main`).
+  - If the batch added the track's first human file, the revert deletes it. That passes the corpus's checks only with the owner's `labels-override` label on the PR. The track then goes back to its seed.
   - A batch that CI refused stays open: close it, or fix the track on the page and it re-publishes.
 - **A flood:** check the top client hashes on the dashboard, then add a Cloudflare WAF rule (Cloudflare's logs have the address).
 - **Turn it off:** `docker compose -p blinky-labels stop`.
