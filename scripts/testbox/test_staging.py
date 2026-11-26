@@ -1130,3 +1130,38 @@ def test_a_head_confirmed_by_tree_is_its_pr_heads_build_for_readiness() -> None:
     staging.run_once(g, srv)
     staging.run_once(g, srv)
     assert srv.quality[0]["build_of"] == PR_HEAD
+
+
+LATENCY = {
+    CHIP: {
+        "median_ms": 0.6,
+        "counted": 2,
+        "runs": [
+            {"track": "techno", "offset_ms": 2.0, "counted": True, "why": None},
+            {"track": "trance", "offset_ms": -0.8, "counted": True, "why": None},
+            {"track": "dubstep", "offset_ms": 57.2, "counted": False,
+             "why": "kickR50 0.25 < 0.5: too few kicks detected for the music's check"},
+        ],
+    }
+}  # fmt: skip
+LATENCY_ROW = {
+    "rule": "detection_latency", "mode": "warn", "status": "pass", "worst": 0.6,
+    "threshold": 10.0, "unit": "ms", "worst_is": "abs", "issues": [],
+    "where": "median of 2 of 3 tracks", "samples": 2, "device": CHIP,
+    "left_out": [{"track": "dubstep", "offset_ms": 57.2,
+                  "why": "kickR50 0.25 < 0.5: too few kicks detected for the music's check"}],
+}  # fmt: skip
+
+
+def test_the_quality_report_shows_the_detection_latency_per_device_and_track() -> None:
+    report = {**GOOD_REPORT, "detection_latency": LATENCY, "strict": {"rules": [LATENCY_ROW]}}
+    text = "\n".join(staging.quality_lines(report))
+    assert f"- {CHIP}: median **+0.6 ms** over 2 of 3 tracks" in text
+    assert f"| {CHIP} | techno | +2.0 ms | ✅ |" in text
+    assert f"| {CHIP} | dubstep | +57.2 ms | no: kickR50 0.25 < 0.5:" in text
+    # The strict rule: a band around the calibration, the signed median, the track left out.
+    assert "| detection_latency | ✅ pass | +0.6 ms | median of 2 of 3 tracks" in text
+    assert "| ±10 ms |" in text
+    assert "- detection_latency: dubstep (+57.2 ms) left out: kickR50 0.25 < 0.5" in text
+    # No latency (an old report, or a run that scored nothing): no section.
+    assert "Detection latency" not in "\n".join(staging.quality_lines(GOOD_REPORT))

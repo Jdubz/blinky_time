@@ -1510,6 +1510,9 @@ async def strict(device_ids: list[str], windows: dict[str, list[dict[str, Any]]]
     return strict_rules.judge(device_ids, windows, "hardware-checks")
 
 
+LIMIT_OP = {"max": "max", "min": "min", "abs": "within ±"}  # a strict rule's kind of limit
+
+
 def strict_checks(strict_: dict[str, Any]) -> list[dict[str, Any]]:
     """A block-mode rule that failed, as a failing check (a warn-mode one never is)."""
     return [
@@ -1518,7 +1521,8 @@ def strict_checks(strict_: dict[str, Any]) -> list[dict[str, Any]]:
             r["rule"],
             r.get("device") or "",
             NO,
-            f"strict rule (block): {r['worst_is']} {r['threshold']:g} {r['unit']}".rstrip(),
+            f"strict rule (block): {LIMIT_OP.get(r['worst_is'], r['worst_is'])} "
+            f"{r['threshold']:g} {r['unit']}".rstrip(),
             f"worst {r['worst']:g} {r['unit']}".rstrip() + f" ({r.get('where')}, {r.get('at')})",
         )
         for r in strict_rules.failures(strict_)
