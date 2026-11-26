@@ -100,7 +100,7 @@ The steps in the second part are ffplay: its SDL callback hands out silence, a c
 | `AUDIO_PATH_MS` = the scorer's lag minus the DAC offset, on the 14 runs it resolves | 42.0-49.7 ms, median 45.2, sd 2.5 (the 14 ambiguous runs: 41-50) |
 | the music's check against the measured lag (`lagCheckMs - lagMs`), all 28 runs at 45 ms | -4.2 to +4.9 ms, sd 2.7 |
 
-To recalibrate after a change of speaker, placement or detection latency: run validation with `persist_raw`. On the runs the scorer resolves, take the median of `drums.lagCheckMs` minus `audio_start.dac_offset_ms` (or of `lagMs` minus it, with `BLINKY_AUDIO_PATH_MS` empty so the lag is searched).
+To recalibrate after a change of speaker, placement or detection latency: run validation with `persist_raw`, and take the median of `drums.lagCheckMs` minus `audio_start.dac_offset_ms` (the music's lag near the measured one). For a change larger than the check's ±100 ms, start the server with `BLINKY_AUDIO_PATH_MS=none`, which turns the measured lag off so every lag is searched. Then take the median of `lagMs` minus `dac_offset_ms` on the runs the scorer resolves (`lagAmbiguous` false).
 
 **Recorded:** every raw capture keeps `audio_start_epoch_ms` (the spawn: every `t` is measured from it) and adds `audio_dac_start_epoch_ms` and `audio_start` (offset, spread, the lag used, or why there was none). Every validation result carries `audio_start`, and every score carries `audioStart`.
 

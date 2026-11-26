@@ -54,13 +54,19 @@ MAX_SPREAD_MS = 10.0
 # fell in the same range (41-50). Recalibrate when the speaker, its placement or the chip's
 # detection latency changes: a drift shows as ``lagCheckMs - lagMs`` in the drum scores (the
 # scorer's check over the music, +-100 ms around the measured lag). None scores every run
-# with the lag searched for. Override: BLINKY_AUDIO_PATH_MS.
+# with the lag searched for. Override: BLINKY_AUDIO_PATH_MS (a number, or none).
 AUDIO_PATH_MS: float | None = 45.0
 
 
 def audio_path_ms() -> float | None:
-    raw = os.environ.get("BLINKY_AUDIO_PATH_MS")
-    return float(raw) if raw else AUDIO_PATH_MS
+    """The fixed path in use: BLINKY_AUDIO_PATH_MS when set (``none`` turns the measured lag
+    off, so every run's lag is searched for: how to recalibrate), else AUDIO_PATH_MS."""
+    raw = (os.environ.get("BLINKY_AUDIO_PATH_MS") or "").strip()
+    if not raw:
+        return AUDIO_PATH_MS
+    if raw.lower() == "none":
+        return None
+    return float(raw)
 
 
 @dataclass

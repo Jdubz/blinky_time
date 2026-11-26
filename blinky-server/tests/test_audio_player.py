@@ -131,6 +131,10 @@ def test_the_measured_lag_needs_the_calibrated_path(monkeypatch: pytest.MonkeyPa
     assert pb.audio_start()["lag_ms"] == 260.0
     monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "40")
     assert pb.measured_lag_ms() == 240.0
+    monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "none")  # off: the lag is searched (recalibration)
+    assert pb.measured_lag_ms() is None
+    monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "")  # empty: the constant
+    assert pb.measured_lag_ms() == 260.0
     pb.dac_start_ms = None
     assert pb.measured_lag_ms() is None
 
