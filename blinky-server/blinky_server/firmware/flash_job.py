@@ -407,6 +407,13 @@ class FlashJob:
         self.error = msg
         self._notify_change()
 
+    def clear_error(self) -> None:
+        """Drop the error before the orchestrator's one in-job write retry. The
+        caller records what failed (an anomaly) first, so nothing is lost."""
+        if self.error is not None:
+            self.error = None
+            self._notify_change()
+
     # ------------------------------------------------------------------ #
     # Inspection
     # ------------------------------------------------------------------ #
