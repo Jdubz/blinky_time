@@ -1,11 +1,23 @@
 {
-  "_doc": "Services the build host's pull deployer (deployer.py) deploys from blinky_time master. A gated master commit that changes any of a service's paths (since the commit it runs) is deployed by running its deploy script from a checkout of that commit; a failed deploy rolls back to the commit before. required: check runs that must be green on the master commit (on top of every check being green and the PR's Claude review being clean).",
+  "_doc": "Services the build host's pull deployer (deployer.py) deploys from blinky_time master. A gated master commit that changes any of a service's paths (since the commit it runs) is deployed by running its deploy script from a checkout of that commit; a failed deploy rolls back to the commit before. An empty deploy only checks the commit out: the deployer entry moves this clone (the code the timer runs) to a gated change of the deployer itself, which no other service may be due for. Keep it last, so a rollback earlier in the pass cannot leave the clone behind it. required: check runs that must be green on the master commit (on top of every check being green and the PR's Claude review being clean).",
   "services": [
     {
       "name": "labels",
       "paths": ["labels-service/", "deploy/build-host/labels/"],
       "required": ["Labels service"],
       "deploy": ["deploy/build-host/labels/deploy.sh"]
+    },
+    {
+      "name": "build",
+      "paths": ["build-service/", "deploy/build-host/build/"],
+      "required": ["Build service", "Labels service"],
+      "deploy": ["deploy/build-host/build/deploy.sh"]
+    },
+    {
+      "name": "deployer",
+      "paths": ["deploy/build-host/deployer/", "scripts/testbox/deploy.py"],
+      "required": ["Labels service"],
+      "deploy": []
     }
   ]
 }

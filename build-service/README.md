@@ -2,7 +2,7 @@
 
 Builds commits of [blinky-firmware](https://github.com/Jdubz/blinky-firmware) into the same dev package a staging build makes: `blinky-things-b<N>.hex`, `blinky-things-b<N>.uf2` and `manifest.json` (sha256s, `channel: dev`, `git_sha`, version `b<N>-dev-<sha8>`). The box verifies it the way it verifies a staging artifact: `blinky-server/hosttools/firmware_release.py`, `verify_dev_package` (or `firmware_release.py verify-dev-package --sha SHA --dir DIR`). The design and its trust rules are in [docs/DEV_LOOP.md](../docs/DEV_LOOP.md).
 
-This directory is the public code and image definitions. Where it runs (host, address, port, token) is private: a stack in the platform's infrastructure repo. Nothing here has a default address.
+This directory is the public code and image definitions. Its deployment is `deploy/build-host/build/` (RUNBOOK there), run by the build host's pull deployer for gated master commits. Where it runs (address, port, CPU set, token reference) is private: a gitignored `build.env` on the build host, and the token in 1Password. Nothing here has a default address.
 
 ## How it works
 

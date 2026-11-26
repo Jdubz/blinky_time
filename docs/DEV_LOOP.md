@@ -37,13 +37,13 @@ This is the rule everything else follows.
   - with no network during the build (the source is fetched first) and no secrets;
   - with no docker socket and no host mounts beyond its own work and cache volumes;
   - capped on CPU, memory and PIDs, and kept off prod's reserved cores (as the runners are: cpuset 0–15).
-- **The service** listens on the tailnet only and requires a bearer token. The token is stored in 1Password, rendered by the stack's deploy, and kept on the box in `~/.config/blinky/`.
+- **The service** listens on the tailnet only and requires a bearer token. The token is stored in 1Password, read by `deploy/build-host/build/deploy.sh` at deploy time (never written to a file on the build host), and kept on the box in `~/.config/blinky/`.
 
 ## Where it runs
 
-- **Public, in this repo:** the build service's code and container image definition, the box's client, and the server's dev endpoints.
+- **Public, in this repo:** the build service's code and container image definition, its deployment (`deploy/build-host/build/`: compose file, deploy and verify scripts, RUNBOOK), the box's client, and the server's dev endpoints. The build host's pull deployer (`deploy/build-host/deployer/`, the one that deploys the labels service) runs `deploy.sh` for every gated master commit that changes `build-service/` or the deployment: CI green, including `Build service`, and a clean review. No GitHub runner is involved, and homelab-stacks holds nothing of it (it keeps host-level shared infrastructure only).
 - **Private:**
-  - the deployment (host, port, CPU set, token reference): a stack in the platform's private infrastructure repo;
+  - the deployment's host values (address, port, CPU set, the token's 1Password reference): `build.env` next to `deploy.sh` in the deployer's clone on the build host, gitignored (template `build.env.example`);
   - the box's client config: `~/.config/blinky/build.env` (`BLINKY_BUILD_URL`, `BLINKY_BUILD_TOKEN`), like `spark.env`.
 
 Code reads the location from config and never has a default address.
