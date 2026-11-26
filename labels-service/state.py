@@ -75,7 +75,10 @@ class TrackStore:
         """A state from {"onsets": [{time, type}], "reviewed_ranges", "started_from", "seed",
         "audio_sha256", "duration", "updated"}. `base_rev` marks it as matching its source: only
         edits after it are worth publishing."""
-        hits = {f"h{i + 1}": [round(float(o["time"]), 4), o["type"]]
+        # Ids are unique per generation of the state (h1.. at first, r<rev>h1.. after a reset), so an
+        # operation a page built from an older generation finds no hit and changes nothing.
+        prefix = "h" if rev == 0 else f"r{rev}h"
+        hits = {f"{prefix}{i + 1}": [round(float(o["time"]), 4), o["type"]]
                 for i, o in enumerate(sorted(init["onsets"], key=lambda o: (o["time"], o["type"])))
                 if o["type"] in labelcheck.LABEL_TYPES}
         return {"stem": stem, "rev": rev, "base_rev": rev, "hits": hits,
@@ -238,8 +241,12 @@ class TrackStore:
     def import_doc(self, stem: str, init: dict[str, Any]) -> None:
         """Make `init` the track's state as an edit (it gets published), e.g. a migrated draft."""
         with self._lock:
-            st = self._fresh(stem, init)
-            st["rev"], st["edited_at"], st["updated"] = 1, self.clock(), init.get("updated") or hosted.now_iso()
+            rev = self._load(stem)["rev"] + 1 if self.has(stem) else 1
+            st = self._fresh(stem, init, rev=rev)
+            st["base_rev"] = rev - 1  # an edit: it gets published
+            st["edited_at"], st["updated"] = self.clock(), init.get("updated") or hosted.now_iso()
+            if rev > 1:
+                st["ops"] = [[rev, "server", {"op": "reset"}]]
             self._cache[stem] = st
             self._save(st)
 

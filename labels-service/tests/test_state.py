@@ -133,5 +133,8 @@ def test_reset_and_import(store):
     assert rev == 2 and store.since("a", 1)["reset"] and store.base_blob("a") == "abc"
     v = store.view("a")
     assert [o["time"] for o in v["onsets"]] == [4.0] and not v["edited"]  # main's version: nothing to publish
+    # a page still on the old generation: its operations find no hit and change nothing
+    assert apply(store, {"op": "del", "id": "h1"}, {"op": "move", "id": "h2", "time": 1.6}) == rev
+    assert [o["time"] for o in store.view("a")["onsets"]] == [4.0] and v["onsets"][0]["id"] == "r2h1"
     store.import_doc("b", init(onsets=((5.0, "snare"),)))
     assert store.edited_since_base("b") and store.view("b")["rev"] == 1  # an import is an edit: it gets published

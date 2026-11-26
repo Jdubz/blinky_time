@@ -20,6 +20,10 @@ A = "edm/drums_human/a.drums.json"
 B = "edm/drums_human/b.drums.json"
 
 
+def first_id(env, stem, i=0):
+    return env.app.store.view(stem)["onsets"][i]["id"]
+
+
 class Env:
     def __init__(self, tmp_path, edm, **kw):
         self.log = io.StringIO()
@@ -150,7 +154,7 @@ def test_edits_after_an_adopt_survive(env):
     env.edit("c", {"op": "del", "id": "h1"})
     env.push_to_main({"edm/drums_human/c.drums.json": human(env.edm, "c", KICKS[:9])}, "the owner's fix")
     env.app.tick()
-    env.edit("c", {"op": "del", "id": "h2"})
+    env.edit("c", {"op": "del", "id": first_id(env, "c")})  # the state's current ids (a new generation)
     env.app.tick()
     env.app.tick()
     assert len(env.events("adopted_main")) == 1 and len(env.app.store.view("c")["onsets"]) == 17
@@ -187,7 +191,7 @@ def test_reverting_a_published_batch_sticks(env):
     assert adopted == {A: False, B: True}
     assert len(env.app.store.view("a")["onsets"]) == 19 and env.app.store.view("b")["seed"] == "drums_adtof"
     assert env.app.export()["tracks"] == {}, "the reverted labels must not be offered again"
-    env.edit("a", {"op": "del", "id": "h2"})  # editing after the revert works
+    env.edit("a", {"op": "del", "id": first_id(env, "a")})  # editing after the revert works
     env.app.tick()
     assert len(env.events("adopted_main")) == 2 and len(env.app.store.view("a")["onsets"]) == 18
 
@@ -215,7 +219,7 @@ def test_an_opened_track_follows_main_until_someone_edits_it(env):
     env.app.tick()
     v = env.app.store.view("a")
     assert v["seed"] == "human" and len(v["onsets"]) == 18 and env.events("refreshed_from_main")
-    env.edit("a", {"op": "del", "id": "h1"})
+    env.edit("a", {"op": "del", "id": first_id(env, "a")})
     env.app.tick()
     assert not env.events("adopted_main") and len(env.app.store.view("a")["onsets"]) == 17
 
