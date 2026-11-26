@@ -79,3 +79,6 @@ spark.env
 # Vite's private overrides (blinky-console/.env.example is the template)
 .env.local
 .env.*.local
+
+# The labels stack's host values (deploy/build-host/labels/labels.env.example)
+deploy/build-host/labels/labels.env

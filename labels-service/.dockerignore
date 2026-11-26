@@ -1,0 +1,4 @@
+tests/
+__pycache__/
+*.md
+check_js.py

@@ -1,3 +1,7 @@
 # Justified exceptions to scripts/check_topology.py (the repo is public: no host names or
 # private addresses). One per line: <path glob> <regex matched against the offending line>,
 # with a comment above saying why it isn't topology.
+
+# The labels service's egress firewall lists the generic reserved ranges it blocks (RFC 1918, RFC 6598,
+# link-local, ...): range definitions, not any host's address.
+deploy/build-host/labels/firewall.sh ^  (10\.0\.0\.0/8|100\.64\.0\.0/10|172\.16\.0\.0/12|192\.168\.0\.0/16)$

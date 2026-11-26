@@ -1,0 +1,20 @@
+[Unit]
+# The labels service (blinky_time deploy/build-host/labels) must have NO open access to this network.
+# This puts its egress rules in place at every boot, BEFORE dockerd starts and restores the
+# container: there's no window in which it runs unfenced. RUNBOOK.md installs it.
+Description=blinky-labels: block the labels service's egress to private and tailnet ranges
+Documentation=https://github.com/Jdubz/blinky_time/blob/master/deploy/build-host/labels/RUNBOOK.md
+DefaultDependencies=no
+After=local-fs.target
+Before=docker.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Rewritten at install to this checkout's path (RUNBOOK.md).
+ExecStart=/path/to/blinky_time/deploy/build-host/labels/firewall.sh apply
+User=root
+
+[Install]
+WantedBy=multi-user.target docker.service

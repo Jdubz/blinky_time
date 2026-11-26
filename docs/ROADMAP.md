@@ -112,19 +112,15 @@ Today one app, blinky-console ("Blinky Fleet"), is both the fleet UI (blinky-ser
   - Update its firmware with the signed OTA flow that is live today (blinky-firmware `docs/WEB_FLASHER.md`).
   - Link to further resources and pages, such as the label reviewer and docs.
 - **Shared code:** the device protocol, schemas and firmware services stay one shared package, so the two UIs can't drift apart.
-- **The label reviewer is a page of the public site, backed by a long-lived production service on the build host** (owner, 2026-11-25; prioritised now). The code is blinky-corpus's `tools/drum-reviewer` (hosted mode); before this it was a stdlib server started by hand on the test box from a corpus clone.
-  - **The page:** `https://blinky-time.joshwentworth.com/labels/`. The site's deploy (`blinky-console-deploy.yml`) ships the reviewer page from the pinned `corpus` submodule and sets the API's URL in it. It's ready to fold into the single-device site later.
-  - **The API:** `https://blinky-labels-api.joshwentworth.com`, deployed like the build service, as a stack in the platform's private infrastructure repo. It serves the corpus audio and labels and takes saves. CORS allows only the site's origin.
-  - **Access:** no login (owner: nothing on the page is sensitive; watch the traffic and react to anything suspicious). The protections:
-    - an optional self-entered contributor name, recorded with each save;
-    - short-lived per-track edit locks ("being edited by …");
-    - a version check, so nobody silently overwrites anyone;
-    - server-side drafts per track and contributor;
-    - rate limits per client address;
-    - logs and alerts in the LGTM stack.
-  - **Saves go straight to the corpus:** a 100%-reviewed save becomes a blinky-corpus PR with auto-merge on, carrying the contributor's name and a hashed client address. Corpus CI's label checks gate the merge: one file per PR, the schema, 100% reviewed, and plausible against the file it replaces. There's no owner approval step.
-  - **The network:** the API is reached only through an existing Cloudflare tunnel, with no published port. The service runs sandboxed, and its egress to private and tailnet ranges is blocked (only HTTPS to GitHub). "Just make sure there's no open access to my network."
-  - **Topology:** the repos name only the public product URLs; hosts, tunnels and networks live in the private stack.
+- **The label reviewer is a page of the public site, backed by a long-lived service on the build host** (owner, 2026-11-25; prioritised now). Both live in this repo: `labels-service/` (the service and the page) and `deploy/build-host/labels/` (its deployment).
+  - **The page:** `https://blinky-time.joshwentworth.com/labels/`, built by the site's deploy from `labels-service/index.html`. Page and service come from the same commit, and the page asks for a reload when the server reports another version. It's ready to fold into the single-device site later.
+  - **The API:** `https://blinky-labels-api.joshwentworth.com`. CORS allows only the site's origin.
+  - **Simple by design** (owner: "there shouldn't even be the concept of a user"). There are no users, names, drafts, locks or Save button. Each track has one shared set of labels. Every edit saves by itself as an operation, and everyone's page pulls everyone else's edits within seconds.
+  - **Autopublish:** the service publishes changed tracks to blinky-corpus by itself, in batches, as a `labels/auto-*` branch pushed with a deploy key. The corpus workflow opens the PR with auto-merge on. Corpus CI's label checks are anti-vandalism only (the schema, no mass deletion, no empty class). Partial progress is published, and the scorer uses a track once it's complete. Git history is the undo.
+  - **Access:** no login (owner: nothing on the page is sensitive; watch the traffic and react). Rate limits per client address, logs and alerts in the LGTM stack.
+  - **The network:** reached only through an existing Cloudflare tunnel, with no published port. Sandboxed, with egress to private and tailnet ranges blocked (only HTTPS to GitHub).
+  - **Deploys:** the build host's pull deployer (`deploy/build-host/deployer/`, like the test box's) deploys a master commit once CI and the review pass. No GitHub runner is involved, and the build service can move onto it later.
+  - **Topology:** the repos name only the public product URLs; every host value lives in a gitignored env file on the build host.
 
 ## Parked
 

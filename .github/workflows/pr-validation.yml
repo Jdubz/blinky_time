@@ -31,6 +31,7 @@ jobs:
       ml: ${{ steps.diff.outputs.ml }}
       console: ${{ steps.diff.outputs.console }}
       build_service: ${{ steps.diff.outputs.build_service }}
+      labels_service: ${{ steps.diff.outputs.labels_service }}
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
@@ -49,7 +50,7 @@ jobs:
           range="$BEFORE..HEAD"
         else
           echo "no base to diff against: run everything"
-          printf 'server=true\nml=true\nconsole=true\nbuild_service=true\n' >> "$GITHUB_OUTPUT"
+          printf 'server=true\nml=true\nconsole=true\nbuild_service=true\nlabels_service=true\n' >> "$GITHUB_OUTPUT"
           exit 0
         fi
         # --no-renames: a move lists both paths, so moving a file out of a watched tree still
@@ -70,6 +71,9 @@ jobs:
         check ml '^(ml-training/|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         check console '^(blinky-console/|\.github/workflows/pr-validation\.yml$)'
         check build_service '^(build-service/|blinky-server/hosttools/firmware_release\.py$|\.github/workflows/pr-validation\.yml$)'
+        # labels_service: the labels service, its build-host deployment and the pull deployer (which
+        # reuses scripts/testbox/deploy.py's gate).
+        check labels_service '^(labels-service/|deploy/build-host/|scripts/testbox/deploy\.py$|\.github/workflows/pr-validation\.yml$)'
 
   documentation:
     name: Documentation Check
@@ -550,3 +554,88 @@ jobs:
       if: always()
       working-directory: build-service
       run: docker compose down -v --remove-orphans || true
+
+  labels-service:
+    # labels-service/README.md: the shared-labels service, its page, its build-host deployment and
+    # the build host's pull deployer. The deployer requires this check green on the master commit
+    # before it deploys (deploy/build-host/deployer/services.json).
+    name: Labels service
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.labels_service == 'true') }}
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install pytest
+      run: pip install pytest
+    - name: Service tests (state, HTTP, publisher)
+      run: python -m pytest -v labels-service/tests/
+    - name: The page (JS syntax, no external fetches)
+      run: python labels-service/check_js.py
+    - name: The build host's pull deployer
+      run: python -m pytest -v deploy/build-host/deployer/
+    - name: Deploy scripts parse (shellcheck)
+      run: shellcheck deploy/build-host/labels/*.sh
+
+  labels-service-e2e:
+    # The image in the production sandbox (non-root, read-only rootfs, no capabilities) against a bare
+    # stand-in for GitHub, then two Chromium pages on one track from another origin. GitHub-hosted only.
+    name: Labels service (container, end to end)
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.labels_service == 'true') }}
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: true  # the real corpus, as the stand-in for blinky-corpus
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Build the image
+      run: docker build --build-arg LABELS_SERVICE_VERSION="$(git rev-parse HEAD:labels-service)" -t labels-service:ci labels-service
+    - name: The stand-in for GitHub (a bare clone of the corpus) and the fake PR lookup
+      run: |
+        # The pinned corpus commit as `main` of a bare repo the service clones from and pushes to.
+        git -C corpus fetch -q --unshallow 2>/dev/null || true
+        for r in remote remote2; do
+          git clone -q --bare --no-local corpus "$RUNNER_TEMP/$r.git"
+          git -C "$RUNNER_TEMP/$r.git" update-ref refs/heads/main "$(git -C corpus rev-parse HEAD)"
+          git -C "$RUNNER_TEMP/$r.git" config receive.shallowUpdate true
+        done
+        chmod -R a+rwX "$RUNNER_TEMP/remote.git"
+        printf '[safe]\n\tdirectory = *\n' > "$RUNNER_TEMP/gitconfig"
+        python labels-service/tests/fake_github.py --port 9999 --repo Jdubz/blinky-corpus > "$RUNNER_TEMP/fake.log" 2>&1 &
+    - name: Run the container
+      run: |
+        docker run -d --name labels --network host --read-only --tmpfs /tmp:size=64m \
+          --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m \
+          -v "$RUNNER_TEMP/remote.git:/remote" -v "$RUNNER_TEMP/gitconfig:/etc/gitconfig:ro" \
+          labels-service:ci --host 127.0.0.1 --port 8766 --state /state \
+          --checkout /corpus/blinky-corpus --git-url file:///remote --push-url file:///remote \
+          --refresh 2 --quiet 3 --poll-every 1 \
+          --github-repo Jdubz/blinky-corpus --github-api http://127.0.0.1:9999 \
+          --allow-host api.example.invalid --cors-origin https://site.example.invalid
+        test "$(docker inspect -f '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}}' labels)" = "10001:10001 true"
+    - name: End to end (API)
+      run: python labels-service/tests/e2e_hosted.py --api http://127.0.0.1:8766 --fake http://127.0.0.1:9999 --origin https://site.example.invalid --host api.example.invalid --remote "$RUNNER_TEMP/remote.git"
+    - name: End to end (two browsers on one track)
+      run: |
+        pip install playwright==1.49.1
+        python -m playwright install --with-deps chromium
+        mkdir -p "$RUNNER_TEMP/site"
+        sed 's#<meta name="drum-reviewer-api" content="">#<meta name="drum-reviewer-api" content="http://127.0.0.1:8767">#' \
+          labels-service/index.html > "$RUNNER_TEMP/site/index.html"
+        (cd "$RUNNER_TEMP/site" && python -m http.server 8000 --bind 127.0.0.1 > "$RUNNER_TEMP/site.log" 2>&1 &)
+        python labels-service/tests/fake_github.py --port 9998 --repo Jdubz/blinky-corpus > "$RUNNER_TEMP/fake2.log" 2>&1 &
+        python labels-service/server.py --host 127.0.0.1 --port 8767 --state "$RUNNER_TEMP/state2" \
+          --checkout "$RUNNER_TEMP/co2" --git-url "file://$RUNNER_TEMP/remote2.git" --push-url "file://$RUNNER_TEMP/remote2.git" \
+          --refresh 2 --quiet 3 --poll-every 1 --github-repo Jdubz/blinky-corpus --github-api http://127.0.0.1:9998 \
+          --cors-origin http://127.0.0.1:8000 > "$RUNNER_TEMP/server2.log" 2>&1 &
+        python labels-service/tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767 --remote "$RUNNER_TEMP/remote2.git"
+    - name: Logs
+      if: always()
+      run: |
+        docker logs labels 2>&1 | grep -v '"event":"http"' | tail -n 60 || true
+        tail -n 40 "$RUNNER_TEMP"/*.log || true

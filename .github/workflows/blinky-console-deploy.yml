@@ -1,9 +1,8 @@
 name: Deploy Blinky Console
 
-# The site also serves the drum-label reviewer at /labels/: blinky-corpus's tools/drum-reviewer page,
-# from the corpus commit this repo pins (scripts/vendor-labels-page.js), talking to the hosted labels
-# API (its public URL below; CORS there allows only this site's origin, so PR preview channels can show
-# the page but not use it).
+# The site also serves the drum-label reviewer at /labels/: this repo's labels-service/index.html
+# (scripts/labels-page.js), talking to the hosted labels API (its public URL below; CORS there allows
+# only this site's origin, so PR preview channels can show the page but not use it).
 #
 # The console also serves the web flasher's firmware: every build mirrors the
 # newest stable releases of Jdubz/blinky-firmware into public/firmware/
@@ -21,14 +20,14 @@ on:
       - 'blinky-console/**'
       - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
-      - 'corpus'  # the pin the /labels/ page comes from
+      - 'labels-service/**'  # the /labels/ page
   pull_request:
     branches: [master]
     paths:
       - 'blinky-console/**'
       - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
-      - 'corpus'  # the pin the /labels/ page comes from
+      - 'labels-service/**'  # the /labels/ page
   schedule:
     - cron: '17 9 * * *'
   workflow_dispatch:
@@ -73,7 +72,7 @@ jobs:
       - name: Drum-label reviewer page (/labels/)
         env:
           LABELS_API_URL: https://blinky-labels-api.joshwentworth.com
-        run: node scripts/vendor-labels-page.js
+        run: node scripts/labels-page.js
 
       - name: Build
         env:
@@ -118,7 +117,7 @@ jobs:
       - name: Drum-label reviewer page (/labels/)
         env:
           LABELS_API_URL: https://blinky-labels-api.joshwentworth.com
-        run: node scripts/vendor-labels-page.js
+        run: node scripts/labels-page.js
 
       - name: Build
         env:
