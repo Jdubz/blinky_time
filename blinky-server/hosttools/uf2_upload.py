@@ -1744,6 +1744,7 @@ def copy_firmware(uf2_path, mount_point):
     print(f"  Copying (raw write + fsync)...")
     data = uf2_path.read_bytes()
     bytes_written = 0
+    sync_error = None
     try:
         fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
         try:
@@ -1757,14 +1758,26 @@ def copy_firmware(uf2_path, mount_point):
                     break  # Shouldn't happen on a regular fd, but guard anyway
                 bytes_written += chunk
             os.fsync(fd)
-        except OSError:
-            pass  # Drive may eject during write/fsync — check bytes below
+        except OSError as e:
+            sync_error = e  # Drive may eject during write/fsync — checked below
         finally:
             try:
                 os.close(fd)
             except OSError:
                 pass  # Close may fail on dead mount — OK
         if bytes_written >= len(data):
+            # [blinky_time: os.write() only fills the page cache; the bytes reach the
+            # bootloader during fsync. A failed fsync is expected when the bootloader got
+            # every block and rebooted under it (the drive is gone), but if the drive is
+            # still there the writeback was cut short (a USB reset mid-copy, 2026-11-25
+            # job ecc8a4780e9f) and the bootloader is waiting for blocks that never came.
+            # That used to print [PASS] here and the server waited out its verify.]
+            if sync_error is not None and not _wait_drive_gone(mount_point, SYNC_FAIL_GRACE_S):
+                print(f"  [FAIL] Write not confirmed: fsync failed ({sync_error}) and the "
+                      f"UF2 drive is still present; the bootloader did not get every block")
+                return False
+            if sync_error is not None:
+                print(f"  fsync ended with {sync_error} as the drive left (bootloader rebooting)")
             print(f"  [PASS] Wrote {bytes_written:,} / {uf2_size:,} bytes")
             return True
         elif bytes_written > 0:
@@ -1792,6 +1805,85 @@ def copy_firmware(uf2_path, mount_point):
             return False
         print(f"  [FAIL] Copy failed: {e}")
         return False
+
+
+# [blinky_time: how long a failed fsync waits for the drive to leave before the copy
+# counts as unconfirmed. The bootloader reboots within a second of its last block.]
+SYNC_FAIL_GRACE_S = 5.0
+
+
+def _mount_sources(mount_point, mounts="/proc/mounts"):
+    """[blinky_time] The block devices mounted at ``mount_point``, oldest first (the last is
+    the one in use: mounts stack)."""
+    target = str(mount_point)
+    out = []
+    try:
+        with open(mounts) as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 2 and fields[1].replace("\\040", " ") == target:
+                    out.append(fields[0])
+    except OSError:
+        return []
+    return out
+
+
+def _mount_source(mount_point, mounts="/proc/mounts"):
+    """[blinky_time] The block device mounted at ``mount_point`` (``/dev/sdX``), or None."""
+    sources = _mount_sources(mount_point, mounts)
+    return sources[-1] if sources else None
+
+
+def release_stale_mounts(mount_point, mounts="/proc/mounts", max_layers=64):
+    """[blinky_time] Lazily unmount the mounts at ``mount_point`` whose drive has gone.
+
+    The bootloader reboots under the mount, and nothing unmounted it, so every flash left
+    one more stale vfat mount stacked on /mnt/uf2-upload (ten on the test box by
+    2026-11-25). Only the top mount can be unmounted, so this works down the stack and
+    stops at the first live drive. Returns how many it unmounted.
+    """
+    done = 0
+    for _ in range(max_layers):
+        top = _mount_source(mount_point, mounts)
+        if top is None or _drive_present(mount_point, top):
+            break
+        try:
+            r = subprocess.run(["sudo", "-n", "umount", "-l", str(mount_point)],
+                               capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            break
+        if r.returncode != 0:
+            break
+        done += 1
+    return done
+
+
+def _drive_present(mount_point, block_dev=None, sys_class_block="/sys/class/block"):
+    """[blinky_time] Is the UF2 drive behind ``mount_point`` still attached?
+
+    By its block device when known: a stale mount keeps answering for cached
+    files after the bootloader has rebooted, the kernel's block device does
+    not. Otherwise by the drive's info file, as verify_reboot does.
+    """
+    if block_dev:
+        size = Path(sys_class_block) / Path(block_dev).name / "size"
+        try:
+            return int(size.read_text().strip() or 0) > 0
+        except (OSError, ValueError):
+            return False
+    return (Path(mount_point) / UF2_INFO_FILE).exists()
+
+
+def _wait_drive_gone(mount_point, timeout, poll=0.2):
+    """[blinky_time] True once the UF2 drive has gone within ``timeout`` seconds."""
+    block_dev = _mount_source(mount_point)
+    deadline = time.monotonic() + timeout
+    while True:
+        if not _drive_present(mount_point, block_dev):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
 
 
 # ============================================================
@@ -2174,6 +2266,7 @@ def upload_to_device(port, uf2_path, verbose=False):
         # Phase 6: Verify reboot + post-flash verification
         reboot_ok, new_port = verify_reboot(mount_point, port, device_serial, verbose=verbose)
         if reboot_ok:
+            release_stale_mounts(mount_point)  # [blinky_time: the drive has gone]
             # Ask blinky-server to reconnect (best-effort)
             reconnect_port = new_port or port
             _request_server_reconnect(reconnect_port, verbose=verbose)
@@ -2627,6 +2720,7 @@ def main():
             port = ports[0] if ports else None
             reboot_ok, new_port = verify_reboot(mount_point, port, None, verbose=args.verbose)
             if reboot_ok:
+                release_stale_mounts(mount_point)  # [blinky_time: the drive has gone]
                 print_success(f"UPLOAD SUCCESSFUL ({_elapsed(start_time)})")
                 return 0
             else:

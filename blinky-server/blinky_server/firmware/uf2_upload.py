@@ -377,6 +377,27 @@ def _find_uf2_block_device_for_serial(
     return None
 
 
+def usb_serial_of_port(serial_port: str, by_id_dir: Path = Path("/dev/serial/by-id")) -> str | None:
+    """The USB serial number in the ``/dev/serial/by-id`` name of ``serial_port``
+    (a by-id path or the ``/dev/ttyACM*`` it resolves to), or None."""
+    if not by_id_dir.exists():
+        return None
+    real_port = str(Path(serial_port).resolve())
+    for entry in by_id_dir.iterdir():
+        if str(entry.resolve()) == real_port:
+            parts = entry.name.rsplit("_", 1)
+            if len(parts) == 2:
+                return parts[1].split("-")[0]
+            return None
+    return None
+
+
+def uf2_drive_present(usb_serial: str | None) -> bool:
+    """Is the UF2 drive of the device with this USB serial attached? Only its
+    bootloader has one, so True means the chip is sitting in its bootloader."""
+    return bool(usb_serial) and _find_uf2_block_device_for_serial(usb_serial or "") is not None
+
+
 def _mount_point_of(block_dev: str, mounts: Path = Path("/proc/mounts")) -> str | None:
     try:
         for line in mounts.read_text().splitlines():
@@ -471,6 +492,7 @@ async def _uf2_write_impl_for_job(
     firmware_path: str,
     transport: Any,
     already_in_bootloader: bool = False,
+    usb_serial: str | None = None,
 ) -> bool:
     """Write firmware to one device via UF2, bound to a ``FlashJob``.
 
@@ -495,6 +517,10 @@ async def _uf2_write_impl_for_job(
     serial is this device's is mounted here and handed to
     ``uf2_upload.py --already-in-bootloader --mount-point``. A missing or
     mismatched drive fails the write; it is never guessed.
+
+    ``usb_serial``: the device's USB serial when the caller already has it.
+    A retry into a chip that is now in its bootloader needs it: the app's
+    by-id port it was flashed through no longer exists.
 
     Critically, this function does NOT wait for the subprocess to exit
     cleanly. Once write-complete is seen, the subprocess is terminated
@@ -522,16 +548,8 @@ async def _uf2_write_impl_for_job(
     # disconnect transport, USB-reset, re-discover the (possibly renamed)
     # serial port.
     usb_dev_path = _get_usb_dev_path(serial_port)
-    device_usb_sn: str | None = None
+    device_usb_sn: str | None = usb_serial or usb_serial_of_port(serial_port)
     by_id_dir = Path("/dev/serial/by-id")
-    if by_id_dir.exists():
-        real_port = str(Path(serial_port).resolve())
-        for entry in by_id_dir.iterdir():
-            if str(entry.resolve()) == real_port:
-                parts = entry.name.rsplit("_", 1)
-                if len(parts) == 2:
-                    device_usb_sn = parts[1].split("-")[0]
-                break
 
     with contextlib.suppress(Exception):
         await transport.disconnect()
@@ -566,7 +584,9 @@ async def _uf2_write_impl_for_job(
                         serial_port = str(entry.resolve())
                         break
 
-    cmd = ["python3", str(tool), "--hex", firmware_path]
+    # -u: unbuffered, so each line reaches the journal when it happens. Block-buffered,
+    # the whole run landed at exit with one timestamp, which hid when the copy ended.
+    cmd = ["python3", "-u", str(tool), "--hex", firmware_path]
     if mount_point is not None:
         cmd += ["--already-in-bootloader", "--mount-point", mount_point]
     cmd += [serial_port, "-v"]
