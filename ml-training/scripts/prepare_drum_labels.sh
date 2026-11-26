@@ -12,8 +12,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Storage roots as the configs name them (#286); unset, the old build-host layout.
-DATA="${BLINKY_DATA:-/mnt/storage/blinky-ml-data}"
+# Storage roots as the configs name them (#286); no default (docs/ML_STORAGE_LAYOUT.md).
+DATA="${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}"
 ALGORITHM="${ALGORITHM:-adtof}"
 # Which tracks to label: those with full-mix onset consensus (the clean step needs it).
 TRACKS_FROM="${TRACKS_FROM:-$DATA/labels/onsets_consensus}"

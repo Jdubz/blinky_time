@@ -26,7 +26,7 @@ but every loss is printed as a WARNING and recorded in manifest.json.
 
 Usage:
     python scripts/convert_blrec.py session.blrec
-    python scripts/convert_blrec.py session.blrec --out /mnt/nvme/field/2026-10-18-club
+    python scripts/convert_blrec.py session.blrec --out $BLINKY_WORK/field/2026-10-18-club
 """
 
 from __future__ import annotations

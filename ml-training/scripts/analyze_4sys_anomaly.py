@@ -34,12 +34,17 @@ from __future__ import annotations
 import json
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
 
-OC_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus")
-AUDIO_DIR = Path("/mnt/storage/blinky-ml-data/audio/combined")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import storage_root  # noqa: E402
+
+# Under ${BLINKY_DATA}, resolved in main() (scripts/audio.py storage_root: no default).
+OC_DIR: Path
+AUDIO_DIR: Path
 N_TRACKS = 60
 SR = 16000
 HOP = 256
@@ -56,6 +61,10 @@ def get_audio_path(stem: str) -> Path | None:
 
 
 def main() -> int:
+    global OC_DIR, AUDIO_DIR
+    data = Path(storage_root("BLINKY_DATA"))
+    OC_DIR = data / "labels" / "onsets_consensus"
+    AUDIO_DIR = data / "audio" / "combined"
     random.seed(0)
     files = sorted(p for p in OC_DIR.iterdir() if p.suffix == ".json")
     random.shuffle(files)

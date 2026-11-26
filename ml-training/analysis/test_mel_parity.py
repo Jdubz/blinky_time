@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -94,6 +95,10 @@ def check_configs() -> None:
     mel settings the table can't serve is refused, never silently given the librosa bank."""
     from scripts.audio import check_mel_filterbank_cfg, load_config
     cfgs = ML / "configs"
+    # The configs' data paths name the storage roots, which have no default; only their mel
+    # settings are read here, so any value will do (docs/ML_STORAGE_LAYOUT.md).
+    for root in ("BLINKY_DATA", "BLINKY_WORK"):
+        os.environ.setdefault(root, f"/nonexistent/{root.lower()}")
     assert check_mel_filterbank_cfg(load_config(cfgs / "conv1d_w16_onset_v33_mel_only.yaml")) \
         == "firmware_table"
     try:

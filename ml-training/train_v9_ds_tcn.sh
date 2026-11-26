@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source venv/bin/activate
 
-STORAGE=/mnt/storage/blinky-ml-data
+STORAGE="${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}"
 TEST_AUDIO=../corpus/edm
 LOG="$STORAGE/outputs/v9-ds-tcn-$(date +%Y%m%d-%H%M%S).log"
 

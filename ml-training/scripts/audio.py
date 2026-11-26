@@ -382,28 +382,41 @@ def load_config(config_path: str) -> dict:
 # Storage roots in config paths (#286). Configs name `${BLINKY_DATA}` (warm
 # tier: audio corpora, labels, RIR, noise) and `${BLINKY_WORK}` (hot tier:
 # prepared tensors, mel cache, outputs) instead of one machine's mounts; set
-# them to wherever a local copy lives. Unset, they are the old build-host layout
-# (docs/ML_STORAGE_LAYOUT.md). The label reviewer resolves its defaults here too.
-STORAGE_ROOT_DEFAULTS = {
-    "BLINKY_DATA": "/mnt/storage/blinky-ml-data",
-    "BLINKY_WORK": "/mnt/nvme",
+# them to wherever a local copy lives. There are no defaults: the old build-host
+# layout they once fell back to is gone from every machine (docs/ML_STORAGE_LAYOUT.md),
+# so an unset root fails here, naming the variable, instead of as a missing file
+# under a dead mount much later. On the Spark, spark_entry.py sets both.
+STORAGE_ROOTS = {
+    "BLINKY_DATA": "audio corpora, labels, RIR and noise (on the Spark: the corpus input)",
+    "BLINKY_WORK": "prepared tensors, mel cache and outputs (on the Spark: the checkpoint dir's work/)",
 }
 _ROOT_REF = re.compile(r"\$\{([^}]*)\}")
 
 
+class StorageRootUnset(RuntimeError):
+    """A storage root a config or script needs isn't set in the environment."""
+
+
 def storage_root(name: str) -> str:
-    """The value of a storage root: the environment variable, else the default."""
-    if name not in STORAGE_ROOT_DEFAULTS:
-        raise ValueError(f"unknown storage root ${{{name}}}; known: {sorted(STORAGE_ROOT_DEFAULTS)}")
-    value = os.environ.get(name) or STORAGE_ROOT_DEFAULTS[name]
-    return value.rstrip("/")
+    """The value of a storage root, from the environment. Unset or empty raises
+    StorageRootUnset naming the variable: there is no default (see STORAGE_ROOTS)."""
+    if name not in STORAGE_ROOTS:
+        raise ValueError(f"unknown storage root ${{{name}}}; known: {sorted(STORAGE_ROOTS)}")
+    value = os.environ.get(name, "")
+    if not value:
+        raise StorageRootUnset(
+            f"${name} is unset: set it to the directory holding {STORAGE_ROOTS[name]}. "
+            "There is no default; the old build-host layout is retired (docs/ML_STORAGE_LAYOUT.md)"
+        )
+    return value.rstrip("/") or "/"
 
 
 def expand_roots(obj):
     """Expand `${BLINKY_DATA}` / `${BLINKY_WORK}` in every string of a config.
 
     Any other `${...}` is an error (a typo would otherwise become a literal
-    directory name and a confusing missing-file failure much later).
+    directory name and a confusing missing-file failure much later), and so is
+    a root that isn't set (StorageRootUnset, naming it).
     """
     if isinstance(obj, dict):
         return {k: expand_roots(v) for k, v in obj.items()}
@@ -412,6 +425,20 @@ def expand_roots(obj):
     if isinstance(obj, str) and "${" in obj:
         return _ROOT_REF.sub(lambda m: storage_root(m.group(1)), obj)
     return obj
+
+
+def root_path(value: str):
+    """An argparse `type` for a path that may name a storage root
+    (`default="${BLINKY_DATA}/labels/onsets_consensus"`). argparse converts a string
+    default only when the option isn't given, so an unset root stops the script, naming
+    the option and the variable, only when its default is actually used."""
+    import argparse
+    from pathlib import Path
+
+    try:
+        return Path(expand_roots(value))
+    except StorageRootUnset as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
 
 
 def _deep_merge(base: dict, overrides: dict) -> None:

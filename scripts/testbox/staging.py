@@ -627,6 +627,7 @@ def quality_lines(report: dict[str, Any]) -> list[str]:
                 "flagged, not hidden).",
                 "",
             ]
+        lines += latency_lines(report.get("detection_latency"))
     elif val:
         lines += [f"Validation: not played ({val.get('detail')})", ""]
     for dev, f in (report.get("final") or {}).items():
@@ -635,6 +636,39 @@ def quality_lines(report: dict[str, Any]) -> list[str]:
     if report.get("strict"):
         lines += ["", *strict.md_lines(report["strict"])]
     return lines
+
+
+def _ms(v: Any) -> str:
+    return f"{float(v):+.1f} ms" if isinstance(v, (int, float)) else "n/a"
+
+
+def latency_lines(latency: dict[str, Any] | None) -> list[str]:
+    """The chip's detection latency vs the rig's calibration (blinky-server
+    testing/detection_latency.py): per device the median of ``lagCheckMs - lagMs``, then every
+    track's offset in a collapsed table, the ones left out with the reason."""
+    if not latency:
+        return []
+    lines = [
+        "Detection latency (the music's check minus the measured lag, `lagCheckMs - lagMs`; "
+        "0 = the rig's 45 ms calibration, + = later; tracks with kickR50 < 0.5 left out):",
+        "",
+    ]
+    for dev, d in latency.items():
+        runs = d.get("runs") or []
+        lines.append(
+            f"- {dev[:12]}: median **{_ms(d.get('median_ms'))}** over {d.get('counted', 0)} "
+            f"of {len(runs)} tracks"
+        )
+    lines += ["", "<details><summary>Detection latency per track</summary>", ""]
+    lines += ["| device | track | offset | counted |", "|---|---|---|---|"]
+    for dev, d in latency.items():
+        for x in d.get("runs") or []:
+            why = "✅" if x.get("counted") else f"no: {x.get('why')}"
+            lines.append(
+                f"| {dev[:12]} | {x.get('track')} | {_ms(x.get('offset_ms'))} | "
+                f"{str(why).replace('|', '/')} |"
+            )
+    return [*lines, "", "</details>", ""]
 
 
 def lag_counts(report: dict[str, Any]) -> str:

@@ -37,6 +37,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path, storage_root  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -621,8 +624,7 @@ def process_all(
         # Move quarantined tracks OUTSIDE the audio/ tree so prepare_dataset.py's
         # rglob won't find them. Preserve subdir structure to avoid overwriting
         # when the same stem exists in both combined/ and fma/.
-        data_root = Path(os.environ.get("BLINKY_DATA_ROOT",
-                                         "/mnt/storage/blinky-ml-data"))
+        data_root = Path(storage_root("BLINKY_DATA"))
         audio_root = data_root / "audio"
         quarantine_dir = data_root / "quarantined"
         quarantine_dir.mkdir(parents=True, exist_ok=True)
@@ -658,17 +660,20 @@ def main():
     )
     parser.add_argument(
         "--consensus-dir",
-        default="/mnt/storage/blinky-ml-data/labels/consensus_v3",
+        type=root_path,
+        default="${BLINKY_DATA}/labels/consensus_v3",
         help="Input consensus labels directory",
     )
     parser.add_argument(
         "--multi-dir",
-        default="/mnt/storage/blinky-ml-data/labels/multi",
+        type=root_path,
+        default="${BLINKY_DATA}/labels/multi",
         help="Per-system labels directory",
     )
     parser.add_argument(
         "--output-dir",
-        default="/mnt/storage/blinky-ml-data/labels/consensus_v4",
+        type=root_path,
+        default="${BLINKY_DATA}/labels/consensus_v4",
         help="Output directory for corrected labels",
     )
     parser.add_argument(

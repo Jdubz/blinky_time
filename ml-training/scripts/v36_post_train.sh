@@ -11,9 +11,9 @@
 # v36 vs v33 on the actual edm/ corpus.
 #
 # Produces:
-#   /mnt/storage/blinky-ml-data/outputs/v36_fmax/{export.log, eval/}
-#   /mnt/storage/blinky-ml-data/outputs/v36_fmax/comparison_v34d_v36.txt
-#   /mnt/storage/blinky-ml-data/outputs/v36_fmax/comparison_v33_v36.txt
+#   $BLINKY_DATA/outputs/v36_fmax/{export.log, eval/}
+#   $BLINKY_DATA/outputs/v36_fmax/comparison_v34d_v36.txt
+#   $BLINKY_DATA/outputs/v36_fmax/comparison_v33_v36.txt
 #
 # What this script does NOT do:
 #   - Compile firmware. v36 changes SpectralConstants (NUM_MEL_BANDS
@@ -33,9 +33,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-V36_OUT="/mnt/storage/blinky-ml-data/outputs/v36_fmax"
-V34D_OUT="/mnt/storage/blinky-ml-data/outputs/v34d"
-# v33 artifacts predate the move to /mnt/storage and live under the in-repo
+V36_OUT="${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}/outputs/v36_fmax"
+V34D_OUT="${BLINKY_DATA}/outputs/v34d"
+# v33 artifacts predate the move to ${BLINKY_DATA} and live under the in-repo
 # outputs/ tree. Already evaluated in eval_2026_04_29.log.
 V33_OUT="${ROOT}/outputs/v33_mel_only"
 V36_CFG="configs/conv1d_w16_onset_v36_fmax.yaml"
@@ -67,7 +67,7 @@ echo ">>> Export v36 to TFLite INT8"
 make export \
     CONFIG="${V36_CFG}" \
     RUN_NAME=v36_fmax \
-    PROCESSED_DIR=/mnt/nvme/processed_v36 \
+    PROCESSED_DIR="${BLINKY_WORK:?is unset (docs/ML_STORAGE_LAYOUT.md)}/processed_v36" \
     | tee "${V36_OUT}/export.log"
 
 [ -f "${V36_OUT}/export/frame_onset_model_data_int8.tflite" ] || \

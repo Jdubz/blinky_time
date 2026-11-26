@@ -16,7 +16,7 @@ Designed to run on the test box, where its chip and speaker are connected.
 Uses all available devices in parallel (3 gains per audio playback).
 
 Usage:
-  python3 gain_volume_sweep.py sweep --output /mnt/storage/blinky-ml-data/calibration/gain_volume_sweep.json
+  python3 gain_volume_sweep.py sweep --output $BLINKY_DATA/calibration/gain_volume_sweep.json
   python3 gain_volume_sweep.py sweep --gains 10,30,50,70 --volumes 50,100 --tracks 3
   python3 gain_volume_sweep.py analyze /path/to/gain_volume_sweep.json
 """

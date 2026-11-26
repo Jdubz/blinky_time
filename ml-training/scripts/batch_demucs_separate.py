@@ -16,14 +16,14 @@ Disk: ~10 MB/track × 7000 = ~70 GB (4 stems × 30s × 44.1kHz × 2ch × int16).
 
 Usage:
     python scripts/batch_demucs_separate.py \
-        --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
-        --output-dir /mnt/storage/blinky-ml-data/stems \
+        --audio-dir $BLINKY_DATA/audio/combined \
+        --output-dir $BLINKY_DATA/stems \
         --device cuda
 
     # Resume (skips tracks with existing stems)
     python scripts/batch_demucs_separate.py \
-        --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
-        --output-dir /mnt/storage/blinky-ml-data/stems \
+        --audio-dir $BLINKY_DATA/audio/combined \
+        --output-dir $BLINKY_DATA/stems \
         --device cuda
 """
 

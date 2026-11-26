@@ -24,18 +24,18 @@ containing beat times, downbeat times, and estimated tempo.
 Usage:
     # Label with all systems (parallel CPU workers)
     python scripts/label_beats.py \
-        --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
+        --audio-dir $BLINKY_DATA/audio/combined \
         --output-dir data/labels/multi
 
     # Label with specific systems only
     python scripts/label_beats.py \
-        --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
+        --audio-dir $BLINKY_DATA/audio/combined \
         --output-dir data/labels/multi \
         --systems beat_this,demucs_beats,beatnet
 
     # Only new systems (add to existing labels)
     python scripts/label_beats.py \
-        --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
+        --audio-dir $BLINKY_DATA/audio/combined \
         --output-dir data/labels/multi \
         --systems beatnet,allin1,demucs_beats
 """

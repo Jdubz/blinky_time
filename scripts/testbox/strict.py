@@ -4,7 +4,9 @@
 A report's ``strict`` is {"rules": [one row per rule], "devices": {...}}; each row has its rule,
 mode (warn | block), status (pass | warn | fail | no data), worst value and where it was read,
 the threshold, the blinky-firmware issues it waits on, and the windows it excluded (a settings
-save the server sent). Warn rows never change a status; the description may say how many.
+save the server sent) or, for detection_latency, the tracks it left out (``left_out``: too few
+kicks detected for the music's check). Warn rows never change a status; the description may say
+how many.
 """
 
 from __future__ import annotations
@@ -35,14 +37,19 @@ def _num(v: Any) -> str:
 
 
 def limit(r: dict[str, Any]) -> str:
-    op = "≤" if r.get("worst_is") == "max" else "≥"
-    return f"{op} {_num(r.get('threshold'))} {r.get('unit') or ''}".rstrip()
+    op = {"max": "≤", "min": "≥", "abs": "±"}.get(str(r.get("worst_is")), "≥")
+    sep = "" if op == "±" else " "
+    return f"{op}{sep}{_num(r.get('threshold'))} {r.get('unit') or ''}".rstrip()
 
 
 def worst(r: dict[str, Any]) -> str:
     if r.get("worst") is None:
         return ""
-    return f"{_num(r['worst'])} {r.get('unit') or ''}".rstrip()
+    v = r["worst"]
+    # A signed offset (an "abs" rule) keeps its sign: +3 ms is later, -3 sooner.
+    signed = r.get("worst_is") == "abs" and isinstance(v, (int, float))
+    shown = f"{float(v):+g}" if signed else _num(v)
+    return f"{shown} {r.get('unit') or ''}".rstrip()
 
 
 def where(r: dict[str, Any]) -> str:
@@ -63,7 +70,8 @@ def title(strict: dict[str, Any] | None) -> str:
 
 def excluded_lines(strict: dict[str, Any] | None) -> list[str]:
     """Every excluded window, said: "frame_time: the window read at hh:mm:ss.mmm (where, N ms)
-    excluded: settings save at hh:mm:ss.mmm (blinky-firmware#49)"."""
+    excluded: settings save at hh:mm:ss.mmm (blinky-firmware#49)"; and every track a rule left
+    out: "detection_latency: dubstep-edm-halftime (+57.2 ms) left out: kickR50 0.25 < 0.5: ..."."""
     out = []
     for r in rows(strict):
         for e in r.get("excluded") or []:
@@ -71,6 +79,10 @@ def excluded_lines(strict: dict[str, Any] | None) -> list[str]:
                 f"{r['rule']}: the window read at {e.get('read_at')} ({e.get('where')}, "
                 f"{_num(e.get('max_frame_ms'))} ms) excluded: {e.get('reason')}"
             )
+        for e in r.get("left_out") or []:
+            off = e.get("offset_ms")
+            shown = f" ({float(off):+g} ms)" if isinstance(off, (int, float)) else ""
+            out.append(f"{r['rule']}: {e.get('track')}{shown} left out: {e.get('why')}")
     return out
 
 

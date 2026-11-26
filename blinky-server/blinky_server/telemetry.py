@@ -122,6 +122,32 @@ def record_strict(source: str, strict: dict[str, Any]) -> None:
         STRICT_WORST.labels(*labels).set(float(r["worst"]))
 
 
+# The chip's detection latency against the rig's calibration (testing/detection_latency.py):
+# per device and the kind of run that measured it last; no sample when no track counted.
+DETECTION_LATENCY = Gauge(
+    "blinky_detection_latency_offset_ms",
+    "Median over the last run's tracks of lagCheckMs - lagMs: how much later (+) the chip "
+    "detected than the rig's calibrated path (audio_player.AUDIO_PATH_MS) assumes.",
+    ["device", "source"],
+)
+DETECTION_LATENCY_TRACKS = Gauge(
+    "blinky_detection_latency_tracks",
+    "Tracks the last run's detection latency median counted (kickR50 >= 0.5, lag measured).",
+    ["device", "source"],
+)
+
+
+def record_detection_latency(source: str, latency: dict[str, Any]) -> None:
+    """detection_latency.summarize over a run: each device's median and how many counted."""
+    for device, d in latency.items():
+        DETECTION_LATENCY_TRACKS.labels(device, source).set(int(d.get("counted") or 0))
+        if d.get("median_ms") is None:
+            with contextlib.suppress(KeyError):
+                DETECTION_LATENCY.remove(device, source)
+            continue
+        DETECTION_LATENCY.labels(device, source).set(float(d["median_ms"]))
+
+
 def record_streaks(ready: dict[str, Any]) -> None:
     """strict_rules.readiness: each rule's streak and readiness."""
     for rule, r in ready.items():
@@ -169,6 +195,8 @@ def record_staging(report: dict[str, Any], written_at: float | None = None) -> N
     if "pass" in dep:
         for device in report.get("devices", []):
             STAGING_CHECK.labels(device, "deploy", "deploy").set(1 if dep["pass"] else 0)
+    if report.get("detection_latency"):  # also set by the run's strict step; this restores it
+        record_detection_latency("quality", report["detection_latency"])
 
 
 def restore_staging(reports_dir: Path) -> None:

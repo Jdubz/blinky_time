@@ -16,7 +16,7 @@ Consensus: For each detected onset, count how many systems agree within
 a ±30ms tolerance window. The "strength" field encodes agreement (1/5 to 5/5).
 More systems = higher confidence that the onset is real.
 
-Output: /mnt/storage/blinky-ml-data/labels/onsets_consensus/{stem}.onsets.json
+Output: $BLINKY_DATA/labels/onsets_consensus/{stem}.onsets.json
 Format: {"onsets": [{"time": 0.1, "strength": 0.4, "systems": 2}, ...],
          "count": 87, "total_systems": 5, "tolerance_ms": 30}
 
@@ -37,11 +37,14 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
+
 # Defaults
-AUDIO_DIR = Path("/mnt/storage/blinky-ml-data/audio/combined")
+AUDIO_DIR = "${BLINKY_DATA}/audio/combined"
 LABELS_DIR = None  # optional track filter; default: every audio file in --audio-dir (#271)
-OUTPUT_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus")
-LIBROSA_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_librosa")
+OUTPUT_DIR = "${BLINKY_DATA}/labels/onsets_consensus"
+LIBROSA_DIR = "${BLINKY_DATA}/labels/onsets_librosa"
 SR = 16000
 HOP = 256
 TOLERANCE_SEC = 0.070  # 70ms consensus window (half a 16th note at common tempos)
@@ -308,12 +311,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate multi-system onset consensus labels"
     )
-    parser.add_argument("--audio-dir", type=Path, default=AUDIO_DIR)
+    parser.add_argument("--audio-dir", type=root_path, default=AUDIO_DIR)
     parser.add_argument("--labels-dir", type=Path, default=LABELS_DIR,
                         help="optional: only label stems that have a *.beats.json or *.onsets.json here "
                              "(a track list, never a label source). Default: every audio file in --audio-dir.")
-    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
-    parser.add_argument("--librosa-dir", type=Path, default=LIBROSA_DIR)
+    parser.add_argument("--output-dir", type=root_path, default=OUTPUT_DIR)
+    parser.add_argument("--librosa-dir", type=root_path, default=LIBROSA_DIR)
     parser.add_argument("--test-dir", type=Path, default=None,
                         help="Also generate labels for test tracks (output alongside audio). "
                              "Not processed unless explicitly passed.")
@@ -328,12 +331,10 @@ def main():
     parser.add_argument(
         "--human-edits-dirs",
         nargs="*",
-        type=Path,
-        default=[
-            Path("/mnt/storage/blinky-ml-data/labels/onsets_human"),
-            Path(__file__).resolve().parents[2] / "corpus" / "edm",
-        ],
-        help="Directories scanned for `<stem>.onsets_human.json` overlays. With "
+        type=root_path,
+        default=None,
+        help="Directories scanned for `<stem>.onsets_human.json` overlays (default: "
+             "${BLINKY_DATA}/labels/onsets_human and corpus/edm). With "
              "--force-regenerate, regeneration of any track that has an overlay "
              "is REFUSED unless --allow-stale-edits is also passed (the new auto "
              "list will not match the indices in the overlay — see "
@@ -346,10 +347,17 @@ def main():
              "validation time and the affected tracks must be re-curated.",
     )
     args = parser.parse_args()
+    if args.human_edits_dirs is None:
+        # nargs="*" leaves a list default unconverted, so the root is resolved here.
+        try:
+            training_edits = root_path("${BLINKY_DATA}/labels/onsets_human")
+        except argparse.ArgumentTypeError as e:
+            parser.error(f"argument --human-edits-dirs: {e}")
+        args.human_edits_dirs = [training_edits, Path(__file__).resolve().parents[2] / "corpus" / "edm"]
 
     def _stems_with_human_edits() -> set[str]:
         stems: set[str] = set()
-        for d in args.human_edits_dirs or []:
+        for d in args.human_edits_dirs:
             if not d.exists():
                 continue
             for f in d.glob("*.onsets_human.json"):

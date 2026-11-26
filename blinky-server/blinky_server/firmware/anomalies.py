@@ -33,6 +33,11 @@ QUARANTINE_TRIGGERED = "quarantine_triggered"
 STALE_FIRMWARE = "stale_firmware"
 NO_REBOOT_DETECTED = "no_reboot_detected"
 BOOTLOADER_OSCILLATING = "bootloader_oscillating"
+# Set by the orchestrator, not by a detector: the UF2 drive was still attached after
+# the write, so the copy was retried once (manager._run_uf2_flash).
+UF2_WRITE_RETRIED = "uf2_write_retried"
+# The writer could not confirm the copy, but the drive left (the bootloader took it).
+UF2_WRITE_UNCONFIRMED = "uf2_write_unconfirmed"
 
 
 # Default thresholds — overridable via ``check_all`` args. Conservative

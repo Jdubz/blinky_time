@@ -26,7 +26,7 @@ source venv/bin/activate
 OUTPUTS="outputs"
 LOGDIR="$OUTPUTS/pipeline_logs"
 mkdir -p "$LOGDIR"
-DATA_ROOT="${BLINKY_DATA_ROOT:-/mnt/storage/blinky-ml-data}"
+DATA_ROOT="${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}"
 STEMS_DIR="$DATA_ROOT/stems"
 LABELS_DIR="$DATA_ROOT/labels/multi"
 CONSENSUS_V5_DIR="$DATA_ROOT/labels/consensus_v5"

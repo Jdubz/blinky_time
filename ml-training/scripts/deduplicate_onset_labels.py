@@ -20,7 +20,11 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
 
 
 def deduplicate_onsets(onsets: list[dict], tolerance_ms: float) -> list[dict]:
@@ -93,8 +97,8 @@ def process_file(path: Path, tolerance_ms: float, dry_run: bool, backup: bool) -
 
 def main():
     parser = argparse.ArgumentParser(description="Deduplicate onset consensus labels")
-    parser.add_argument('--dir', type=Path,
-                        default=Path('/mnt/storage/blinky-ml-data/labels/onsets_consensus'),
+    parser.add_argument('--dir', type=root_path,
+                        default='${BLINKY_DATA}/labels/onsets_consensus',
                         help='Directory of onset label files')
     parser.add_argument('--test-dir', type=Path,
                         default=Path(__file__).parent.parent.parent / 'corpus/edm',

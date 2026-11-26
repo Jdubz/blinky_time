@@ -18,7 +18,7 @@ import numpy as np
 import librosa
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.audio import firmware_mel_spectrogram_np
+from scripts.audio import firmware_mel_spectrogram_np, root_path
 
 
 def sweep_rms_levels(audio_dir: Path, rms_values: list[float],
@@ -73,7 +73,7 @@ def sweep_rms_levels(audio_dir: Path, rms_values: list[float],
 
 def main():
     parser = argparse.ArgumentParser(description="Sweep target_rms_db to match firmware mel levels")
-    parser.add_argument("--audio-dir", default="/mnt/storage/blinky-ml-data/audio",
+    parser.add_argument("--audio-dir", type=root_path, default="${BLINKY_DATA}/audio",
                         help="Directory with audio files")
     parser.add_argument("--tracks", type=int, default=10, help="Number of tracks to sample")
     parser.add_argument("--target-mean", type=float, default=0.52,

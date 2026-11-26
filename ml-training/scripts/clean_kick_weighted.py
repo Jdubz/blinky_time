@@ -23,9 +23,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
 
 log = logging.getLogger("clean_kw")
 
@@ -117,12 +121,12 @@ def filter_track(kw_path: Path, cons_path: Path, tol_s: float, min_systems: int)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--kw-dir", type=Path,
-                    default=Path("/mnt/storage/blinky-ml-data/labels/kick_weighted_drums"))
-    ap.add_argument("--consensus-dir", type=Path,
-                    default=Path("/mnt/storage/blinky-ml-data/labels/onsets_consensus"))
-    ap.add_argument("--output-dir", type=Path,
-                    default=Path("/mnt/storage/blinky-ml-data/labels/kick_weighted_clean"))
+    ap.add_argument("--kw-dir", type=root_path,
+                    default="${BLINKY_DATA}/labels/kick_weighted_drums")
+    ap.add_argument("--consensus-dir", type=root_path,
+                    default="${BLINKY_DATA}/labels/onsets_consensus")
+    ap.add_argument("--output-dir", type=root_path,
+                    default="${BLINKY_DATA}/labels/kick_weighted_clean")
     ap.add_argument("--tolerance-ms", type=float, default=70.0)
     ap.add_argument("--min-systems", type=int, default=2)
     ap.add_argument("--limit", type=int, default=0,

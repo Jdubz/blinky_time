@@ -26,10 +26,13 @@ frame-time rule, listed in the report with the save's time, never silently. Noth
 excluded.
 
 The window a ``json info`` read reports: the firmware publishes its last *closed* 5 s window
-(blinky-firmware audio/LoopMetrics.h), and doesn't say when it closed. A read at host time t
-reports a window that closed in (t - 5 s, t], so the window lies within [t - 10 s, t]: a save
-in that span may be in it, and the window is excluded. (Exact edges need the firmware to report
-its window's close time in ``json info``; until then the span is the conservative two windows.)
+(blinky-firmware audio/LoopMetrics.h). Firmware since blinky-firmware#80 also says when it
+closed and how long it ran (``frameWindowEndMs``, ``frameWindowMs``, uptime ms). The reply's own
+``millis`` maps that into host time: host minus millis is the offset the clock sync measures
+(test_runner._sync_clock), here taken from the read itself, which is at most the read's latency
+late (SAVE_MARGIN_S covers it). The window is excluded only if a save falls inside it. Older
+firmware doesn't say: a read at host time t reports a window that closed in (t - 5 s, t], so it
+lies within [t - 10 s, t], and a save anywhere in that span excludes it.
 """
 
 from __future__ import annotations
@@ -57,7 +60,9 @@ class Rule:
     what: str
     threshold: float
     unit: str
-    worst: str  # "max": the run's largest value must be <= threshold; "min": its smallest >=
+    # "max": the run's largest value must be <= threshold; "min": its smallest >=; "abs": its
+    # value must be within +-threshold (a signed offset from a calibration).
+    worst: str
     issues: tuple[int, ...]  # the blinky-firmware issues it waits on
     mode: str = WARN
     save_excluded: bool = False  # windows that may hold one of the server's saves don't count
@@ -81,6 +86,21 @@ RULES: tuple[Rule, ...] = (
     Rule("beat_pace", "beats counted vs the tempo over 60 s of music", 0.03, "", "max", (), WARN),
     Rule("music_level", "mean mic level with music playing", 0.05, "", "min", (), WARN),
     Rule("music_onsets", "pulse onsets with music playing", 1.0, "/s", "min", (), WARN),
+    # The chip's detection latency within +-10 ms of the rig's calibration (testing/
+    # detection_latency.py): per track the music's check minus the measured lag, the median over
+    # the run's tracks that caught kickR50 >= 0.5. Calibration spread: sd 2.9 ms per track, so
+    # even a one-track run sits 3.4 sd inside; 10 ms is a third of the tight +-30 ms window
+    # (kickR30), so a drift warns well before it costs score at that tolerance.
+    Rule(
+        "detection_latency",
+        "detection latency vs the 45 ms calibration: median lagCheckMs - lagMs over tracks "
+        "with kickR50 >= 0.5",
+        10.0,
+        "ms",
+        "abs",
+        (),
+        WARN,
+    ),
 )
 BY_NAME = {r.name: r for r in RULES}
 
@@ -113,8 +133,10 @@ def clock(t: float) -> str:
 
 
 def window(info: dict[str, Any], t: float, where: str) -> dict[str, Any]:
-    """One ``json info`` read's loop metrics, with the host time it was read and where."""
-    return {
+    """One ``json info`` read's loop metrics, with the host time it was read and where. With
+    firmware that reports its window's close time, also the window's host-time span
+    (``w_start``, ``w_end``)."""
+    out = {
         "t": round(t, 3),
         "ms": info.get("millis"),
         "fps": info.get("fps"),
@@ -122,12 +144,44 @@ def window(info: dict[str, Any], t: float, where: str) -> dict[str, Any]:
         "overruns": info.get("audioOverruns"),
         "where": where,
     }
+    span = window_span(info, t)
+    if span is not None:
+        out["w_start"], out["w_end"] = round(span[0], 3), round(span[1], 3)
+    return out
 
 
-def covering_save(t: float, saves: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The first recorded save that may sit in the window a read at ``t`` reports."""
+def window_span(info: dict[str, Any], t: float) -> tuple[float, float] | None:
+    """The host-time span of the window a read at ``t`` reports, or None if the firmware doesn't
+    say when it closed (before blinky-firmware#80) or no window has closed yet."""
+    end_ms, len_ms, now_ms = (
+        info.get("frameWindowEndMs"),
+        info.get("frameWindowMs"),
+        info.get("millis"),
+    )
+    if not (
+        isinstance(end_ms, int | float)
+        and isinstance(len_ms, int | float)
+        and isinstance(now_ms, int | float)
+    ):
+        return None
+    if end_ms <= 0 or len_ms <= 0 or end_ms > now_ms:
+        return None  # nothing closed yet, or a reading that can't be placed
+    w_end = t - (now_ms - end_ms) / 1000.0  # the read's own host-minus-millis offset
+    return w_end - len_ms / 1000.0, w_end
+
+
+def covering_save(w: dict[str, Any] | float, saves: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The first recorded save that may sit in the window a read reports: inside its span when
+    the read carries one (``window``), else anywhere in the SPAN_S before the read at ``t``."""
+    if isinstance(w, dict):
+        t = float(w["t"])
+        lo, hi = w.get("w_start"), w.get("w_end")
+    else:
+        t, lo, hi = float(w), None, None
+    if lo is None or hi is None:
+        lo, hi = t - SPAN_S, t
     for s in saves:
-        if s["t"] - SAVE_MARGIN_S <= t and s.get("t_end", s["t"]) + SAVE_MARGIN_S >= t - SPAN_S:
+        if s["t"] - SAVE_MARGIN_S <= hi and s.get("t_end", s["t"]) + SAVE_MARGIN_S >= lo:
             return s
     return None
 
@@ -150,7 +204,15 @@ def _row(rule: Rule, value: float | None, ok: bool | None, **extra: Any) -> dict
 
 
 def _within(rule: Rule, value: float) -> bool:
+    if rule.worst == "abs":
+        return abs(value) <= rule.threshold
     return value <= rule.threshold if rule.worst == "max" else value >= rule.threshold
+
+
+def _badness(rule: Rule, value: float | None) -> float:
+    """How far toward failing a value is, larger worse (the worst device first)."""
+    v = float(value or 0)
+    return abs(v) if rule.worst == "abs" else v if rule.worst == "max" else -v
 
 
 def _frame_time(windows: list[dict[str, Any]], saves: list[dict[str, Any]]) -> dict[str, Any]:
@@ -160,7 +222,7 @@ def _frame_time(windows: list[dict[str, Any]], saves: list[dict[str, Any]]) -> d
     for w in windows:
         if w.get("max_frame_ms") is None:
             continue
-        s = covering_save(w["t"], saves) if rule.save_excluded else None
+        s = covering_save(w, saves) if rule.save_excluded else None
         if s is not None:
             excluded.append(
                 {
@@ -168,6 +230,13 @@ def _frame_time(windows: list[dict[str, Any]], saves: list[dict[str, Any]]) -> d
                     "where": w.get("where"),
                     "max_frame_ms": w["max_frame_ms"],
                     "save_at": clock(s["t"]),
+                    # The window's own edges when the firmware reports them, else the
+                    # conservative span before the read.
+                    "window": (
+                        f"{clock(w['w_start'])}-{clock(w['w_end'])}"
+                        if "w_start" in w and "w_end" in w
+                        else f"{clock(w['t'] - SPAN_S)}-{clock(w['t'])} (span)"
+                    ),
                     "reason": f"settings save at {clock(s['t'])} (blinky-firmware#49)",
                 }
             )
@@ -248,14 +317,42 @@ def _music(music: dict[str, Any] | None, pace: dict[str, Any] | None) -> list[di
     return out
 
 
+def _detection(latency: dict[str, Any] | None) -> dict[str, Any]:
+    """detection_latency over one device's runs (detection_latency.summarize's entry): the
+    median offset of the runs that count; the ones left out are named with the reason."""
+    rule = BY_NAME["detection_latency"]
+    if not latency:
+        return _row(rule, None, None)
+    runs = latency.get("runs") or []
+    left_out = [
+        {"track": x.get("track"), "offset_ms": x.get("offset_ms"), "why": x.get("why")}
+        for x in runs
+        if not x.get("counted")
+    ]
+    n = int(latency.get("counted") or 0)
+    median = latency.get("median_ms")
+    where = f"median of {n} of {len(runs)} tracks" if n else f"none of {len(runs)} tracks counted"
+    if median is None:
+        return _row(rule, None, None, where=where, samples=0, left_out=left_out)
+    v = float(median)
+    return _row(rule, v, _within(rule, v), where=where, samples=n, left_out=left_out)
+
+
 def evaluate(
     windows: list[dict[str, Any]],
     saves: list[dict[str, Any]],
     music: dict[str, Any] | None = None,
     pace: dict[str, Any] | None = None,
+    latency: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One device's run: every rule's row (status, worst value, where, exclusions)."""
-    rows = [_frame_time(windows, saves), _fps(windows), _overruns(windows), *_music(music, pace)]
+    rows = [
+        _frame_time(windows, saves),
+        _fps(windows),
+        _overruns(windows),
+        *_music(music, pace),
+        _detection(latency),
+    ]
     by = {r["rule"]: r for r in rows}
     return [by[r.name] for r in RULES]
 
@@ -272,8 +369,7 @@ def combine(per_device: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]
         ]
         if not rows:
             continue
-        sign = 1 if rule.worst == "max" else -1
-        rows.sort(key=lambda r: (ORDER[r["status"]], sign * float(r["worst"] or 0)), reverse=True)
+        rows.sort(key=lambda r: (ORDER[r["status"]], _badness(rule, r["worst"])), reverse=True)
         excluded = [{**e, "device": r["device"]} for r in rows for e in r.get("excluded") or []]
         out.append({**rows[0], "excluded": excluded} if excluded else rows[0])
     return out
@@ -283,16 +379,20 @@ def report(
     windows: dict[str, list[dict[str, Any]]],
     saves: dict[str, list[dict[str, Any]]],
     music: dict[str, dict[str, Any]] | None = None,
+    latency: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The run's strict section: {"rules": the summary rows, "devices": each device's rows}.
-    ``music``: per device, the quality suite's {"music", "beatpace"} (None: not measured)."""
-    devices = sorted(set(windows) | set(music or {}))
+    ``music``: per device, the quality suite's {"music", "beatpace"} (None: not measured).
+    ``latency``: per device, detection_latency.summarize over the run's scored tracks (None:
+    the run scored none)."""
+    devices = sorted(set(windows) | set(music or {}) | set(latency or {}))
     per = {
         d: evaluate(
             windows.get(d) or [],
             saves.get(d) or [],
             ((music or {}).get(d) or {}).get("music"),
             ((music or {}).get(d) or {}).get("beatpace"),
+            (latency or {}).get(d),
         )
         for d in devices
     }
@@ -315,7 +415,10 @@ def run_saves(device_ids: list[str], windows: dict[str, list[dict[str, Any]]]) -
     ts = [float(w["t"]) for ws in windows.values() for w in ws]
     if not ts:
         return {}
-    return saves_between(device_ids, min(ts) - SPAN_S - SAVE_MARGIN_S, max(ts) + SAVE_MARGIN_S)
+    # A window that ran long (a stall in it) can start before the SPAN_S before its read.
+    starts = [float(w.get("w_start", w["t"] - SPAN_S)) for ws in windows.values() for w in ws]
+    lo = min(min(starts), min(ts) - SPAN_S)
+    return saves_between(device_ids, lo - SAVE_MARGIN_S, max(ts) + SAVE_MARGIN_S)
 
 
 def judge(
@@ -323,13 +426,16 @@ def judge(
     windows: dict[str, list[dict[str, Any]]],
     source: str,
     music: dict[str, dict[str, Any]] | None = None,
+    latency: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The run's strict section with the save record read, and the metrics set. Call it from a
     durable step (it reads the save record)."""
     from .. import telemetry
 
-    out = report(windows, run_saves(device_ids, windows), music)
+    out = report(windows, run_saves(device_ids, windows), music, latency)
     telemetry.record_strict(source, out)
+    if latency is not None:
+        telemetry.record_detection_latency(source, latency)
     return out
 
 
