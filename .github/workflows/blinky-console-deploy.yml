@@ -1,5 +1,10 @@
 name: Deploy Blinky Console
 
+# The site also serves the drum-label reviewer at /labels/: blinky-corpus's tools/drum-reviewer page,
+# from the corpus commit this repo pins (scripts/vendor-labels-page.js), talking to the hosted labels
+# API (its public URL below; CORS there allows only this site's origin, so PR preview channels can show
+# the page but not use it).
+#
 # The console also serves the web flasher's firmware: every build mirrors the
 # newest stable releases of Jdubz/blinky-firmware into public/firmware/
 # (blinky-server/hosttools/firmware_release.py mirror, through the GitHub API; this
@@ -16,12 +21,14 @@ on:
       - 'blinky-console/**'
       - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
+      - 'corpus'  # the pin the /labels/ page comes from
   pull_request:
     branches: [master]
     paths:
       - 'blinky-console/**'
       - 'blinky-server/hosttools/firmware_release.py'
       - '.github/workflows/blinky-console-deploy.yml'
+      - 'corpus'  # the pin the /labels/ page comes from
   schedule:
     - cron: '17 9 * * *'
   workflow_dispatch:
@@ -63,6 +70,11 @@ jobs:
       - name: Run tests
         run: npm run test:ci
 
+      - name: Drum-label reviewer page (/labels/)
+        env:
+          LABELS_API_URL: https://blinky-labels-api.joshwentworth.com
+        run: node scripts/vendor-labels-page.js
+
       - name: Build
         env:
           # The browser updater (#firmware) is live: blinky-firmware's docs/WEB_FLASHER.md. Set
@@ -102,6 +114,11 @@ jobs:
 
       - name: Install dependencies
         run: rm -f package-lock.json && npm install
+
+      - name: Drum-label reviewer page (/labels/)
+        env:
+          LABELS_API_URL: https://blinky-labels-api.joshwentworth.com
+        run: node scripts/vendor-labels-page.js
 
       - name: Build
         env:
