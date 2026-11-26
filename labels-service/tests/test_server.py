@@ -149,6 +149,33 @@ def test_unreadable_suspect_map_is_said_not_fatal(web, edm):
     assert len(t["onsets"]) == 19
 
 
+def test_notes_two_pages_and_the_file(web, edm):
+    t = web.req("GET", "/api/track?stem=a")[2]
+    assert t["notes"] == []
+    st, _, b = web.ops("a", [{"op": "note_add", "id": "tab-aaaa-n1", "text": "rim shots\tread as <i>hats</i>", "range": [1, 2.5]}])
+    assert st == 200
+    web.ops("a", [{"op": "note_edit", "id": "tab-aaaa-n1", "range": None}], tab="tab-bbbb")
+    pulled = web.req("GET", f"/api/ops?stem=a&since={t['rev']}")[2]
+    assert [(by, op["op"]) for _, by, op in pulled["ops"]] == [("tab-aaaa", "note_add"), ("tab-bbbb", "note_edit")]
+    assert pulled["ops"][0][2]["text"] == "rim shots read as <i>hats</i>"  # cleaned on the server
+    assert web.req("GET", "/api/track?stem=a")[2]["notes"] == [
+        {"id": "tab-aaaa-n1", "text": "rim shots read as <i>hats</i>", "range": None}]
+    doc = json.loads((edm / "drums_human" / "a.drums.json").read_text())
+    assert doc["notes"] == [{"text": "rim shots read as <i>hats</i>", "range": None}]
+    assert labelcheck.check_schema(doc, "a", sha(edm / "a.mp3"), DUR) == []
+
+
+@pytest.mark.parametrize("op", [
+    {"op": "note_add", "id": "n1x", "text": "\u200b", "range": None},
+    {"op": "note_add", "id": "n1x", "text": "x" * 1001, "range": None},
+    {"op": "note_add", "id": "n1x", "text": "x", "range": [5, 99]},
+    {"op": "note_add", "id": "n1x", "text": ["x"], "range": None},
+])
+def test_bad_notes_are_refused(web, op):
+    assert web.ops("a", [op])[0] == 400
+    assert web.req("GET", "/api/track?stem=a")[2]["notes"] == []
+
+
 def test_opening_a_track_doesnt_make_it_human(web):
     web.req("GET", "/api/track?stem=a")
     a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
@@ -247,6 +274,11 @@ def test_hosted_writes_nothing_into_the_clone(hosted_web, edm):
     hosted_web.ops("a", [{"op": "del", "id": "h1"}])
     assert not (edm / "drums_human").exists()
     assert hosted_web.req("GET", "/api/track?stem=a")[2]["unpublished"] is True
+
+
+def test_note_edits_share_the_edit_rate_limit(hosted_web):
+    codes = [hosted_web.ops("a", [{"op": "note_add", "id": f"n-{i}", "text": f"note {i}", "range": None}])[0] for i in range(4)]
+    assert codes == [200, 200, 200, 429]
 
 
 def test_edit_rate_limit(hosted_web):

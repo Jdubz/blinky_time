@@ -234,6 +234,24 @@ def test_vandalism_is_held_back(env):
     assert len(env.events("publish_refused")) == 1  # logged once per version
 
 
+def test_notes_are_published_with_the_labels(env):
+    env.edit("a", {"op": "note_add", "id": "tab-aaaa-n1", "text": "snares under the sweep all dropped", "range": [1.0, 4.0]})
+    out = env.publish()  # a notes-only edit is an edit: the track's file carries them
+    assert json.loads(out["tracks"][A])["notes"] == [{"text": "snares under the sweep all dropped", "range": [1.0, 4.0]}]
+    assert len(json.loads(out["tracks"][A])["onsets"]) == 19
+    env.app.tick()
+    assert env.app.status("a")["unpublished"] is False and env.app.export()["tracks"] == {}
+    env.edit("a", {"op": "note_del", "id": "tab-aaaa-n1"})
+    assert "notes" not in json.loads(env.app.export()["tracks"][A])  # deleting the last one drops the key
+
+
+def test_a_bad_note_is_held_back(env):
+    env.edit("a", {"op": "note_add", "id": "tab-aaaa-n1", "text": "fine", "range": None})
+    env.app.store._load("a")["notes"]["tab-aaaa-n1"]["text"] = "smuggled\u202e"  # past the op checks somehow
+    out = env.app.export()
+    assert out["tracks"] == {} and any("control or format" in p for p in out["held"][A])
+
+
 def test_export_over_http(env):
     env.edit("a", {"op": "del", "id": "h1"})
     s = srv.make_server(env.app, "127.0.0.1", 0)

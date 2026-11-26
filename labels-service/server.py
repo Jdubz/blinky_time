@@ -412,6 +412,7 @@ def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = Non
         "warning": None,
         "error": None,
         "reviewed_ranges": [],
+        "notes": [],
         "complete": False,
         "updated": None,
     }
@@ -425,6 +426,7 @@ def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = Non
             {"time": float(o["time"]), "type": o["type"]} for o in human_onsets(doc, hp.name)
         ]
         out["reviewed_ranges"] = merge_ranges(doc.get("reviewed_ranges") or [])
+        out["notes"] = [n for n in doc.get(labelcheck.NOTES_KEY) or [] if isinstance(n, dict)]
         out["complete"] = bool(doc.get("complete"))
         out["updated"] = doc.get("updated")
         if doc.get("audio_sha256") != sha:
@@ -477,7 +479,7 @@ def initial_state(c: Corpus, stem: str) -> dict[str, Any]:
     return {"onsets": t["onsets"], "reviewed_ranges": t["reviewed_ranges"],
             "started_from": t["started_from"], "seed": t["seed"], "audio_sha256": t["audio_sha256"],
             "duration": (human or {}).get("duration") or t["manifest_duration"],
-            "updated": t["updated"],
+            "updated": t["updated"], "notes": (human or {}).get(labelcheck.NOTES_KEY) or [],
             "base_blob": hosted.git_blob_sha(hp.read_bytes()) if hp.is_file() else None}
 
 
@@ -688,7 +690,7 @@ class App:
         self.store.import_doc(stem, {
             "onsets": [o for o in doc.get("onsets", []) if o.get("type") in LABEL_TYPES],
             "reviewed_ranges": doc.get("reviewed_ranges") or [], "started_from": doc.get("started_from"),
-            "seed": "human", "audio_sha256": doc["audio_sha256"],
+            "notes": doc.get(labelcheck.NOTES_KEY) or [], "seed": "human", "audio_sha256": doc["audio_sha256"],
             "duration": doc.get("duration") or self.c.manifest_duration(stem), "updated": doc.get("updated"),
             "base_blob": hosted.git_blob_sha(hp.read_bytes()) if hp.is_file() else None})
         if self.store.on_change:

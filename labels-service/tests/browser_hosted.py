@@ -7,8 +7,9 @@ on another (CORS). CI runs it with Playwright's Chromium:
 Each person's edit shows up on the other's page within a few seconds, nothing has a Save button,
 and the service's export offers the result to the corpus. The suspect strip, Next suspect, the
 "suspect first" review order and the expected-hit markers work (a clicked marker becomes a label on
-both pages; markers are never saved), and the page still works against an API that doesn't send
-the suspect map yet. Fails on any page error.
+both pages; markers are never saved), reviewer notes sync between pages and are published with the
+labels, and the page still works against an API that doesn't send the suspect map or notes yet.
+Fails on any page error.
 """
 
 from __future__ import annotations
@@ -54,17 +55,19 @@ def main() -> None:
         def person(name: str, old_api: bool = False):
             ctx = browser.new_context()
             ctx.add_init_script(f"localStorage.setItem({HELP_SEEN!r}, '1');")
-            if old_api:  # an API from before the suspect map: /api/track and /api/tracks without it
+            if old_api:  # an API from before the suspect map and notes: /api/track and /api/tracks without them
                 def strip(route):
                     r = route.fetch()
                     body = r.json()
                     body.pop("suspect", None)
+                    body.pop("notes", None)
                     for t in body.get("tracks", []):
                         t.pop("suspect_s", None)
                         t.pop("suspect_left", None)
                     route.fulfill(response=r, json=body)
                 ctx.route(lambda url: "/api/track?" in url or url.endswith("/api/tracks"), strip)
             page = ctx.new_page()
+            page.on("dialog", lambda d: d.accept())  # "Delete this note for everyone?"
             page.on("pageerror", lambda e: errors.append(f"{name}: {e}"))
             page.on("console", lambda m: m.type == "error" and not m.text.startswith(
                 "Failed to load resource: the server responded with a status of 4") and errors.append(f"{name}: {m.text}"))
@@ -148,6 +151,44 @@ def main() -> None:
         a.wait_for_function("S.reviewed.some(([x, y]) => x <= 21 && y >= 25)", timeout=15000)
         check(True, "A sees C's review from the old-API page")
         check(c.evaluate("S.onsets.length") == n_final, "C sees the same labels")
+
+        # --- reviewer notes
+        check(a.locator("#btn-note-add").is_visible(), "there's a visible Add note button")
+        a.evaluate("S.region = [10, 12]; drawAll()")
+        a.click("#btn-note-add")
+        a.fill("#note-text", "snares under the <b>sweep</b>  dropped")
+        a.press("#note-text", "Enter")
+        check(a.evaluate("S.notes.length === 1 && S.notes[0].range[0] === 10 && S.notes[0].range[1] === 12"),
+              "A adds a note on the selected region")
+        a.wait_for_function("!syncPending()", timeout=15000)
+        b.wait_for_function("S.notes.some(n => n.text === 'snares under the <b>sweep</b> dropped')", timeout=15000)
+        check(True, "B sees A's note within seconds (cleaned: one space)")
+        check(b.locator("#notes-list b").count() == 0 and "&lt;b&gt;" in b.inner_html("#notes-list"),
+              "the note is shown as text, not HTML")
+        b.locator("#notes-list li", has_text="sweep").get_by_role("button", name="Edit").click()
+        b.fill("#note-text", "snares under the filter sweep all dropped")
+        b.click("#note-save")
+        b.wait_for_function("!syncPending()", timeout=15000)
+        a.wait_for_function("S.notes.some(n => n.text === 'snares under the filter sweep all dropped')", timeout=15000)
+        check(True, "A sees B's edit")
+        a.evaluate("S.region = null; S.sel.clear()")
+        a.click("#btn-note-add")
+        a.fill("#note-text", "rim shots read as hats")
+        a.click("#note-save")
+        check(a.evaluate("S.notes.some(n => n.text === 'rim shots read as hats' && n.range === null)"), "a whole-track note")
+        a.wait_for_function("!syncPending()", timeout=15000)
+        a.evaluate("setView(60, 6)")
+        a.locator("#notes-list .when:not(.whole)").click()
+        check(a.evaluate("S.region[0] === 10 && S.region[1] === 12 && S.view.start <= 10 && S.view.start + S.view.dur >= 12"),
+              "clicking a note jumps to its range")
+        b.wait_for_function("S.notes.length === 2", timeout=15000)
+        b.locator("#notes-list li", has_text="rim shots").get_by_role("button", name="Delete").click()
+        b.wait_for_function("!syncPending()", timeout=15000)
+        a.wait_for_function("S.notes.length === 1", timeout=15000)
+        check(True, "A sees B delete a note")
+        c.wait_for_timeout(4000)  # a few pulls of note operations
+        check(c.locator("#btn-note-add").is_disabled() and "updated reviewer server" in c.inner_text("#notes-hint")
+              and c.evaluate("S.notes.length") == 0, "old API: the notes panel is off and says why")
         browser.close()
 
     deadline = time.monotonic() + 60
@@ -160,6 +201,8 @@ def main() -> None:
     doc = json.loads(next(iter(exp["tracks"].values())))
     check(len(doc["onsets"]) == n_final and "suspect" not in doc and "expected" not in doc,
           f"the published file has the {n_final} labels and no markers or suspect data")
+    check(doc.get("notes") == [{"text": "snares under the filter sweep all dropped", "range": [10.0, 12.0]}],
+          "and the remaining note")
     check(not errors, "no page errors" + ("" if not errors else ": " + " | ".join(errors[:5])))
     print("browser: all checks passed")
 

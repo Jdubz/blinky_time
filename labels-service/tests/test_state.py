@@ -145,3 +145,76 @@ def test_reset_and_import(store):
     assert [o["time"] for o in store.view("a")["onsets"]] == [4.0] and v["onsets"][0]["id"] == "r2h1"
     store.import_doc("b", init(onsets=((5.0, "snare"),)))
     assert store.edited_since_base("b") and store.view("b")["rev"] == 1  # an import is an edit: it gets published
+
+
+# --- reviewer notes ----------------------------------------------------------------------------
+
+
+def test_note_operations(store):
+    rev = apply(store, {"op": "note_add", "id": "tab-aaaa-n1", "text": "snares under the sweep all dropped", "range": [1.0, 4.5]},
+                {"op": "note_add", "id": "tab-aaaa-n2", "text": "rim shots read as hats", "range": None})
+    assert rev == 2 and store.edited_since_base("a")
+    apply(store, {"op": "note_edit", "id": "tab-aaaa-n1", "text": "snares under the sweep dropped"},
+          {"op": "note_edit", "id": "tab-aaaa-n2", "range": [0.5, 1.0]})
+    assert store.view("a")["notes"] == [
+        {"id": "tab-aaaa-n1", "text": "snares under the sweep dropped", "range": [1.0, 4.5]},
+        {"id": "tab-aaaa-n2", "text": "rim shots read as hats", "range": [0.5, 1.0]}]
+    apply(store, {"op": "note_edit", "id": "tab-aaaa-n2", "range": None}, {"op": "note_del", "id": "tab-aaaa-n1"})
+    assert store.view("a")["notes"] == [{"id": "tab-aaaa-n2", "text": "rim shots read as hats", "range": None}]
+    rev = store.view("a")["rev"]
+    assert apply(store, {"op": "note_del", "id": "tab-aaaa-n1"}) == rev  # gone already: nothing changes
+    doc = store.doc("a")
+    assert doc["notes"] == [{"text": "rim shots read as hats", "range": None}]
+    assert labelcheck.check_notes(doc["notes"], DUR) == []
+    assert '"notes": [\n    {"text": "rim shots read as hats", "range": null}\n  ],' in store.text("a")
+
+
+def test_note_text_is_cleaned(store):
+    apply(store, {"op": "note_add", "id": "n-x", "text": "  two\nlines‮ and\x00 a <b>tag</b>  ", "range": None})
+    assert store.view("a")["notes"][0]["text"] == "two lines and a <b>tag</b>"  # plain text, kept as text
+
+
+@pytest.mark.parametrize("op", [
+    {"op": "note_add", "id": "n-x", "text": "", "range": None},
+    {"op": "note_add", "id": "n-x", "text": " ​\x07 ", "range": None},  # nothing left after cleaning
+    {"op": "note_add", "id": "n-x", "text": "x" * (labelcheck.MAX_NOTE_CHARS + 1), "range": None},
+    {"op": "note_add", "id": "n-x", "text": 5, "range": None},
+    {"op": "note_add", "id": "n-x", "text": "x"},  # no range key
+    {"op": "note_add", "id": "n-x", "text": "x", "range": [2.0, 1.0]},
+    {"op": "note_add", "id": "n-x", "text": "x", "range": [0.0, DUR + 5]},
+    {"op": "note_add", "id": "n-x", "text": "x", "range": "0-1"},
+    {"op": "note_add", "id": "n x", "text": "x", "range": None},
+    {"op": "note_edit", "id": "n-x"},
+])
+def test_bad_note_operations_are_refused(store, op):
+    with pytest.raises(state.OpError):
+        apply(store, op)
+    assert store.view("a")["rev"] == 0
+
+
+def test_note_cap(store):
+    apply(store, *[{"op": "note_add", "id": f"n-{i}", "text": f"note {i}", "range": None} for i in range(labelcheck.MAX_NOTES)])
+    with pytest.raises(state.OpError, match="at most"):
+        apply(store, {"op": "note_add", "id": "n-extra", "text": "one too many", "range": None})
+    apply(store, {"op": "note_add", "id": "n-0", "text": "re-adding an existing id edits it", "range": None})
+    assert len(store.view("a")["notes"]) == labelcheck.MAX_NOTES
+
+
+def test_notes_from_the_human_file_and_a_reset(tmp_path):
+    notes = [{"text": "from main", "range": [1.0, 2.0]}]
+    s = state.TrackStore(tmp_path / "t", lambda stem: init(notes=notes))
+    assert s.view("a")["notes"] == [{"id": "n1", "text": "from main", "range": [1.0, 2.0]}]
+    assert s.doc("a")["notes"] == notes
+    s.reset("a", init(notes=[{"text": "reverted", "range": None}]))
+    assert s.view("a")["notes"] == [{"id": "r1n1", "text": "reverted", "range": None}]
+
+
+def test_a_state_from_before_notes_loads(tmp_path):
+    s = state.TrackStore(tmp_path / "t", lambda stem: init())
+    s.view("a")
+    s._save(s._load("a"))
+    raw = json.loads((tmp_path / "t" / "a.json").read_text())
+    raw.pop("notes")
+    (tmp_path / "t" / "a.json").write_text(json.dumps(raw))
+    s2 = state.TrackStore(tmp_path / "t", lambda stem: init())
+    assert s2.view("a")["notes"] == [] and "notes" not in s2.doc("a")

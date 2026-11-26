@@ -15,7 +15,7 @@
   :root {
     --bg: #14161c; --panel: #1c1f27; --panel2: #242833; --line: #333846; --text: #e3e6ee; --dim: #8a90a0;
     --kick: #ff9f1c; --snare: #3ec5ff; --hihat: #9aa0ad; --sel: #ffffff; --rev: #2bb673; --unrev: #5a2a2a;
-    --warn: #e0a800; --err: #e5484d; --region: rgba(120,160,255,0.18); --play: #ff4d6d;
+    --warn: #e0a800; --err: #e5484d; --region: rgba(120,160,255,0.18); --play: #ff4d6d; --note: #b48cff;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -82,6 +82,17 @@
   #tracks tbody tr:hover td { background: var(--panel2); }
   .bar { display: inline-block; width: 80px; height: 8px; background: var(--unrev); border-radius: 4px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
   .bar > i { display: block; height: 100%; background: var(--rev); }
+  #notes-box { grid-column: 1 / -1; }
+  #notes-box .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+  #note-form { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; background: var(--panel2); }
+  #note-text { width: 100%; padding: 4px 6px; background: var(--bg); }
+  #notes-list { list-style: none; margin: 6px 0 0; padding: 0; }
+  #notes-list li { display: flex; gap: 10px; align-items: baseline; padding: 4px 0; border-top: 1px solid #262a35; }
+  #notes-list li:first-child { border-top: 0; }
+  #notes-list .when { color: var(--note); cursor: pointer; text-decoration: underline; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
+  #notes-list .when.whole { text-decoration: none; cursor: default; color: var(--dim); }
+  #notes-list .txt { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #notes-list button { padding: 0 6px; font-size: 12px; }
   .sus-high { color: var(--err); } .sus-med { color: var(--warn); }
   .swatch { display: inline-block; width: 18px; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #000d; padding: 6px 14px; border-radius: 6px; display: none; z-index: 20; }
@@ -126,6 +137,15 @@
   <div class="box"><h3>Selection</h3><div id="info-sel" class="mono">—</div></div>
   <div class="box"><h3>Offset check (label → snap target, ±25 ms)</h3><div id="info-offset" class="mono">—</div></div>
   <div class="box"><h3>Checks</h3><div id="info-checks" class="mono">—</div></div>
+  <div class="box" id="notes-box"><h3>Notes <span id="notes-count"></span></h3>
+    <div class="row"><button id="btn-note-add" title="Write down a pattern you noticed. Everyone sees it, and it's published with the labels.">Add note</button><span class="dim" id="notes-hint">Patterns you notice while fixing labels, e.g. "snares under the filter sweep all dropped" or "the rim shots are labelled as nothing". Shared with everyone and published with the labels; they help tune the automatic labels.</span></div>
+    <div id="note-form" style="display:none">
+      <input type="text" id="note-text" maxlength="1000" placeholder="What did you notice? (plain text, up to 1000 characters)" autocomplete="off">
+      <div class="row"><span>Applies to:</span><span id="note-range" class="mono"></span><button id="note-range-use" title="Use the selected region, or the span of the selected hits">use selection</button><button id="note-range-clear" title="The note is about the whole track">whole track</button></div>
+      <div class="row"><button class="primary" id="note-save">Save note (Enter)</button><button id="note-cancel">Cancel (Esc)</button></div>
+    </div>
+    <ul id="notes-list"></ul>
+  </div>
 </div>
 <div id="settings" class="modal-bg"><div class="modal" role="dialog" aria-label="Settings">
   <div class="modal-head"><h2>Settings</h2><span class="dim">remembered in this browser</span><span class="spacer"></span><button id="btn-settings-close">Close (Esc)</button></div>
@@ -166,11 +186,13 @@
         <li><em>nudge:</em> <kbd>←</kbd> / <kbd>→</kbd> by 1 ms.</li>
       </ul></li>
     <li><strong>Mark the screen reviewed</strong> with <em>Reviewed → next</em> (<kbd>Enter</kbd>). It moves on one screen. Green in the bottom lane and the overview shows what you've covered; <kbd>U</kbd> jumps to anything skipped.</li>
+    <li><strong>Write down patterns you notice</strong> in <em>Notes</em> (under the lanes), for example "snares under the filter sweep all dropped". <em>Add note</em> attaches it to the selected region, or to the whole track. Notes show as violet marks on the time ruler and the overview; click one in the list to jump there. Everyone sees them and anyone can edit or delete them; they're published with the labels and help tune the automatic labels.</li>
     <li><strong>That's it: there's no Save.</strong> Every change saves by itself, and everyone works on the same labels: other people's changes show up within a few seconds. The labels are published to the corpus every few minutes; the scorer uses a track once it's 100% reviewed.</li>
   </ol>
   <h3>What you're looking at</h3>
   <table class="lanes">
-    <tr><td>overview</td><td>The whole track. Green is reviewed, red and amber are suspect bars; the box is the current view. Click to jump.</td></tr>
+    <tr><td>overview</td><td>The whole track. Green is reviewed, red and amber are suspect bars, violet is notes; the box is the current view. Click to jump.</td></tr>
+    <tr><td>time ruler</td><td>Seconds. Violet bars under it are notes: hover one to read it.</td></tr>
     <tr><td>spectrogram</td><td>Frequency over time, 30 Hz–12 kHz. Drums show as vertical streaks.</td></tr>
     <tr><td>waveform</td><td>The full mix. Every label is drawn through it as a line.</td></tr>
     <tr><td class="k">kick lane</td><td>The 30–150 Hz band: the fill is its loudness, the line its onset strength. Peaks in the line are likely kicks. Kick labels are the markers.</td></tr>
@@ -343,13 +365,13 @@ const LANES = [
 let y0 = 0; for (const l of LANES) { l.y = y0; y0 += l.h; }
 const STACK_H = y0;
 const LANE = Object.fromEntries(LANES.map(l => [l.id, l]));
-const COL = { kick: "#ff9f1c", snare: "#3ec5ff", hihat: "#9aa0ad", sel: "#ffffff", rev: "#2bb673", unrev: "#5a2a2a", play: "#ff4d6d", cursor: "#ffd75e", high: "#e5484d", medium: "#e0a800" };
+const COL = { kick: "#ff9f1c", snare: "#3ec5ff", hihat: "#9aa0ad", sel: "#ffffff", rev: "#2bb673", unrev: "#5a2a2a", play: "#ff4d6d", cursor: "#ffd75e", high: "#e5484d", medium: "#e0a800", note: "#b48cff" };
 
 const $ = (id) => document.getElementById(id);
 const S = {
   tracks: [], stem: null, meta: null,
   buf: null, sr: 44100, duration: 0, ana: null, analyzing: "",
-  onsets: [], reviewed: [], sel: new Set(),
+  onsets: [], reviewed: [], sel: new Set(), notes: [],
   undo: [], redo: [],
   view: { start: 0, dur: DEFAULT_VIEW }, prevZoom: null,
   cursor: 0, region: null, hover: null, hoverHit: null, hoverExp: null, drag: null, flash: null,
@@ -477,6 +499,76 @@ function acceptKey() {
   toast("point at a hollow expected-hit marker, or select a region, then press A");
 }
 
+// ---------------------------------------------------------------- reviewer notes (shared, published with the labels)
+// Plain text only: shown with textContent, never as HTML. The server cleans every note the same way
+// (labelcheck.clean_note_text) and its version comes back with the next pull. An API without notes
+// (no "notes" in /api/track) means the panel is off: nothing is sent.
+const NOTE_MAX = 1000;
+const NF = { open: false, id: null, range: null };
+function notesOk() { return !!(S.meta && Array.isArray(S.meta.notes)); }
+function cleanNote(t) { return String(t).replace(/[\p{Cc}\u2028\u2029]/gu, " ").replace(/[\p{Cf}\p{Cs}\p{Co}\p{Cn}]/gu, "").split(/\s+/).filter(Boolean).join(" "); }
+function sameRange(a, b) { return (a === null && b === null) || (!!a && !!b && a[0] === b[0] && a[1] === b[1]); }
+function rangeText(r) { return r ? `${fmtTime(r[0])} – ${fmtTime(r[1])}` : "whole track"; }
+function selectionRange() {
+  const r3 = (x) => +clamp(x, 0, S.duration).toFixed(3);
+  if (S.region && S.region[1] - S.region[0] > 0.01) return [r3(S.region[0]), r3(S.region[1])];
+  const sel = selected();
+  if (sel.length) { const a = r3(sel[0].time - 0.05), b = r3(sel[sel.length - 1].time + 0.05); if (b > a) return [a, b]; }
+  return null;
+}
+function openNoteForm(n) {
+  if (!S.duration) return;
+  if (!notesOk()) return toast("notes need the updated reviewer server: reload in a few minutes");
+  NF.open = true; NF.id = n ? n.id : null; NF.range = n ? n.range : selectionRange();
+  $("note-form").style.display = ""; $("note-text").value = n ? n.text : ""; renderNoteRange(); $("note-text").focus();
+}
+function closeNoteForm() { NF.open = false; NF.id = null; $("note-form").style.display = "none"; $("note-text").blur(); }
+function renderNoteRange() { $("note-range").textContent = rangeText(NF.range); }
+function saveNote() {
+  const text = cleanNote($("note-text").value);
+  if (!text) return toast("write something first (plain text)");
+  if (text.length > NOTE_MAX) return toast(`a note is at most ${NOTE_MAX} characters`);
+  if (viewOnly()) return;
+  const range = NF.range ? [NF.range[0], NF.range[1]] : null;
+  if (NF.id) { const n = S.notes.find(x => x.id === NF.id); if (!n) { closeNoteForm(); return toast("someone deleted that note"); } n.text = text; n.range = range; }
+  else S.notes.push({ id: newId(), text, range });
+  closeNoteForm(); renderNotes(); scheduleSync(); drawAll(); toast("note saved: everyone sees it");
+}
+function deleteNote(id) {
+  if (viewOnly()) return;
+  if (!window.confirm("Delete this note for everyone?")) return;
+  S.notes = S.notes.filter(n => n.id !== id); renderNotes(); scheduleSync(); drawAll();
+}
+function jumpNote(n) {
+  if (!n.range || !S.duration) return;
+  const [a, b] = n.range, pad = 0.05 * (b - a) + 0.1;
+  S.region = [a, b]; S.cursor = a; setView(a - pad, Math.max(MIN_VIEW, b - a + 2 * pad)); restartIfPlaying(a); updateInfo();
+}
+function sortedNotes() { return [...S.notes].sort((x, y) => (x.range ? x.range[0] : -1) - (y.range ? y.range[0] : -1)); }
+function renderNotes() {
+  const ok = notesOk(), list = $("notes-list");
+  $("btn-note-add").disabled = !ok || !S.duration;
+  $("notes-count").textContent = S.notes.length ? `(${S.notes.length})` : "";
+  if (S.meta && !ok) $("notes-hint").textContent = "Notes need the updated reviewer server, which is on its way: reload the page in a few minutes.";
+  list.textContent = "";
+  for (const n of sortedNotes()) {
+    const li = document.createElement("li"), when = document.createElement("span"), txt = document.createElement("span");
+    when.className = "when" + (n.range ? "" : " whole"); when.textContent = rangeText(n.range);
+    if (n.range) { when.title = "jump there"; when.onclick = () => jumpNote(n); }
+    txt.className = "txt"; txt.textContent = n.text;  // text, never HTML
+    const ed = document.createElement("button"), del = document.createElement("button");
+    ed.textContent = "Edit"; ed.onclick = () => openNoteForm(n);
+    del.textContent = "Delete"; del.onclick = () => deleteNote(n.id);
+    li.append(when, txt, ed, del); list.appendChild(li);
+  }
+}
+function noteAt(t) { return S.notes.find(n => n.range && n.range[0] <= t && t <= n.range[1]) || null; }
+$("btn-note-add").onclick = () => openNoteForm(null);
+$("note-save").onclick = saveNote; $("note-cancel").onclick = closeNoteForm;
+$("note-range-use").onclick = () => { const r = selectionRange(); if (!r) return toast("drag in the lanes to select a region first"); NF.range = r; renderNoteRange(); };
+$("note-range-clear").onclick = () => { NF.range = null; renderNoteRange(); };
+$("note-text").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); saveNote(); } else if (e.key === "Escape") { e.preventDefault(); closeNoteForm(); } });
+
 // ---------------------------------------------------------------- canvases & view
 const cvMain = $("main"), cvOv = $("overlay"), cvOver = $("overview");
 let W = 800, DPR = 1;
@@ -527,6 +619,7 @@ function drawMain() {
   for (const l of LANES) { g.fillStyle = l.id === "kick" || l.id === "snare" ? "#11141b" : "#0d0f14"; g.fillRect(0, l.y, W, l.h); g.fillStyle = "#262a35"; g.fillRect(0, l.y + l.h - 1, W, 1); }
   if (!S.duration) { g.fillStyle = "#8a90a0"; g.fillText(S.analyzing || "Open a track (T)", 12, 40); return; }
   drawRuler(g);
+  drawNotes(g);
   if (S.ana) { drawSpec(g); drawLaneEnv(g, "kick", S.ana.low, COL.kick); drawLaneEnv(g, "snare", S.ana.mid, COL.snare); }
   else { g.fillStyle = "#8a90a0"; g.fillText(S.analyzing || "analysing…", 12, LANE.spec.y + 20); }
   drawWave(g);
@@ -617,6 +710,17 @@ function drawReviewed(g) {
   g.fillStyle = COL.rev;
   for (const [a, b] of S.reviewed) { if (b < S.view.start || a > S.view.start + S.view.dur) continue; const x0 = t2x(a), x1 = t2x(b); g.fillRect(x0, L.y + 2, Math.max(1, x1 - x0), L.h - 4); g.globalAlpha = 0.07; g.fillRect(x0, LANE.ruler.y, x1 - x0, LANE.rev.y); g.globalAlpha = 1; }
 }
+function drawNotes(g) {
+  const L = LANE.ruler, v0 = S.view.start, v1 = S.view.start + S.view.dur;
+  g.fillStyle = COL.note;
+  for (const n of S.notes) {
+    if (!n.range || n.range[1] < v0 || n.range[0] > v1) continue;
+    const x0 = t2x(n.range[0]), x1 = t2x(n.range[1]);
+    g.globalAlpha = 0.6; g.fillRect(x0, L.y + L.h - 5, Math.max(2, x1 - x0), 4);
+    g.globalAlpha = 1; g.fillRect(x0, L.y + 2, 2, L.h - 3);
+  }
+  g.globalAlpha = 1;
+}
 function drawSuspect(g) {
   const L = LANE.sus, v0 = S.view.start, v1 = S.view.start + S.view.dur;
   for (const b of susBars()) {
@@ -690,6 +794,15 @@ function drawOverlay() {
     g.beginPath(); g.moveTo(x - 7, L.y + 10); g.lineTo(x + 7, L.y + 10); g.lineTo(x, L.y + 22); g.closePath(); g.stroke(); g.lineWidth = 1;
     g.font = "10px system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.fillText(`expected ${e.type}: click to add it as a label`, x + 9, L.y + L.h - 14);
   }
+  if (S.hover && S.hover.lane === "ruler" && !S.drag) {
+    const n = noteAt(S.hover.t);
+    if (n) {
+      const text = "note: " + (n.text.length > 140 ? n.text.slice(0, 139) + "…" : n.text);
+      g.font = "11px system-ui, sans-serif"; const w = g.measureText(text).width + 12, x = clamp(S.hover.x - w / 2, 2, W - w - 2), y = LANE.ruler.y + LANE.ruler.h + 2;
+      g.fillStyle = "#000d"; g.fillRect(x, y, w, 18); g.strokeStyle = COL.note; g.strokeRect(x + 0.5, y + 0.5, w - 1, 17);
+      g.fillStyle = "#ffffff"; g.fillText(text, x + 6, y + 13);
+    }
+  }
   if (S.hover && S.hover.lane === "sus" && !S.drag) {
     const b = susAt(S.hover.t);
     if (b) {
@@ -720,6 +833,8 @@ function drawOverview() {
     g.fillRect(ox(b.start), 26, Math.max(1, ox(b.end) - ox(b.start)), 4);
   }
   g.globalAlpha = 1;
+  g.fillStyle = COL.note;
+  for (const n of S.notes) if (n.range) { g.fillRect(ox(n.range[0]), 0, Math.max(2, ox(n.range[1]) - ox(n.range[0])), 3); }
   g.fillStyle = COL.unrev; g.fillRect(0, 31, W, 4); g.fillStyle = COL.rev;
   for (const [a, b] of S.reviewed) g.fillRect(ox(a), 31, Math.max(1, ox(b) - ox(a)), 4);
   g.strokeStyle = "#ffd75e"; g.lineWidth = 1; g.strokeRect(ox(S.view.start) + 0.5, 0.5, Math.max(2, ox(S.view.dur) - 1), 35);
@@ -946,7 +1061,8 @@ async function openTrack(stem) {
   S.onsets = (meta.onsets || []).map(o => ({ id: o.id, time: +o.time, type: o.type }));
   sortOnsets();
   S.reviewed = mergeRanges(meta.reviewed_ranges || []);
-  syncReset(meta);
+  S.notes = (meta.notes || []).map(n => ({ id: n.id, text: n.text, range: n.range ? [n.range[0], n.range[1]] : null }));
+  syncReset(meta); closeNoteForm(); renderNotes();
   $("trackname").textContent = stem;
   const badge = $("seedbadge"); badge.style.display = "";
   badge.className = `badge ${meta.seed === "human" || meta.edited ? "human" : meta.seed === "empty" ? "empty" : seedBad(meta.seed) ? "bad" : "seed"}`;
@@ -970,7 +1086,7 @@ async function openTrack(stem) {
   if (meta.manifest_duration && Math.abs(meta.manifest_duration - S.duration) > 0.5) {
     bw.className = "banner warn"; bw.textContent = `⚠ decoded duration ${S.duration.toFixed(3)} s differs from track_manifest.json (${meta.manifest_duration.toFixed(3)} s): check the decoder before trusting timing. ` + (meta.warning || "");
   }
-  clampView(); updateInfo(); S.analyzing = "analysing…"; drawAll();
+  clampView(); updateInfo(); renderNotes(); S.analyzing = "analysing…"; drawAll();
   runAnalysis(stem);
 }
 let worker = null;
@@ -999,11 +1115,12 @@ function runAnalysis(stem) {
 const TAB = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 let hitSeq = 0;
 function newId() { return `${TAB}-${(++hitSeq).toString(36)}`; }
-const SY = { rev: 0, known: new Map(), knownRanges: [], sending: false, timer: null, pulling: false, published: null, unpublished: false, error: "" };
+const SY = { rev: 0, known: new Map(), knownRanges: [], knownNotes: new Map(), sending: false, timer: null, pulling: false, published: null, unpublished: false, error: "" };
 function syncReset(meta) {
   SY.rev = meta.rev || 0; SY.error = "";
   SY.known = new Map((meta.onsets || []).map(o => [o.id, { time: +o.time, type: o.type }]));
   SY.knownRanges = mergeRanges(meta.reviewed_ranges || []);
+  SY.knownNotes = new Map((meta.notes || []).map(n => [n.id, { text: n.text, range: n.range || null }]));
   SY.published = meta.published; SY.unpublished = meta.unpublished;
 }
 function rangeMinus(A, B) {  // the parts of ranges A not covered by ranges B
@@ -1022,10 +1139,20 @@ function diffOps() {
   const lim = (x) => +clamp(x, 0, S.duration || x).toFixed(3);
   for (const [a, b] of rangeMinus(S.reviewed, SY.knownRanges)) ops.push({ op: "review", a: lim(a), b: lim(b), on: true });
   for (const [a, b] of rangeMinus(SY.knownRanges, S.reviewed)) ops.push({ op: "review", a: lim(a), b: lim(b), on: false });
+  if (notesOk()) {
+    const curN = new Map(S.notes.map(n => [n.id, n]));
+    for (const id of SY.knownNotes.keys()) if (!curN.has(id)) ops.push({ op: "note_del", id });
+    for (const n of S.notes) {
+      const k = SY.knownNotes.get(n.id);
+      if (!k) ops.push({ op: "note_add", id: n.id, text: n.text, range: n.range });
+      else if (k.text !== n.text || !sameRange(k.range, n.range)) ops.push({ op: "note_edit", id: n.id, text: n.text, range: n.range });
+    }
+  }
   return ops.filter(o => o.op !== "review" || o.b > o.a);
 }
 function syncPending() { return !!S.meta && !S.meta.error && (SY.sending || diffOps().length > 0); }
 function applyOp(st, op) {  // st: { onsets: [...], reviewed: [...] }: one operation, in place
+  if (op.op.startsWith("note_")) return;  // notes aren't labels: never in an undo snapshot
   if (op.op === "review") {
     if (op.on) st.reviewed = mergeRanges([...st.reviewed, [op.a, op.b]]); else st.reviewed = rangeMinus(st.reviewed, [[op.a, op.b]]);
     return;
@@ -1036,7 +1163,19 @@ function applyOp(st, op) {  // st: { onsets: [...], reviewed: [...] }: one opera
   if (i < 0) return;
   if (op.op === "move") st.onsets[i].time = op.time; else if (op.op === "type") st.onsets[i].type = op.type;
 }
+function applyNote(notes, op) {  // one note operation on a list of notes, in place
+  const i = notes.findIndex(n => n.id === op.id);
+  if (op.op === "note_del") { if (i >= 0) notes.splice(i, 1); return; }
+  if (op.op === "note_add") { const n = { id: op.id, text: op.text, range: op.range || null }; if (i >= 0) notes[i] = n; else notes.push(n); return; }
+  if (i < 0) return;
+  if ("text" in op) notes[i].text = op.text;
+  if ("range" in op) notes[i].range = op.range || null;
+}
 function knownApply(op) {
+  if (op.op.startsWith("note_")) {
+    const list = [...SY.knownNotes].map(([id, k]) => ({ id, ...k })); applyNote(list, op);
+    SY.knownNotes = new Map(list.map(n => [n.id, { text: n.text, range: n.range }])); return;
+  }
   if (op.op === "review") { const st = { onsets: [], reviewed: SY.knownRanges }; applyOp(st, op); SY.knownRanges = st.reviewed; return; }
   if (op.op === "del") SY.known.delete(op.id);
   else if (op.op === "add") SY.known.set(op.id, { time: op.time, type: op.type });
@@ -1075,10 +1214,19 @@ async function pullOps() {
       S.meta = { ...S.meta, ...m };
       S.onsets = m.onsets.map(o => ({ id: o.id, time: +o.time, type: o.type })); sortOnsets();
       S.reviewed = mergeRanges(m.reviewed_ranges || []); S.undo = []; S.redo = []; S.sel.clear();
-      syncReset(m); drawAll(); updateInfo(); toast("this track was reloaded from the server"); return;
+      S.notes = (m.notes || []).map(n => ({ id: n.id, text: n.text, range: n.range || null })); closeNoteForm();
+      syncReset(m); renderNotes(); drawAll(); updateInfo(); toast("this track was reloaded from the server"); return;
     }
-    let changed = false;
+    let changed = false, notesChanged = false;
     for (const [rev, by, op] of r.ops) {
+      if (op.op.startsWith("note_")) {  // a note we've changed but not sent yet keeps our version
+        if (!notesOk()) continue;  // the panel is off for this server
+        const k = SY.knownNotes.get(op.id), n = S.notes.find(x => x.id === op.id);
+        const mineN = (!!k !== !!n) || (k && n && (k.text !== n.text || !sameRange(k.range, n.range)));
+        knownApply(op);
+        if (!mineN) { applyNote(S.notes, op); notesChanged = true; }
+        continue;
+      }
       // Every operation goes through here in the server's order, our own included: then a slower
       // edit of someone else's that the server applied before ours can't overwrite ours on this page.
       // A hit we've changed but not sent yet keeps our version (ours goes up next and wins).
@@ -1090,6 +1238,7 @@ async function pullOps() {
       changed = true;
     }
     SY.rev = r.rev;
+    if (notesChanged) { renderNotes(); if (NF.open && NF.id && !S.notes.some(n => n.id === NF.id)) { closeNoteForm(); toast("someone deleted the note you were editing"); } if (!changed) drawAll(); }
     if (changed) { sortOnsets(); for (const id of [...S.sel]) if (!S.onsets.some(o => o.id === id)) S.sel.delete(id); drawAll(); updateInfo(); }
     else updateStatus();
   } catch (e) { /* offline for a moment: the next pull catches up */ } finally { SY.pulling = false; }
@@ -1209,7 +1358,8 @@ cvOv.addEventListener("wheel", (e) => {
 cvOver.addEventListener("mousemove", (e) => {
   if (!S.duration) return;
   const b = susAt((e.clientX - cvOver.getBoundingClientRect().left) / W * S.duration);
-  cvOver.title = b ? suspectWhy(b) + (barReviewed(b) ? " (reviewed)" : "") : "The whole track: click to jump";
+  const t = (e.clientX - cvOver.getBoundingClientRect().left) / W * S.duration, n = noteAt(t);
+  cvOver.title = [n ? "note: " + n.text : "", b ? suspectWhy(b) + (barReviewed(b) ? " (reviewed)" : "") : ""].filter(Boolean).join("\n") || "The whole track: click to jump";
 });
 function overviewSeek(e) { const r = cvOver.getBoundingClientRect(), t = (e.clientX - r.left) / W * S.duration; setView(t - S.view.dur / 2); }
 cvOver.addEventListener("mousedown", (e) => { if (!S.duration) return; overviewSeek(e); const mv = (ev) => overviewSeek(ev), up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); }; window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up); });
