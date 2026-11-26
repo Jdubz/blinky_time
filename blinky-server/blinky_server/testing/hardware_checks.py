@@ -292,14 +292,11 @@ def judge_deploy(deploy: dict[str, Any], before: dict[str, str | None]) -> tuple
 
 @durable.step
 async def upload_checks(
-    device_ids: list[str],
-    expected: str | None,
-    flash_t: float | None,
-    deployed: bool,
-    board_of: dict[str, str | None],
+    device_ids: list[str], expected: str | None, board_of: dict[str, str | None]
 ) -> dict[str, Any]:
     """Version, configured, stable past the window, json info sane. Waits until every chip has
-    run STABLE_UPTIME_S, polling for a reboot meanwhile."""
+    run STABLE_UPTIME_S, polling for a reboot meanwhile (a crash loop after the flash shows as
+    an uptime that falls back)."""
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
     for d in await _connected(device_ids):
@@ -353,10 +350,6 @@ async def upload_checks(
             if ms < last:
                 rebooted = True
             last = ms
-        if flash_t is not None:
-            # No reset since the flash: uptime covers the wall time since then, less boot.
-            want = (time.time() - flash_t) * 1000 - REBOOT_SLACK_MS - 30_000
-            rebooted = rebooted or last < want
         info2 = await _info(d) if not rebooted else info
         reason = info2.get("resetReason")
         out.append(
@@ -825,16 +818,22 @@ def _diff_rule(
 
 
 def _onsets(ctx: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    """Detections at the kick and at the snare hits (each), more than between hits (pooled:
+    a kick's tail still sounds half a beat on, and the chip detects in it too)."""
     ons, ok, parts, data = sorted(ctx["onsets"]), True, [], {}
+    n_on = n_off = n = 0
     for kind in ("kick", "snare"):
         sec = _sec(kind)
         half = (sec.period or stimulus.BEAT_S) * 500
         hits = [h + ctx["lag"] for h in _hits_ms(ctx["t0"], sec)]
-        on = sum(1 for h in hits if _near(ons, h + 20, 60)) / len(hits)  # -40..+80 ms
-        off = sum(1 for h in hits if _near(ons, h + half + 20, 60)) / len(hits)
-        data[kind] = [round(on, 2), round(off, 2)]
-        ok = ok and on >= ONSET_MIN_HIT and on - off >= ONSET_MARGIN
-        parts.append(f"{kind} {on:.0%} of hits (between hits {off:.0%})")
+        on = sum(1 for h in hits if _near(ons, h + 20, 60))  # -40..+80 ms
+        off = sum(1 for h in hits if _near(ons, h + half + 20, 60))
+        n_on, n_off, n = n_on + on, n_off + off, n + len(hits)
+        data[kind] = [round(on / len(hits), 2), round(off / len(hits), 2)]
+        ok = ok and on / len(hits) >= ONSET_MIN_HIT
+        parts.append(f"{kind} {on / len(hits):.0%} of hits (between hits {off / len(hits):.0%})")
+    ok = ok and (n_on - n_off) / n >= ONSET_MARGIN
+    parts.append(f"pooled {n_on / n:.0%} vs {n_off / n:.0%}")
     return ok, "; ".join(parts), data
 
 
@@ -1001,7 +1000,8 @@ def _render(ctx: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
 
 # The response thresholds: loose, "is it alive and wired", not accuracy. Measured on the box
 # 2026-11-25 (b211-dev, the stimulus at the box speaker's level), at hits vs between hits:
-# detections kick 94% vs 56%, snare 100% vs 12%; level 0.68 vs 0.02 and 0.43 vs 0.01; energy
+# detections kick 94% vs 56%, snare 100% vs 12% (a second run: kick 100% vs 94%, the kick's
+# tail, so the contrast is pooled over kick and snare); level 0.68 vs 0.02 and 0.43 vs 0.01; energy
 # 0.58 vs 0.30, 0.49 vs 0.30; pulse 0.47 vs 0.31, 0.54 vs 0.15; activation 0.15 vs 0.09, 0.16
 # vs 0.05; flux 0.71 vs 0.02, 0.17 vs 0.002; HFC (snare, hat) 125 vs 0.09, 2.6 vs 0.04;
 # centroid at kicks 5, snares 31, hats 45; rolloff kicks 1.3, hats 37; tempo 119.9; period 31
@@ -1026,7 +1026,7 @@ FEATURES: tuple[Feature, ...] = (
     Feature(
         "onsets",
         "TRANSIENT",
-        f"a detection at >= {ONSET_MIN_HIT:.0%} of kick and of snare hits, {ONSET_MARGIN:.0%} more than between hits",
+        f"a detection at >= {ONSET_MIN_HIT:.0%} of kick and of snare hits, {ONSET_MARGIN:.0%} more than between hits (pooled)",
         _onsets,
     ),
     Feature(
@@ -1396,6 +1396,7 @@ async def _ble_scan(d: Any, adapter: str | None) -> dict[str, Any]:
 
 @durable.step
 async def run_start() -> float:
+    """The wall time now (a step: the workflow body never reads the clock)."""
     return time.time()
 
 
@@ -1489,14 +1490,18 @@ async def hardware_checks(req: dict[str, Any]) -> dict[str, Any]:
         if deployed:
             jobs.report(2, "upload: deploying")
             before = await versions_before(device_ids)
+            t_dep = await run_start()
             dep = await _deploy(source, device_ids)
+            report["deploy_s"] = round(await run_start() - t_dep, 1)
             result, ev = judge_deploy(dep, before)
             report["deploy"] = {
                 k: dep.get(k) for k in ("status", "failed_step", "message", "version")
             }
             if result == "rig":
                 report["rig_error"] = f"upload: {ev}"
-                report["phases"].append({"name": "upload", "result": "rig error", "seconds": None})
+                report["phases"].append(
+                    {"name": "upload", "result": "rig error", "seconds": report["deploy_s"]}
+                )
                 return await _done(report)
             for i in device_ids:
                 report["checks"].append(
@@ -1510,7 +1515,9 @@ async def hardware_checks(req: dict[str, Any]) -> dict[str, Any]:
                     )
                 )
             if result == NO:
-                report["phases"].append({"name": "upload", "result": NO, "seconds": None})
+                report["phases"].append(
+                    {"name": "upload", "result": NO, "seconds": report["deploy_s"]}
+                )
                 return await _done(report)
             expected = dep["version"]
             flash_t = float(dep["steps"]["store"]["flash_t"])
@@ -1532,7 +1539,9 @@ async def hardware_checks(req: dict[str, Any]) -> dict[str, Any]:
             for n, name in enumerate(plan):
                 jobs.report(5 + 90 * n // len(plan), f"{name}")
                 if name == "upload":
-                    res = await upload_checks(device_ids, expected, flash_t, deployed, board_of)
+                    res = await upload_checks(device_ids, expected, board_of)
+                    # The phase's time includes the flash.
+                    res["seconds"] = round(res["seconds"] + report.get("deploy_s", 0.0), 1)
                 elif name == "lights":
                     res = await lights(device_ids, board_of, req.get("regions"), brightness)
                 elif name == "audio":

@@ -178,7 +178,7 @@ The stream is captured (debug + fast, and the detection events) on the host cloc
 
 | Feature | Stream field | Rule (loose: is it alive and wired, not accuracy) | Measured 2026-11-25 (b211-dev), at hits vs between |
 |---|---|---|---|
-| onsets | TRANSIENT events | a detection at ≥ 60% of kick hits and of snare hits, and 20 points more than between hits | kick 94% vs 56%, snare 100% vs 12% |
+| onsets | TRANSIENT events | a detection at ≥ 60% of kick hits and of snare hits, and 20 points more at the hits than between them, pooled over both (a kick's tail still sounds half a beat on, and the chip detects in it: 56% and 94% between kicks in two runs) | kick 94% vs 56%, snare 100% vs 12%; pooled 97% vs 34% |
 | activation | `m.nn` | ×1.3 at kick and snare hits | 0.15 vs 0.09, 0.16 vs 0.05 |
 | pulse | `m.p` | +0.1 at kick and snare hits | 0.47 vs 0.31, 0.54 vs 0.15 |
 | level | `a.l` | +0.1 at kick and snare hits | 0.68 vs 0.02, 0.43 vs 0.01 |
