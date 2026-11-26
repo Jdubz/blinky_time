@@ -577,7 +577,7 @@ async def _measure(
             "played": len(played),
             "results": results,
         }
-        report["detection_latency"] = detection_latency.summarize(played)
+        report["detection_latency"] = detection_latency.summarize(played, p["devices"])
 
     report["final"] = await final_state(device_ids, version, start)
     for i, f in report["final"].items():

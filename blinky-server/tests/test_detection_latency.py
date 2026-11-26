@@ -151,6 +151,18 @@ def test_the_score_record_keeps_the_check_and_the_median() -> None:
     assert rec["detection_latency"] == {"CHIP": {"median_ms": -0.9, "counted": 2}}
 
 
+def test_the_summary_is_keyed_by_the_full_chip_id_like_the_strict_rules_windows() -> None:
+    # Scores carry the id's first 12 characters (workflows.validation_run); the strict rules'
+    # windows and music the full id. Re-keyed, the device has one row, with data.
+    chip = "87DE9B58C90AFE2D"
+    latency = detection_latency.summarize(results(CALIBRATION[:3], chip[:12]), [chip])
+    assert list(latency) == [chip]
+    out = strict_rules.report({chip: []}, {}, None, latency)
+    assert list(out["devices"]) == [chip]
+    row = {r["rule"]: r for r in out["rules"]}["detection_latency"]
+    assert row["device"] == chip and row["status"] == strict_rules.PASS
+
+
 def test_a_dev_run_takes_every_played_track_of_its_validate_checks() -> None:
     from blinky_server.testing import dev_run
 

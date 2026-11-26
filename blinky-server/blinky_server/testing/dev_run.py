@@ -276,7 +276,7 @@ async def dev_run(req: dict[str, Any]) -> dict[str, Any]:
             )
             played = validated(report["checks"])
             if played:
-                report["detection_latency"] = detection_latency.summarize(played)
+                report["detection_latency"] = detection_latency.summarize(played, device_ids)
             report["strict"] = await strict(
                 device_ids,
                 loop_windows(report["checks"]),

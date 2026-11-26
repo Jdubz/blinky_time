@@ -358,7 +358,7 @@ async def validate(req: dict[str, Any]) -> dict[str, Any]:
         "runs": num_runs,
         "results": results,
         # The chip's detection latency vs the rig's calibration, per device (lagCheckMs - lagMs).
-        "detection_latency": detection_latency.summarize(results),
+        "detection_latency": detection_latency.summarize(results, p["devices"]),
     }
 
 

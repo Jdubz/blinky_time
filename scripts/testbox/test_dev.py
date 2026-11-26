@@ -403,7 +403,7 @@ RUN_REPORT = {
     ],
     "final": {DEV: {"no_reboot": {"pass": True}, "alerts": {"pass": True, "lines": []}}},
     "detection_latency": {
-        DEV[:12]: {
+        DEV: {  # the full id (the scores carry its first 12 characters)
             "median_ms": 1.2,
             "counted": 1,
             "runs": [{"track": "techno", "offset_ms": 1.2, "counted": True, "why": None}],

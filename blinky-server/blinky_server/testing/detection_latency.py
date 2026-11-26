@@ -52,13 +52,21 @@ def run_offset(drums: dict[str, Any] | None) -> dict[str, Any]:
     return {"offset_ms": offset, "counted": True, "why": None}
 
 
-def summarize(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def summarize(
+    results: list[dict[str, Any]], device_ids: list[str] | None = None
+) -> dict[str, dict[str, Any]]:
     """Per device, over a job's validation results ([{track, run?, scores: {device: summary}}]):
     the median offset of the runs that count (None when none does), how many counted, and every
-    run's offset with its reason when it didn't count."""
+    run's offset with its reason when it didn't count.
+
+    Scores are keyed by the first 12 characters of the chip id (workflows.validation_run); with
+    ``device_ids`` (the run's full ids) each key is given back its full id, so the summary lines
+    up with the strict rules' windows and the other per-device gauges."""
+    full = {d[:12]: d for d in device_ids or []}
     out: dict[str, dict[str, Any]] = {}
     for r in results:
-        for dev, s in (r.get("scores") or {}).items():
+        for key, s in (r.get("scores") or {}).items():
+            dev = full.get(key, key)
             row = {"track": r.get("track"), **run_offset((s or {}).get("drums"))}
             if r.get("run") is not None:
                 row["run"] = r["run"]

@@ -660,9 +660,11 @@ def latency_lines(res: dict[str, Any]) -> list[str]:
 
 def report_run(res: dict[str, Any]) -> list[str]:
     lines: list[str] = []
-    # Each device's scored runs in the order the report lists them (one per validated track).
+    # Each device's scored runs in the order the report lists them (one per validated track),
+    # by the id's first 12 characters, as the scores are keyed (the summary has the full id).
     latency = {
-        dev: list(d.get("runs") or []) for dev, d in (res.get("detection_latency") or {}).items()
+        dev[:12]: list(d.get("runs") or [])
+        for dev, d in (res.get("detection_latency") or {}).items()
     }
     if res.get("error"):
         lines.append(f"test run: FAILED: {res['error']}")
@@ -694,7 +696,7 @@ def report_run(res: dict[str, Any]) -> list[str]:
                     drums = s.get("drums") or {}
                     keys = ("drumF", "kickR50", "snareR50", "onDrum", "loneHat")
                     shown = ", ".join(f"{k}={drums.get(k)}" for k in keys if k in drums)
-                    queue = latency.get(dev) or []
+                    queue = latency.get(dev[:12]) or []
                     note = latency_note(queue.pop(0) if queue else None)
                     lines.append(f"  {r['track']} {dev}: {shown or _kv(s)}{note}")
         elif kind == "pace":
