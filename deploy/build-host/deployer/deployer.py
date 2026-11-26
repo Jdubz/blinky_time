@@ -139,7 +139,10 @@ def save_state(state: dict[str, Any]) -> None:
 
 def deploy_pass(services: list[dict[str, Any]], state: dict[str, Any], fetch: Fetch,
                 runner: Callable[[list[str]], int] = default_runner, now: float | None = None,
-                dry_run: bool = False, accept: str | None = None) -> dict[str, Any]:
+                dry_run: bool = False, accept: str | None = None,
+                save: Callable[[dict[str, Any]], None] = lambda s: None) -> dict[str, Any]:
+    """One pass. `save` is called after every decision, so a pass cut short (a timeout) keeps what it
+    decided."""
     git("fetch", "--quiet", "--no-recurse-submodules", "origin", BRANCH)
     head = git("rev-parse", f"refs/remotes/origin/{BRANCH}").strip()
     now = time.time() if now is None else now
@@ -158,6 +161,7 @@ def deploy_pass(services: list[dict[str, Any]], state: dict[str, Any], fetch: Fe
         if verdict == "reject":
             st["refused"][head] = why
             log("refused", service=svc["name"], sha=head[:12], why=why)
+            save(state)
             continue
         log("deploying", service=svc["name"], sha=head[:12], why=why, changed=changed[:10], dry_run=dry_run)
         if dry_run:
@@ -166,8 +170,10 @@ def deploy_pass(services: list[dict[str, Any]], state: dict[str, Any], fetch: Fe
             st["deployed"] = head
             st["deployed_at"] = now
             log("deployed", service=svc["name"], sha=head[:12])
+            save(state)
             continue
         st["refused"][head] = "deploy script failed"
+        save(state)
         if st["deployed"]:
             ok = run_deploy(svc, st["deployed"], runner)
             log("rolled_back" if ok else "rollback_failed", service=svc["name"], to=st["deployed"][:12])
@@ -192,7 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(state, indent=1))
         return 0
     services = json.loads(args.services.read_text())["services"]
-    state = deploy_pass(services, state, gh_fetch, dry_run=args.dry_run, accept=args.accept)
+    state = deploy_pass(services, state, gh_fetch, dry_run=args.dry_run, accept=args.accept,
+                        save=(lambda s: None) if args.dry_run else save_state)
     if not args.dry_run:
         save_state(state)
     return 0

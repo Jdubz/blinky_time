@@ -934,13 +934,14 @@ async function pullOps() {
     }
     let changed = false;
     for (const [rev, by, op] of r.ops) {
-      if (by === TAB) continue;  // our own, already applied
+      // Every operation goes through here in the server's order, our own included: then a slower
+      // edit of someone else's that the server applied before ours can't overwrite ours on this page.
       // A hit we've changed but not sent yet keeps our version (ours goes up next and wins).
       const mine = op.id && (() => { const k = SY.known.get(op.id), o = S.onsets.find(x => x.id === op.id); return (!!k !== !!o) || (k && o && (Math.abs(k.time - o.time) > 5e-5 || k.type !== o.type)); })();
       knownApply(op);
       if (mine) continue;
       const st = { onsets: S.onsets, reviewed: S.reviewed }; applyOp(st, op); S.reviewed = st.reviewed;
-      for (const snap of [...S.undo, ...S.redo]) applyOp(snap, op);  // undo never reverts others' edits
+      if (by !== TAB) for (const snap of [...S.undo, ...S.redo]) applyOp(snap, op);  // undo never reverts others' edits
       changed = true;
     }
     SY.rev = r.rev;

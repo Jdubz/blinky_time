@@ -139,3 +139,12 @@ def test_gate_needs_a_merged_pr():
         return {"commit": {"committer": {"date": "2033-05-18T03:00:00Z"}}}
     assert dep.gate("abc", ("Labels service",), fetch, NOW)[0] == "wait"
     assert dep.gate("abc", ("Labels service",), fetch, NOW + 10 * 86400)[0] == "reject"
+
+
+def test_the_state_is_saved_after_each_decision(repo):
+    state = {"labels": {"deployed": g(repo, "rev-parse", "HEAD"), "refused": {}}}
+    new = commit(repo, "labels-service/server.py")
+    saved = []
+    dep.deploy_pass([SVC], state, fake_fetch(), runner=lambda c: 0, now=NOW,
+                    save=lambda s: saved.append(s["labels"]["deployed"]))
+    assert saved == [new]
