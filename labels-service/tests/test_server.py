@@ -87,6 +87,15 @@ def test_track_list_and_seeding(web, edm):
     assert c["seed"] == "human" and [o["time"] for o in c["onsets"]] == [4.0] and c["reviewed_ranges"] == [[0.0, 5.0]]
 
 
+def test_opening_a_track_doesnt_make_it_human(web):
+    web.req("GET", "/api/track?stem=a")
+    a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
+    assert a["label_source"] == "drums_adtof" and not a["has_human"] and a["updated"] is None
+    web.ops("a", [{"op": "del", "id": "h1"}])
+    a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
+    assert a["label_source"] == "human" and a["counts"]["kick"] == 9
+
+
 def test_local_mode_writes_each_change(web, edm):
     hp = edm / "drums_human" / "a.drums.json"
     web.req("GET", "/api/track?stem=a")

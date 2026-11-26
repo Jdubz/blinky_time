@@ -470,7 +470,10 @@ class App:
         out = []
         with self.rw.read():
             for stem in self.c.stems():
-                override = self.store.doc(stem) if self.store.has(stem) else None
+                # The shared state only stands in for the human file once someone has edited it:
+                # an opened, unedited track is still its seed (or main's file).
+                override = (self.store.doc(stem)
+                            if self.store.has(stem) and self.store.edited_since_base(stem) else None)
                 t = track_summary(self.c, stem, human_override=override)
                 t.update(self.status(stem))
                 out.append(t)
