@@ -211,6 +211,33 @@ def test_frame_zero_is_dated_from_each_snapshot() -> None:
     assert len(meter.estimates) == 5 and meter.rejected == 1
 
 
+def test_the_stream_is_configured_with_timestamps_on() -> None:
+    """Without SND_PCM_TSTAMP_ENABLE the kernel leaves a running stream's status timestamp at
+    zero on real hardware (the null PCM fills it in anyway, so the end-to-end test can't
+    see this): every estimate would be rejected."""
+    calls: list[tuple[Any, ...]] = []
+
+    class Lib:
+        def __getattr__(self, name: str) -> Any:
+            def f(*a: Any) -> int:
+                calls.append((name, *a))
+                if name == "snd_pcm_get_params":
+                    a[1]._obj.value, a[2]._obj.value = 9600, 2400
+                return 64 if name.endswith("_sizeof") else 0
+
+            return f
+
+    alsa = alsa_play.Alsa.__new__(alsa_play.Alsa)
+    alsa.lib = Lib()  # type: ignore[assignment]
+    assert alsa_play.configure(alsa, ctypes.c_void_p()) == (9600, 2400)
+    names = [c[0] for c in calls]
+    tstamp = names.index("snd_pcm_sw_params_set_tstamp_mode")
+    assert calls[tstamp][3] == alsa_play.SND_PCM_TSTAMP_ENABLE
+    assert names.index("snd_pcm_set_params") < tstamp < names.index("snd_pcm_sw_params")
+    # A zero timestamp (what the mode left off gives) dates nothing.
+    assert alsa_play.to_epoch_ms(0.0) is None
+
+
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or ctypes.util.find_library("asound") is None,
     reason="needs ffmpeg and libasound",

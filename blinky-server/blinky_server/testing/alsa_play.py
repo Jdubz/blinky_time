@@ -59,6 +59,7 @@ EXIT_FAILED_PLAYING = 3
 SND_PCM_STREAM_PLAYBACK = 0
 SND_PCM_FORMAT_S16_LE = 2
 SND_PCM_ACCESS_RW_INTERLEAVED = 3
+SND_PCM_TSTAMP_ENABLE = 1
 SND_PCM_STATE_PREPARED = 2
 SND_PCM_STATE_RUNNING = 3
 
@@ -99,6 +100,10 @@ class Alsa:
             "snd_pcm_state": (c_int, [p]),
             "snd_pcm_drain": (c_int, [p]),
             "snd_pcm_close": (c_int, [p]),
+            "snd_pcm_sw_params_sizeof": (ctypes.c_size_t, []),
+            "snd_pcm_sw_params_current": (c_int, [p, p]),
+            "snd_pcm_sw_params_set_tstamp_mode": (c_int, [p, p, c_int]),
+            "snd_pcm_sw_params": (c_int, [p, p]),
             "snd_pcm_status_sizeof": (ctypes.c_size_t, []),
             "snd_pcm_status": (c_int, [p, p]),
             "snd_pcm_status_get_state": (c_int, [p]),
@@ -213,6 +218,40 @@ class Meter:
         )
 
 
+def configure(alsa: Alsa, pcm: ctypes.c_void_p) -> tuple[int, int]:
+    """The stream's format and buffer, and timestamps on: with the software params' default
+    timestamp mode (none), the kernel leaves a running stream's status timestamp at zero
+    (``snd_pcm_status64``: the tstamp is filled only for SND_PCM_TSTAMP_ENABLE), so there would
+    be nothing to date the DAC by. dmix turns it on for its own slave the same way
+    (alsa-lib ``pcm_direct.c``). Returns the buffer and period sizes (frames)."""
+    lib = alsa.lib
+    alsa.check(
+        lib.snd_pcm_set_params(
+            pcm,
+            SND_PCM_FORMAT_S16_LE,
+            SND_PCM_ACCESS_RW_INTERLEAVED,
+            CHANNELS,
+            RATE,
+            1,
+            BUFFER_US,
+        ),
+        "set_params",
+    )
+    sw = ctypes.create_string_buffer(lib.snd_pcm_sw_params_sizeof())
+    alsa.check(lib.snd_pcm_sw_params_current(pcm, sw), "sw_params_current")
+    alsa.check(
+        lib.snd_pcm_sw_params_set_tstamp_mode(pcm, sw, SND_PCM_TSTAMP_ENABLE),
+        "sw_params_set_tstamp_mode",
+    )
+    alsa.check(lib.snd_pcm_sw_params(pcm, sw), "sw_params")
+    buf_frames, period_frames = ctypes.c_ulong(), ctypes.c_ulong()
+    alsa.check(
+        lib.snd_pcm_get_params(pcm, ctypes.byref(buf_frames), ctypes.byref(period_frames)),
+        "get_params",
+    )
+    return buf_frames.value, period_frames.value
+
+
 def ffmpeg_cmd(path: str, seek: float | None, duration: float | None) -> list[str]:
     cmd = ["ffmpeg", "-nostdin", "-v", "error"]
     if seek:
@@ -278,33 +317,15 @@ def _play(
     started = False
     try:
         try:
-            alsa.check(
-                alsa.lib.snd_pcm_set_params(
-                    pcm,
-                    SND_PCM_FORMAT_S16_LE,
-                    SND_PCM_ACCESS_RW_INTERLEAVED,
-                    CHANNELS,
-                    RATE,
-                    1,
-                    BUFFER_US,
-                ),
-                "set_params",
-            )
-            buf_frames, period_frames = ctypes.c_ulong(), ctypes.c_ulong()
-            alsa.check(
-                alsa.lib.snd_pcm_get_params(
-                    pcm, ctypes.byref(buf_frames), ctypes.byref(period_frames)
-                ),
-                "get_params",
-            )
+            buf_frames, period_frames = configure(alsa, pcm)
         except OSError as e:
             emit(out, "error", stage="open", error=str(e))
             return EXIT_NOTHING_PLAYED
         info = {
             "device": args.device,
             "rate": RATE,
-            "buffer_frames": buf_frames.value,
-            "period_frames": period_frames.value,
+            "buffer_frames": buf_frames,
+            "period_frames": period_frames,
         }
         meter = Meter(alsa, pcm)
         written = xruns = 0
