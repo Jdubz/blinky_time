@@ -41,16 +41,9 @@ echo "== the firewall"
 systemctl is-enabled --quiet blinky-labels-firewall.service && ok "firewall unit enabled (survives reboot)" || bad "firewall unit not enabled"
 sudo -n ./firewall.sh check >/dev/null && ok "firewall rules in place" || bad "firewall rules: $(sudo -n ./firewall.sh check || true)"
 
-echo "== the deploy key (publishing)"
-out=$(docker exec $C sh -c 'k=$(ls /tmp/deploy-key-* 2>/dev/null | head -1); [ -n "$k" ] || { echo NOKEY; exit 0; }
-  ssh -i "$k" -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes \
-      -o UserKnownHostsFile=/app/github_known_hosts -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=15 \
-      -p 443 -T git@ssh.github.com 2>&1' || true)
-case "$out" in
-  *"Hi Jdubz/blinky-corpus!"*) ok "deploy key authenticates as Jdubz/blinky-corpus at ssh.github.com:443 (host key pinned)" ;;
-  *NOKEY*) echo "note: no deploy key in the container: publishing is off" ;;
-  *) bad "deploy key: $out" ;;
-esac
+echo "== no credential in the container"
+docker exec $C sh -c 'env | grep -qiE "token|deploy_key|secret|password" && exit 1 || exit 0' \
+  && ok "no credential in its environment" || bad "a credential-looking variable in the container's environment"
 
 echo "== probes from inside the container"
 targets=()
@@ -73,7 +66,7 @@ for gwip in $(docker network ls -q | xargs docker network inspect -f '{{range .I
   targets+=("$gwip:22 a docker bridge gateway (this host)")
 done
 targets+=("169.254.169.254:80 link-local metadata")
-targets+=("ALLOW:api.github.com:443 GitHub API" "ALLOW:github.com:443 GitHub git" "ALLOW:ssh.github.com:443 GitHub ssh over 443"
+targets+=("ALLOW:github.com:443 GitHub (fetching the corpus)"
           "github.com:80 GitHub on port 80 (only 443 is open)" "1.1.1.1:53 public DNS over TCP (only 443 is open)")
 printf '%s\n' "${targets[@]}" | sort -u | docker exec -i $C python3 -c '
 import socket, sys, errno

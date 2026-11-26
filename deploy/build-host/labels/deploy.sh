@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Build and (re)start the labels service from the blinky_time commit this checkout is at. The pull
 # deployer (deploy/build-host/deployer) runs it for a gated master commit; it also works by hand.
-# Refuses to start unless the network isolation is in place; renders the deploy key from 1Password
-# (never persisted); nothing is published on a host port.
+# Refuses to start unless the network isolation is in place; nothing is published on a host port.
+# The service holds no credential (the corpus's workflow pulls its labels).
 set -euo pipefail
 cd "$(dirname "$0")"
 [ -f labels.env ] || { echo "refusing: labels.env missing (copy labels.env.example, RUNBOOK.md)" >&2; exit 1; }
@@ -16,19 +16,7 @@ sudo -n ./firewall.sh check
 # 2. The shared, internal edge network.
 ./network.sh
 
-# 3. The deploy key, rendered to a transient file (the env is baked into the container at create).
-: "${OP_SERVICE_ACCOUNT_TOKEN:=$(cat "$HOME/.config/op/spark-deploy-sa.token")}"
-export OP_SERVICE_ACCOUNT_TOKEN
-LABELS_ENV="$(mktemp)"; chmod 600 "$LABELS_ENV"
-trap 'rm -f "$LABELS_ENV"' EXIT
-if op item get "blinky labels corpus deploy key" --vault Development >/dev/null 2>&1; then
-  op inject -f -i .env.labels.tpl -o "$LABELS_ENV"
-  grep -q '^REVIEWER_DEPLOY_KEY_B64=.\{200,\}$' "$LABELS_ENV" || { echo "refusing: the rendered deploy key is empty or short" >&2; exit 1; }
-else
-  echo "WARNING: 1Password item 'blinky labels corpus deploy key' not found: publishing is OFF" >&2
-  echo "REVIEWER_DEPLOY_KEY_B64=" > "$LABELS_ENV"
-fi
-export HOST_LABELS_ENV_FILE="$LABELS_ENV"
+# 3. The version: the tree hash of labels-service/ at this checkout.
 LABELS_SERVICE_VERSION="$(git rev-parse HEAD:labels-service)"
 export LABELS_SERVICE_VERSION
 compose() { docker compose --env-file labels.env "$@"; }

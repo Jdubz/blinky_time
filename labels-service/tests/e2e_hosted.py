@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """End to end against a running hosted labels service (CI runs it against the container image):
 
-    python tests/e2e_hosted.py --api http://127.0.0.1:8766 --fake http://127.0.0.1:9999 \\
-        --origin https://site.example.invalid --host api.example.invalid --remote /path/to/bare.git
+    python tests/e2e_hosted.py --api http://127.0.0.1:8766 --origin https://site.example.invalid \\
+        --host api.example.invalid --remote /path/to/bare.git
 
---remote is the bare repository the service clones from and pushes to (the stand-in for GitHub);
-tests/fake_github.py serves the pull-request lookup. Two pages edit one track and see each other's
-edits; the service publishes a batch by itself; the batch merging is noticed. Standard library only.
+--remote is the bare repository the service clones from (the stand-in for blinky-corpus). Two pages
+edit one track and see each other's edits; the export offers the result; doing what blinky-corpus's
+labels-sync workflow does (merging the export into main) makes the service report it published.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -15,9 +16,11 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 
@@ -30,7 +33,6 @@ def check(cond: bool, what: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--api", required=True)
-    ap.add_argument("--fake", required=True)
     ap.add_argument("--origin", required=True)
     ap.add_argument("--host")
     ap.add_argument("--remote", required=True)
@@ -64,8 +66,8 @@ def main() -> None:
 
     until(lambda: _ok(lambda: call("GET", "/healthz", origin=None)[0] == 200), "server is up", args.wait)
     st, _, cfg = call("GET", "/api/config")
-    check(st == 200 and cfg["hosted"] and cfg["publishing"] == "auto" and cfg["version"] != "dev",
-          f"hosted, publishing on, version {cfg.get('version', '')[:12]}")
+    check(st == 200 and cfg["hosted"] and cfg["publishing"] == "pulled" and cfg["version"] != "dev",
+          f"hosted, published by the corpus pulling, version {cfg.get('version', '')[:12]}")
     st, h, _ = call("OPTIONS", "/api/ops?stem=x", extra={"Access-Control-Request-Method": "POST",
                                                          "Access-Control-Request-Headers": "content-type"})
     check(st == 204 and h.get("Access-Control-Allow-Origin") == args.origin, "CORS preflight for the site")
@@ -91,18 +93,23 @@ def main() -> None:
     ids = {o["id"] for o in view["onsets"]}
     check("page-aaaa-1" in ids and h2 not in ids and view["unpublished"], "both edits are in the shared labels; publishing soon")
 
-    until(lambda: any(r.startswith("labels/auto-") for r in git("for-each-ref", "--format=%(refname:short)").split()),
-          "the service publishes a batch by itself", 120)
-    branch = next(r for r in git("for-each-ref", "--format=%(refname:short)").split() if r.startswith("labels/auto-"))
-    files = git("diff", "--name-only", "main", branch).split()
-    check(files == [f"edm/drums_human/{stem}.drums.json"], f"one commit on {branch}, of the edited track")
-    doc = json.loads(git("show", f"{branch}:edm/drums_human/{stem}.drums.json"))
-    check(len(doc["onsets"]) == len(t["onsets"]) and doc["complete"] is False, "the file holds both pages' edits (partial progress)")
-    _post(args.fake + "/_fake/pr", {"head": branch})  # what .github/workflows/labels-pr.yml does
-    git("update-ref", "refs/heads/main", branch)  # what auto-merge does
-    until(lambda: not call("GET", f"/api/track?stem={stem}")[2]["unpublished"], "the merge is noticed: published", 120)
-    check(branch not in git("for-each-ref", "--format=%(refname:short)").split(), "the batch's branch is deleted")
-    check(not json.loads(urllib.request.urlopen(args.fake + "/_fake/state").read())["auth_seen"], "no GitHub credentials sent")
+    path = f"edm/drums_human/{stem}.drums.json"
+    until(lambda: call("GET", "/api/export", origin=None)[2]["ready"], "the export is ready once editing goes quiet", 60)
+    exp = call("GET", "/api/export", origin=None)[2]
+    check(list(exp["tracks"]) == [path], "the export offers the edited track")
+    doc = json.loads(exp["tracks"][path])
+    check(len(doc["onsets"]) == len(t["onsets"]) and doc["complete"] is False, "with both pages' edits (partial progress)")
+    # What labels-sync.yml does: the file, committed on main (here straight onto the stand-in's main).
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(["git", "clone", "-q", args.remote, d], check=True)
+        dest = Path(d) / path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(exp["tracks"][path])
+        for cmd in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "labels: autosave"],
+                    ["push", "-q", "origin", "HEAD:main"]):
+            subprocess.run(["git", "-C", d, *cmd], check=True)
+    until(lambda: not call("GET", f"/api/track?stem={stem}")[2]["unpublished"], "the service sees it on main: published", 120)
+    check(call("GET", "/api/export", origin=None)[2]["tracks"] == {}, "nothing left to offer")
     print("e2e: all checks passed")
 
 
@@ -111,12 +118,6 @@ def _ok(f) -> bool:
         return f()
     except OSError:
         return False
-
-
-def _post(url: str, body: Any) -> None:
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                 headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=10).read()
 
 
 if __name__ == "__main__":

@@ -5,9 +5,8 @@
   recording an address.
 * RateLimiter: token buckets per (kind, client).
 * Checkout: the service's own clone of the corpus, refreshed from GitHub.
-* AutoPublisher: publishes the tracks' shared labels to the corpus by itself, in batches: one commit
-  on a labels/auto-<time> branch, pushed with a deploy key; a corpus workflow opens the pull request
-  with auto-merge. PR state is read from the public API, without a token.
+* Publication: what the corpus should get from the shared labels (the corpus pulls it: the service
+  holds no credential), what landed, and adopting changes made on main from outside.
 
 Python standard library only.
 """
@@ -26,9 +25,6 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -229,235 +225,109 @@ class Checkout:
 # --- publishing -----------------------------------------------------------------------------------
 
 
-class GitHubError(Exception):
-    def __init__(self, status: int, message: str):
-        super().__init__(f"GitHub {status}: {message}")
-        self.status, self.message = status, message
+class Publication:
+    """What the corpus should get from the shared labels, and what it already has.
 
+    The service holds no credential at all: it never writes to GitHub. blinky-corpus's workflow
+    labels-sync.yml (scheduled, so it runs the corpus's own trusted code) pulls `export()` from the
+    public API, checks the files with the corpus's label checks, commits them as one batch on a
+    labels/auto-* branch and auto-merges it. A compromised service can only offer bad label files,
+    which those checks exist for.
 
-class PublicGitHub:
-    """Unauthenticated reads of the public corpus repo's pull requests (60 an hour per address are
-    allowed; the publisher needs one every couple of minutes at most). No token is held."""
+    `export()` lists every edited track whose labels differ from main's file and pass the
+    anti-vandalism checks, and says whether it's `ready`: nobody has edited for `quiet_s`, or it's
+    `max_wait_s` since the first unpublished edit while people keep editing.
 
-    def __init__(self, repo: str, api: str = "https://api.github.com", timeout: float = 15):
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-            raise ValueError(f"bad repo {repo!r}")
-        self.repo, self.api, self.timeout = repo, api.rstrip("/"), timeout
+    `tick()` (after each refresh of the clone) notices a track's labels landing on main (published),
+    and makes a track take main's version when main's file changed from outside: an owner's edit or a
+    revert. "Ours" is any version we exported; before one of ours has landed, also the version the
+    state started from. Git history is the undo."""
 
-    def pr_for_branch(self, branch: str) -> dict[str, Any] | None:
-        owner = self.repo.split("/")[0]
-        url = (f"{self.api}/repos/{self.repo}/pulls?state=all&per_page=5&head="
-               f"{urllib.parse.quote(owner + ':' + branch, safe='')}")
-        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
-                                                   "User-Agent": "blinky-drum-reviewer"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
-                prs = json.loads(r.read() or b"[]")
-        except urllib.error.HTTPError as e:
-            raise GitHubError(e.code, e.read()[:200].decode(errors="replace")) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise GitHubError(0, f"unreachable: {e}") from None
-        return prs[0] if prs else None
-
-
-class AutoPublisher:
-    """Publishes the tracks' shared labels to the corpus by itself.
-
-    Once nobody has edited for `quiet_s`, or `max_wait_s` after the first unpublished edit while
-    people keep editing, every track whose labels differ from main's file goes into one commit on
-    top of main, on a branch labels/auto-<UTC time>, pushed with the service's deploy key (write on
-    the corpus repo only; over ssh.github.com:443 with GitHub's host keys pinned). The corpus workflow
-    labels-pr.yml opens the PR and turns on auto-merge; the required "Scoring tests" check (label
-    checks: schema, no empty class, no mass deletion) gates the merge. Partial progress is published:
-    the scorer only uses a human file once it's complete.
-
-    While that PR is open, later publishes rebuild the same branch (main + every changed file) and
-    force-push it, also when main moves (main requires up-to-date branches). A PR that fails CI stays
-    open for the owner; editing goes on. When the batch lands on main the branch is deleted and the
-    next publish starts a new one. A track whose file changes on main from outside (an owner's edit
-    or revert) takes main's version: git history is the undo.
-
-    The commits are built with git plumbing and a scratch index: the clone's working tree is never
-    written."""
-
-    def __init__(self, checkout: Checkout, push_url: str, gh: PublicGitHub, state_file: Path, *,
-                 key_file: Path | None = None, known_hosts: Path | None = None, base: str = "main",
-                 quiet_s: float = 180.0, max_wait_s: float = 900.0, poll_every: float = 120.0,
-                 email: str = "drum-reviewer@blinky-time.joshwentworth.com",
-                 log: JsonLog | None = None, clock: Callable[[], float] = time.time):
-        self.co, self.push_url, self.gh, self.base = checkout, push_url, gh, base
-        self.quiet_s, self.max_wait_s, self.poll_every = quiet_s, max_wait_s, poll_every
-        self.email, self.log, self.clock = email, log or JsonLog(), clock
-        self.state_file = state_file
-        self.env: dict[str, str] = {}
-        if push_url.startswith("ssh://"):
-            if key_file is None or known_hosts is None:
-                raise ValueError("an ssh push URL needs a deploy key and pinned known_hosts")
-            self.env["GIT_SSH_COMMAND"] = (
-                f"ssh -i {key_file} -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes "
-                f"-o StrictHostKeyChecking=yes -o UserKnownHostsFile={known_hosts} "
-                "-o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=20")
-        self.st: dict[str, Any] = {"branch": None, "commit": None, "base": None, "files": {},
-                                   "pr": None, "url": None, "published": {}, "refused": {}}
+    def __init__(self, checkout: Checkout, state_file: Path, *, base: str = "main",
+                 quiet_s: float = 180.0, max_wait_s: float = 900.0, log: JsonLog | None = None,
+                 clock: Callable[[], float] = time.time):
+        self.co, self.base, self.quiet_s, self.max_wait_s = checkout, base, quiet_s, max_wait_s
+        self.log, self.clock, self.state_file = log or JsonLog(), clock, state_file
+        self.st: dict[str, Any] = {"exported": {}, "published": {}, "refused": {}, "dirty_since": None}
         if state_file.is_file():
             self.st.update(json.loads(state_file.read_text()))
-        self._last_poll = 0.0
-        self._dirty_since: float | None = None
         self._lock = threading.Lock()
 
     def _save(self) -> None:
         atomic_write_text(self.state_file, json.dumps(self.st, indent=1))
 
-    def _git(self, *args: str, input: str | None = None, env: dict[str, str] | None = None) -> str:
-        return self.co.git(*args, input=input, env={**self.env, **(env or {})})
-
-    def _main(self) -> str:
-        return self._git("rev-parse", f"refs/remotes/origin/{self.base}").strip()
-
-    def _blob_at(self, commit: str, path: str) -> str | None:
-        out = self._git("ls-tree", commit, "--", path).split()
+    def _main_blob(self, path: str) -> str | None:
+        out = self.co.git("ls-tree", f"refs/remotes/origin/{self.base}", "--", path).split()
         return out[2] if len(out) >= 3 else None
 
-    def _commit(self, parent: str, blobs: dict[str, str], message: str) -> str:
-        with tempfile.TemporaryDirectory() as d:
-            idx = {"GIT_INDEX_FILE": str(Path(d) / "index")}
-            self._git("read-tree", parent, env=idx)
-            for path, blob in sorted(blobs.items()):
-                self._git("update-index", "--add", "--cacheinfo", f"100644,{blob},{path}", env=idx)
-            tree = self._git("write-tree", env=idx).strip()
-        who = {"GIT_AUTHOR_NAME": "blinky drum reviewer", "GIT_AUTHOR_EMAIL": self.email,
-               "GIT_COMMITTER_NAME": "blinky drum reviewer", "GIT_COMMITTER_EMAIL": self.email}
-        return self._git("commit-tree", tree, "-p", parent, "-F", "-", input=message, env=who).strip()
-
     def status(self, path: str, text: str | None) -> dict[str, Any]:
-        """For the page: when this track's current labels were published (landed on main)."""
-        if text is None:
-            return {"published": None, "unpublished": False}
-        blob = git_blob_sha(text.encode())
-        rec = self.st["published"].get(path)
-        if rec and rec[0] == blob:
-            return {"published": rec[1], "unpublished": False}
-        return {"published": rec[1] if rec else None, "unpublished": True}
+        """For the page: when this track's labels were published (landed on main)."""
+        pub = self.st["published"].get(path)
+        if text is None or (pub and pub[0] == git_blob_sha(text.encode())):
+            return {"published": pub[1] if pub else None, "unpublished": False}
+        return {"published": pub[1] if pub else None, "unpublished": True}
 
-    def tick(self, tracks: dict[str, tuple[str, str | None]], edited_at: float | None,
-             adopt: Callable[[str, str | None], None], check: Callable[[str, str, str | None], list[str]]) -> None:
-        """`tracks`: {path: (current file text, blob of main's file the state started from)} of every
-        edited track. `adopt(path, main_text)` makes a track take main's version (None: main has no
-        file any more; the track goes back to its seed). `check(path, text, main_text)`: the label
-        checks' problems."""
+    def export(self, tracks: dict[str, str], edited_at: float | None,
+               check: Callable[[str, str, str | None], list[str]]) -> dict[str, Any]:
+        """{"ready", "tracks": {path: text}, "held": {path: problems}} for the corpus workflow."""
         with self._lock:
-            main = self._main()
             now = self.clock()
-            files = self.st["files"]
-            # 1. The open batch: landed on main? closed without merging?
-            if self.st["branch"]:
-                if all(self._blob_at(main, p) == b for p, b in files.items()):
-                    for p, b in files.items():
-                        self.st["published"][p] = [b, now_iso()]
-                    self.log.emit("batch_landed", branch=self.st["branch"], pr=self.st["pr"],
-                                  tracks=len(files))
-                    self._drop_branch()
-                elif now - self._last_poll >= self.poll_every:
-                    self._last_poll = now
-                    try:
-                        pr = self.gh.pr_for_branch(self.st["branch"])
-                    except GitHubError as e:
-                        pr = None
-                        self.log.emit("pr_poll_failed", branch=self.st["branch"], error=e.message[:200])
-                    if pr and pr.get("number") != self.st["pr"]:
-                        self.st.update(pr=pr["number"], url=pr["html_url"])
-                        self.log.emit("pr_opened", pr=pr["number"], branch=self.st["branch"])
-                    if pr and pr.get("state") == "closed" and not pr.get("merged_at"):
-                        self.log.emit("batch_closed", branch=self.st["branch"], pr=pr["number"])
-                        self._drop_branch()
-            # 2. A file that changed on main from outside wins: an owner's edit or revert (git history
-            #    is the undo). "Ours" is the version we last published there, or, before we ever have,
-            #    the one the state started from. A file we published that main no longer has (its
-            #    creation reverted) sends the track back to its seed.
-            current: dict[str, str] = {}
-            for p, (text, base_blob) in tracks.items():
-                if p in files:
-                    current[p] = text
-                    continue  # our open batch: main catches up when it lands
-                mb = self._blob_at(main, p)
-                pub = self.st["published"].get(p)
-                ours = pub[0] if pub else base_blob
-                if mb == ours or (mb is None and pub is None):
-                    current[p] = text
+            out, held = {}, {}
+            for p, text in sorted(tracks.items()):
+                b = git_blob_sha(text.encode())
+                mb = self._main_blob(p)
+                if b == mb:
                     continue
-                if mb is None:
-                    adopt(p, None)
-                    del self.st["published"][p]
-                    self.log.emit("adopted_main", path=p, deleted=True)
-                    continue
-                if git_blob_sha(text.encode()) != mb:
-                    text = self._git("cat-file", "blob", mb)
-                    adopt(p, text)
-                    self.log.emit("adopted_main", path=p)
-                self.st["published"][p] = [mb, now_iso()]
-                current[p] = text
-            # 3. What differs from main now.
-            changed = {p: t for p, t in current.items() if git_blob_sha(t.encode()) != self._blob_at(main, p)}
-            if not changed:
-                self._dirty_since = None
-                self._save()
-                return
-            self._dirty_since = self._dirty_since or now
-            quiet = edited_at is None or now - edited_at >= self.quiet_s
-            if not quiet and now - self._dirty_since < self.max_wait_s:
-                self._save()
-                return
-            blobs: dict[str, str] = {}
-            for p, t in changed.items():
-                mb = self._blob_at(main, p)
-                problems = check(p, t, self._git("cat-file", "blob", mb) if mb else None)
-                b = git_blob_sha(t.encode())
+                problems = check(p, text, self.co.git("cat-file", "blob", mb) if mb else None)
                 if problems:
+                    held[p] = problems
                     if self.st["refused"].get(p) != b:  # log each refused version once
                         self.st["refused"][p] = b
                         self.log.emit("publish_refused", path=p, problems=problems)
                     continue
-                self.st["refused"].pop(p, None)
-                blobs[p] = self._git("hash-object", "-w", "--stdin", input=t).strip()
-            if not blobs:
-                self._save()
-                return
-            if self.st["branch"] and blobs == files and self.st["base"] == main:
-                self._save()
-                return  # the open PR already has exactly this
-            self._push(main, blobs, now)
-            self._dirty_since = None
+                out[p] = text
+                ex = self.st["exported"].setdefault(p, [])
+                if b not in ex:
+                    ex.append(b)
+                    del ex[:-50]
+            if out:
+                self.st["dirty_since"] = self.st["dirty_since"] or now
+            else:
+                self.st["dirty_since"] = None
+            quiet = edited_at is None or now - edited_at >= self.quiet_s
+            ready = bool(out) and (quiet or now - (self.st["dirty_since"] or now) >= self.max_wait_s)
             self._save()
+            return {"ready": ready, "tracks": out, "held": held}
 
-    def _push(self, main: str, blobs: dict[str, str], now: float) -> None:
-        names = [Path(p).name.split(".")[0] for p in sorted(blobs)]
-        msg = (f"labels: drum reviewer autosave ({len(blobs)} track{'s' if len(blobs) != 1 else ''})\n\n"
-               + "\n".join(f"- {n}" for n in names)
-               + "\n\nPublished by the labels service (blinky_time labels-service/): the shared labels "
-                 "of the tracks above, as they stand. Corpus CI checks the files; auto-merge merges "
-                 "them.\n")
-        commit = self._commit(main, blobs, msg)
-        new = self.st["branch"] is None
-        # Unique: the workflow never reopens a branch whose PR was closed.
-        branch = self.st["branch"] or (f"labels/auto-{_dt.datetime.now(_dt.timezone.utc):%Y%m%d-%H%M%S}"
-                                       f"-{secrets.token_hex(2)}")
-        args = ["push", "--quiet"]
-        if not new:
-            args.append(f"--force-with-lease=refs/heads/{branch}:{self.st['commit']}")
-        try:
-            self._git(*args, self.push_url, f"{commit}:refs/heads/{branch}")
-        except RuntimeError as e:
-            self.log.emit("publish_failed", branch=branch, error=str(e)[-300:])
-            return
-        if new:
-            self.st.update(pr=None, url=None)
-        self.st.update(branch=branch, commit=commit, base=main, files=blobs)
-        self.log.emit("published", branch=branch, tracks=len(blobs), names=names,
-                      new_branch=new, commit=commit[:12])
-
-    def _drop_branch(self) -> None:
-        try:
-            self._git("push", "--quiet", self.push_url, f":refs/heads/{self.st['branch']}")
-        except RuntimeError:
-            pass  # already gone (merged with delete, or deleted by hand)
-        self.st.update(branch=None, commit=None, base=None, files={}, pr=None, url=None)
+    def tick(self, tracks: dict[str, tuple[str, str | None]], adopt: Callable[[str, str | None], None]) -> None:
+        """`tracks`: {path: (current file text, blob of main's file the state started from)} of every
+        edited track. `adopt(path, main_text)`: the track takes main's version (None: main has no file
+        any more, so back to its seed)."""
+        with self._lock:
+            for p, (text, base_blob) in tracks.items():
+                mb = self._main_blob(p)
+                mine = git_blob_sha(text.encode())
+                exported = set(self.st["exported"].get(p, []))
+                pub = self.st["published"].get(p)
+                if mb == mine:
+                    if not pub or pub[0] != mb:
+                        self.st["published"][p] = [mb, now_iso()]
+                        self.log.emit("published", path=p)
+                    continue
+                if mb in exported:  # an earlier version of ours landed; the newer one follows
+                    self.st["published"][p] = [mb, now_iso()]
+                    continue
+                ours_before_landing = base_blob if pub is None else None
+                if mb is None:
+                    if pub is not None:  # a file of ours was deleted on main: back to the seed
+                        adopt(p, None)
+                        self.st["published"].pop(p, None)
+                        self.st["exported"].pop(p, None)
+                        self.log.emit("adopted_main", path=p, deleted=True)
+                    continue
+                if mb != ours_before_landing:  # changed on main from outside: it wins
+                    adopt(p, self.co.git("cat-file", "blob", mb))
+                    self.st["published"][p] = [mb, now_iso()]
+                    self.st["exported"].pop(p, None)
+                    self.log.emit("adopted_main", path=p)
+            self._save()

@@ -15,14 +15,14 @@ Local mode (a corpus clone):
 
 Hosted mode (a public URL; see README.md "Hosted"):
 
-    REVIEWER_DEPLOY_KEY_B64=... python labels-service/server.py --host 0.0.0.0 \\
+    python labels-service/server.py --host 0.0.0.0 \\
         --state /state --checkout /corpus --git-url https://github.com/<owner>/blinky-corpus.git \\
         --github-repo <owner>/blinky-corpus --allow-host <public name> --trust-cf-connecting-ip
 
     The corpus is the service's own clone, refreshed from GitHub. The shared state and logs live in
-    --state. Changed tracks are published by themselves in batches (hosted.AutoPublisher): one
-    commit on a labels/auto-<time> branch, pushed with a deploy key; the corpus workflow
-    labels-pr.yml opens the pull request with auto-merge on.
+    --state. The service holds no credential: blinky-corpus's scheduled workflow labels-sync.yml
+    pulls the changed tracks from GET /api/export and publishes them as an auto-merging batch
+    (hosted.Publication).
 
 Files (paths relative to edm/):
     <stem>.mp3                          the audio
@@ -411,9 +411,9 @@ def atomic_write(path: Path, text: str) -> None:
 
 class App:
     """The tracks' shared state over HTTP. Local mode writes each change into the corpus clone;
-    hosted mode publishes changed tracks by itself (hosted.AutoPublisher)."""
+    hosted mode offers changed tracks to the corpus's workflow (hosted.Publication)."""
 
-    def __init__(self, corpus: Corpus, state_dir: Path, *, publisher: hosted.AutoPublisher | None = None,
+    def __init__(self, corpus: Corpus, state_dir: Path, *, publisher: hosted.Publication | None = None,
                  checkout: hosted.Checkout | None = None, hosted_mode: bool = False,
                  trust_cf: bool = False, refresh_s: float = 60.0, log: hosted.JsonLog | None = None,
                  limits: dict[str, tuple[int, float]] | None = None):
@@ -457,14 +457,14 @@ class App:
         if not self.store.has(stem) or not self.store.edited_since_base(stem):
             return {"published": None, "unpublished": False}
         if self.publisher is None:
-            if self.hosted:  # publishing is off (no deploy key): it all waits
+            if self.hosted:  # nothing follows main without a clone: it all waits
                 return {"published": None, "unpublished": True}
             return {"published": self.store.view(stem)["updated"], "unpublished": False}  # written at once
         return self.publisher.status(self._path(stem), self.store.text(stem))
 
     def config(self) -> dict[str, Any]:
         return {"hosted": self.hosted, "seeds": seeds_public(self.c), "version": VERSION,
-                "publishing": "auto" if self.publisher else ("local" if not self.hosted else "off")}
+                "publishing": "pulled" if self.publisher else ("local" if not self.hosted else "off")}
 
     def tracks(self) -> list[dict[str, Any]]:
         out = []
@@ -528,22 +528,34 @@ class App:
         doc = json.loads(main_text)
         self.store.reset(stem, {**doc, "seed": "human", "base_blob": hosted.git_blob_sha(main_text.encode())})
 
+    def _edited(self) -> dict[str, tuple[str, str | None]]:
+        out = {}
+        for s in self.store.stems():
+            if self.store.edited_since_base(s):
+                text = self.store.text(s)
+                if text is not None:
+                    out[self._path(s)] = (text, self.store.base_blob(s))
+        return out
+
+    def export(self) -> dict[str, Any]:
+        """For blinky-corpus's labels-sync workflow (it pulls; the service writes nowhere)."""
+        if self.publisher is None:
+            raise ApiError(404, "no export: this server doesn't publish")
+        edited = self._edited()
+        last = max((self.store.edited_at(Path(p).name.split(".")[0]) or 0 for p in edited), default=0) or None
+        with self.rw.read():
+            out = self.publisher.export({p: t for p, (t, _) in edited.items()}, last, self._check)
+        self.log.emit("export", ready=out["ready"], tracks=len(out["tracks"]), held=len(out["held"]))
+        return out
+
     def tick(self) -> None:
         if self.checkout is not None:
             try:
                 self.checkout.refresh()
             except Exception as e:  # GitHub down: keep serving what we have, say so
                 self.log.emit("refresh_failed", error=str(e)[:400])
-        if self.publisher is None:
-            return
-        edited = [s for s in self.store.stems() if self.store.edited_since_base(s)]
-        tracks = {}
-        for s in edited:
-            text = self.store.text(s)
-            if text is not None:
-                tracks[self._path(s)] = (text, self.store.base_blob(s))
-        last = max((self.store.edited_at(s) or 0 for s in edited), default=0) or None
-        self.publisher.tick(tracks, last, self._adopt, self._check)
+        if self.publisher is not None:
+            self.publisher.tick(self._edited(), self._adopt)
 
     def start(self) -> None:
         def loop() -> None:
@@ -599,22 +611,6 @@ class App:
             shutil.rmtree(drafts)
         for name in ("locks.json", "pending.json"):
             (self.state_dir / name).unlink(missing_ok=True)
-
-
-def deploy_key_file(b64: str) -> Path | None:
-    """The deploy key (base64 of the OpenSSH private key, from the environment) written to a 0600
-    file on /tmp, a tmpfs in the container: ssh needs a file, and it never touches a disk."""
-    if not b64.strip():
-        return None
-    import base64
-    key = base64.b64decode(b64.strip(), validate=True)
-    if b"PRIVATE KEY" not in key:
-        raise SystemExit("REVIEWER_DEPLOY_KEY_B64 is not a base64 OpenSSH private key")
-    fd, name = tempfile.mkstemp(prefix="deploy-key-", dir="/tmp")
-    with os.fdopen(fd, "wb") as f:
-        f.write(key)
-    os.chmod(name, 0o600)
-    return Path(name)
 
 
 # --- HTTP ---------------------------------------------------------------------
@@ -816,6 +812,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(app.track(self._stem_param(q)))
         elif path == "/api/ops":
             self._send_json(app.pull(self._stem_param(q), (q.get("since") or [None])[0]))
+        elif path == "/api/export":
+            self._send_json(app.export())
         elif path.startswith("/audio/"):
             name = unquote(path[len("/audio/"):])
             if not name.endswith(".mp3"):
@@ -928,21 +926,10 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("--git-branch", default="main")
     h.add_argument("--refresh", type=float, default=60.0, metavar="S",
                    help="refresh the clone and consider publishing every S seconds")
-    h.add_argument("--github-repo", metavar="OWNER/NAME", help="the corpus repo: batches are pushed "
-                   "as labels/auto-<time> branches; its workflow opens the pull request")
-    h.add_argument("--github-api", default="https://api.github.com",
-                   help="read without a token: pull request state")
-    h.add_argument("--push-url", help="where branches are pushed (default "
-                   "ssh://git@ssh.github.com:443/<repo>.git, with the deploy key from "
-                   "$REVIEWER_DEPLOY_KEY_B64)")
-    h.add_argument("--known-hosts", type=Path, default=STATIC_DIR / "github_known_hosts",
-                   help="GitHub's pinned SSH host keys")
     h.add_argument("--quiet", type=float, default=180.0, metavar="S",
-                   help="publish once nobody has edited for S seconds...")
+                   help="the export is ready once nobody has edited for S seconds...")
     h.add_argument("--max-wait", type=float, default=900.0, metavar="S",
                    help="...or S seconds after the first unpublished edit, while people keep editing")
-    h.add_argument("--poll-every", type=float, default=120.0, metavar="S",
-                   help="at most one (unauthenticated) pull-request lookup per S seconds")
     h.add_argument("--cors-origin", action="append", default=[], metavar="URL",
                    help="a page origin (scheme://host) allowed to call this API, e.g. the product "
                         "site that serves the reviewer page")
@@ -961,18 +948,8 @@ def main(argv: list[str] | None = None) -> None:
             ap.error("hosted mode needs --checkout and --git-url")
         checkout = hosted.Checkout(args.checkout.resolve(), args.git_url, args.git_branch, log=log)
         checkout.ensure()
-        publisher = None
-        if args.github_repo:
-            push_url = args.push_url or f"ssh://git@ssh.github.com:443/{args.github_repo}.git"
-            key_file = deploy_key_file(os.environ.get("REVIEWER_DEPLOY_KEY_B64", ""))
-            if push_url.startswith("ssh://") and key_file is None:
-                log.emit("publishing_disabled", reason="REVIEWER_DEPLOY_KEY_B64 is empty")
-            else:
-                publisher = hosted.AutoPublisher(
-                    checkout, push_url, hosted.PublicGitHub(args.github_repo, args.github_api),
-                    args.state / "publish.json", key_file=key_file, known_hosts=args.known_hosts,
-                    base=args.git_branch, quiet_s=args.quiet, max_wait_s=args.max_wait,
-                    poll_every=args.poll_every, log=log)
+        publisher = hosted.Publication(checkout, args.state / "publication.json", base=args.git_branch,
+                                       quiet_s=args.quiet, max_wait_s=args.max_wait, log=log)
         app = App(Corpus(args.edm or checkout.root / "edm"), args.state, publisher=publisher,
                   checkout=checkout, hosted_mode=True, trust_cf=args.trust_cf_connecting_ip,
                   refresh_s=args.refresh, log=log)
@@ -988,8 +965,7 @@ def main(argv: list[str] | None = None) -> None:
                       args.page_url)
     stems = app.c.stems()
     if app.hosted:
-        app.log.emit("start", tracks=len(stems), port=args.port, repo=args.github_repo,
-                     version=VERSION)
+        app.log.emit("start", tracks=len(stems), port=args.port, version=VERSION)
         app.start()
     else:
         print(f"labels-service: {len(stems)} tracks in {app.c.edm}; every change is written to "

@@ -2,20 +2,20 @@
 #
 #   docker build --build-arg LABELS_SERVICE_VERSION=$(git rev-parse HEAD:labels-service) -t labels-service labels-service
 #
-# Standard library Python plus git and ssh (the service's own corpus clone, and pushing label
-# batches with its deploy key to ssh.github.com:443). Runs as uid 10001 and works with a read-only
-# root filesystem: everything it writes goes to /corpus (the clone), /state (the shared labels, the
-# publisher's state) and /tmp.
+# Standard library Python plus git (the service's own corpus clone). It holds no credential: the
+# corpus's workflow pulls the labels (GET /api/export). Runs as uid 10001 and works with a read-only
+# root filesystem: everything it writes goes to /corpus (the clone), /state (the shared labels, what
+# was published) and /tmp.
 FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git openssh-client ca-certificates \
+ && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin reviewer \
  && mkdir -p /corpus /state \
  && chown 10001:10001 /corpus /state
 
-COPY server.py state.py hosted.py labelcheck.py seeds.json index.html github_known_hosts /app/
+COPY server.py state.py hosted.py labelcheck.py seeds.json index.html /app/
 
 # The git tree hash of labels-service/: /api/config reports it, and the site stamps the same hash
 # into the page, which asks for a reload when they differ.

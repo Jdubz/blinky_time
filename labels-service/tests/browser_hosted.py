@@ -2,19 +2,16 @@
 """Two browsers on one track, in the production shape: the page from one origin (the site), the API
 on another (CORS). CI runs it with Playwright's Chromium:
 
-    python tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767 \\
-        --remote /path/to/bare.git
+    python tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767
 
 Each person's edit shows up on the other's page within a few seconds, nothing has a Save button,
-and the service publishes the result by itself (a labels/auto-* branch in --remote). Fails on any
-page error.
+and the service's export offers the result to the corpus. Fails on any page error.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 import urllib.request
@@ -34,7 +31,6 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--page", required=True)
     ap.add_argument("--api", required=True)
-    ap.add_argument("--remote", required=True)
     args = ap.parse_args()
     deadline = time.monotonic() + 180  # the server clones the corpus before it listens
     while True:
@@ -84,14 +80,13 @@ def main() -> None:
         check(a.evaluate("S.onsets.length") == b.evaluate("S.onsets.length") == n0, "the two pages agree")
         browser.close()
 
-    deadline = time.monotonic() + 120
-    branch = None
-    while time.monotonic() < deadline and not branch:
-        refs = subprocess.run(["git", "-C", args.remote, "for-each-ref", "--format=%(refname:short)"],
-                              capture_output=True, text=True, check=True).stdout.split()
-        branch = next((r for r in refs if r.startswith("labels/auto-")), None)
+    deadline = time.monotonic() + 60
+    exp = {}
+    while time.monotonic() < deadline and not exp.get("ready"):
+        with urllib.request.urlopen(args.api + "/api/export", timeout=10) as r:
+            exp = json.loads(r.read())
         time.sleep(2)
-    check(bool(branch), f"the service published the edits by itself ({branch})")
+    check(list(exp.get("tracks", {})) == [f"edm/drums_human/{stem}.drums.json"], "the export offers the edited track to the corpus")
     check(not errors, "no page errors" + ("" if not errors else ": " + " | ".join(errors[:5])))
     print("browser: all checks passed")
 

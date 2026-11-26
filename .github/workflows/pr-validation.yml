@@ -595,7 +595,7 @@ jobs:
         python-version: '3.12'
     - name: Build the image
       run: docker build --build-arg LABELS_SERVICE_VERSION="$(git rev-parse HEAD:labels-service)" -t labels-service:ci labels-service
-    - name: The stand-in for GitHub (a bare clone of the corpus) and the fake PR lookup
+    - name: The stand-in for blinky-corpus (a bare clone of the pinned corpus)
       run: |
         # The pinned corpus commit as `main` of a bare repo the service clones from and pushes to.
         git -C corpus fetch -q --unshallow 2>/dev/null || true
@@ -606,20 +606,17 @@ jobs:
         done
         chmod -R a+rwX "$RUNNER_TEMP/remote.git"
         printf '[safe]\n\tdirectory = *\n' > "$RUNNER_TEMP/gitconfig"
-        python labels-service/tests/fake_github.py --port 9999 --repo Jdubz/blinky-corpus > "$RUNNER_TEMP/fake.log" 2>&1 &
     - name: Run the container
       run: |
         docker run -d --name labels --network host --read-only --tmpfs /tmp:size=64m \
           --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 512m \
           -v "$RUNNER_TEMP/remote.git:/remote" -v "$RUNNER_TEMP/gitconfig:/etc/gitconfig:ro" \
           labels-service:ci --host 127.0.0.1 --port 8766 --state /state \
-          --checkout /corpus/blinky-corpus --git-url file:///remote --push-url file:///remote \
-          --refresh 2 --quiet 3 --poll-every 1 \
-          --github-repo Jdubz/blinky-corpus --github-api http://127.0.0.1:9999 \
+          --checkout /corpus/blinky-corpus --git-url file:///remote --refresh 2 --quiet 3 \
           --allow-host api.example.invalid --cors-origin https://site.example.invalid
         test "$(docker inspect -f '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}}' labels)" = "10001:10001 true"
     - name: End to end (API)
-      run: python labels-service/tests/e2e_hosted.py --api http://127.0.0.1:8766 --fake http://127.0.0.1:9999 --origin https://site.example.invalid --host api.example.invalid --remote "$RUNNER_TEMP/remote.git"
+      run: python labels-service/tests/e2e_hosted.py --api http://127.0.0.1:8766 --origin https://site.example.invalid --host api.example.invalid --remote "$RUNNER_TEMP/remote.git"
     - name: End to end (two browsers on one track)
       run: |
         pip install playwright==1.49.1
@@ -628,12 +625,10 @@ jobs:
         sed 's#<meta name="drum-reviewer-api" content="">#<meta name="drum-reviewer-api" content="http://127.0.0.1:8767">#' \
           labels-service/index.html > "$RUNNER_TEMP/site/index.html"
         (cd "$RUNNER_TEMP/site" && python -m http.server 8000 --bind 127.0.0.1 > "$RUNNER_TEMP/site.log" 2>&1 &)
-        python labels-service/tests/fake_github.py --port 9998 --repo Jdubz/blinky-corpus > "$RUNNER_TEMP/fake2.log" 2>&1 &
         python labels-service/server.py --host 127.0.0.1 --port 8767 --state "$RUNNER_TEMP/state2" \
-          --checkout "$RUNNER_TEMP/co2" --git-url "file://$RUNNER_TEMP/remote2.git" --push-url "file://$RUNNER_TEMP/remote2.git" \
-          --refresh 2 --quiet 3 --poll-every 1 --github-repo Jdubz/blinky-corpus --github-api http://127.0.0.1:9998 \
+          --checkout "$RUNNER_TEMP/co2" --git-url "file://$RUNNER_TEMP/remote2.git" --refresh 2 --quiet 3 \
           --cors-origin http://127.0.0.1:8000 > "$RUNNER_TEMP/server2.log" 2>&1 &
-        python labels-service/tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767 --remote "$RUNNER_TEMP/remote2.git"
+        python labels-service/tests/browser_hosted.py --page http://127.0.0.1:8000/ --api http://127.0.0.1:8767
     - name: Logs
       if: always()
       run: |

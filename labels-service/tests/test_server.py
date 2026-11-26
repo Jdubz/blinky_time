@@ -169,7 +169,7 @@ def test_hosted_cors_headers_logs(hosted_web):
     evs = [json.loads(line) for line in w.log.getvalue().splitlines()]
     assert any(e["event"] == "edit" and e["ops"] == 1 for e in evs)
     assert all(len(e["ip"]) == 16 for e in evs if e["event"] == "http") and "127.0.0.1" not in w.log.getvalue()
-    assert w.req("GET", "/api/config")[2]["publishing"] == "off"  # no deploy key in this test
+    assert w.req("GET", "/api/config")[2]["publishing"] == "off"  # no clone to follow main in this test
 
 
 def test_hosted_writes_nothing_into_the_clone(hosted_web, edm):

@@ -3,7 +3,8 @@
 The labels service (`labels-service/`) runs on the build host as the compose project `blinky-labels`. Its page is `https://blinky-time.joshwentworth.com/labels/`, and its API is `https://blinky-labels-api.joshwentworth.com`.
 
 - **The tunnel.** The API is reached only through the host's existing artifacts Cloudflare tunnel. Its connector joins the internal network `blinky-labels-edge` and has one ingress rule for the API hostname. Nothing is published on a host port.
-- **The firewall.** The service's egress is fenced by `firewall.sh`: TCP 443 to public addresses, which is GitHub, and nothing private.
+- **The firewall.** The service's egress is fenced by `firewall.sh`: TCP 443 to public addresses (fetching the corpus from GitHub) and nothing private.
+- **No credential.** The service writes nowhere outside its state volume. The corpus pulls its labels (`labels-sync.yml`, every 5 minutes, running the corpus's own trusted code).
 - **Deploys.** The pull deployer (`deploy/build-host/deployer/`) runs `deploy.sh` for every gated master commit that changes `labels-service/` or this directory. No GitHub runner is involved.
 - **Host values.** Every host-specific value lives in `labels.env` (gitignored; template `labels.env.example`).
 
@@ -19,12 +20,7 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
    sudo systemctl daemon-reload && sudo systemctl enable --now blinky-labels-firewall.service
    sudo ./firewall.sh check    # "blinky-labels firewall OK (20 rules)"
    ```
-4. **The deploy key.** It's already made: 1Password, vault Development, item `blinky labels corpus deploy key` (field `private_key_b64`, the base64 of the OpenSSH key). Its public half is the write deploy key "blinky-labels service" on Jdubz/blinky-corpus. `deploy.sh` renders it with `op inject`. To rotate it:
-   1. `ssh-keygen -t ed25519 -N "" -f /dev/shm/k`.
-   2. Update the item's `private_key_b64` (`base64 -w0 /dev/shm/k`) and `public_key`.
-   3. Replace the repo's deploy key: `gh repo deploy-key add /dev/shm/k.pub -R Jdubz/blinky-corpus --allow-write --title "blinky-labels service"`, then delete the old one.
-   4. `shred -u /dev/shm/k*`.
-   5. Run `deploy.sh`.
+4. **No credential.** The service holds no key or token. blinky-corpus's scheduled workflow `labels-sync.yml` pulls the shared labels from the public `GET /api/export` and publishes them with its own `GITHUB_TOKEN`.
 5. **The tunnel.**
    - The connector's stack (homelab-stacks `stacks/seaweedfs`, `cloudflared-artifacts`) lists `blinky-labels-edge` as an external network. `network.sh` creates it, and it must exist before that stack starts.
    - The connector's `config.yml` has the rule `blinky-labels-api.joshwentworth.com → http://blinky-labels:8766` above its 404 catch-all.
@@ -50,12 +46,12 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
   - The deployer's state: `python3 deployer.py --status`.
   - A refused commit: fix it on master, or `--accept SHA`.
 - **What persists across deploys:**
-  - the volume `blinky-labels-state`: the shared labels of every track (`tracks/<stem>.json`), the publisher's state and the ip-hash key;
+  - the volume `blinky-labels-state`: the shared labels of every track (`tracks/<stem>.json`), what was published and the ip-hash key;
   - the volume `blinky-labels-corpus`: the clone, rebuilt from GitHub if lost;
   - the firewall unit and the edge network.
 - **Back up the shared labels:** `docker run --rm -v blinky-labels-state:/s:ro -v "$PWD":/o busybox tar czf /o/labels-state.tgz -C /s .`. What's published is also in git.
 - **Logs:**
-  - The service writes one JSON line per request (`event="http"`) plus `edit`, `published`, `publish_refused`, `publish_failed`, `batch_landed`, `batch_closed`, `adopted_main`, `rate_limited`, `refresh_failed` and `error`. Query them with `{service="blinky-labels"}` in Loki.
+  - The service writes one JSON line per request (`event="http"`) plus `edit`, `export`, `published`, `publish_refused`, `adopted_main`, `rate_limited`, `refresh_failed` and `error`. Query them with `{service="blinky-labels"}` in Loki.
   - The dashboard and alerts live in Josh-Wentworth/observability (Blinky — Labels).
 - **After a tailscale, docker or kernel upgrade:** run `verify.sh`.
 
@@ -66,7 +62,7 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
   - A batch that CI refused stays open: close it, or fix the track on the page and it re-publishes.
 - **A flood:** check the top client hashes on the dashboard, then add a Cloudflare WAF rule (Cloudflare's logs have the address).
 - **Turn it off:** `docker compose -p blinky-labels stop`.
-- **Stop publishing but keep editing:** remove the repo's deploy key.
+- **Stop publishing but keep editing:** disable blinky-corpus's `labels-sync.yml` workflow (Actions → Labels sync → Disable).
 
 ## Retiring
 
@@ -74,4 +70,4 @@ The labels service (`labels-service/`) runs on the build host as the compose pro
 2. `docker compose -p blinky-labels down`.
 3. `docker network rm blinky-labels-edge`, after removing it from the connector's stack.
 4. `sudo ./firewall.sh remove`, then `systemctl disable blinky-labels-firewall.service`.
-5. Delete the DNS record, the ingress rule and the deploy key.
+5. Delete the DNS record and the ingress rule, and disable the corpus's `labels-sync.yml`.

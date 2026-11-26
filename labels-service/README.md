@@ -4,7 +4,7 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
 
 - There are no users, names, drafts, locks or Save button.
 - **Each track has one shared set of labels.** Every edit saves by itself and appears on everyone else's page within a few seconds.
-- **The service publishes the labels to blinky-corpus by itself.** Corpus CI checks them for vandalism, and they merge automatically.
+- **The labels reach blinky-corpus by themselves.** The corpus's scheduled workflow pulls them, checks them for vandalism, and auto-merges them. The service holds no credential.
 - The site serves the page, built from this directory. The service here is its API, deployed on the build host from `deploy/build-host/labels/`.
 
 ## How it works
@@ -16,20 +16,18 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
   - Two people never overwrite each other: they change different hits, and on the same hit the later edit wins.
   - Undo only undoes your own edits: incoming edits are applied to the undo history too.
   - A track's state starts from its human file, or else from its best seed (`seeds.json` in the corpus, `tools/labels/seeds.json`).
-- **Publishing (`hosted.py` `AutoPublisher`)** happens once nobody has edited for 3 minutes, or 15 minutes after the first unpublished edit while people keep editing.
-  - Every track whose labels differ from the corpus's `main` goes into one commit on top of `main`, on a branch `labels/auto-<time>-<id>`.
-  - The branch is pushed with the corpus **deploy key** (write on blinky-corpus only) over `ssh://git@ssh.github.com:443`, with GitHub's host keys pinned in `github_known_hosts`. The service holds no GitHub token.
-  - blinky-corpus's workflow `labels-pr.yml` opens the PR and turns on auto-merge. Its required **Scoring tests** check runs the label checks on the same push.
-  - While the PR is open, later publishes, and `main` moving, rebuild and force-push the same branch.
-  - A PR that fails CI stays open for the owner, and editing goes on.
-  - When the batch lands, the next publish starts a new branch.
+- **Publishing: the corpus pulls; the service holds no credential.** `GET /api/export` lists every edited track whose labels differ from the corpus's `main`. It's `ready` once nobody has edited for 3 minutes, or 15 minutes after the first unpublished edit while people keep editing.
+  - blinky-corpus's workflow `labels-sync.yml` runs on a schedule (every 5 minutes) or on demand, as the corpus's own trusted code. It treats the export as untrusted input and checks it with `main`'s label checks.
+  - It commits only `edm/drums_human/` files, as one batch on a `labels/auto-*` branch made from `main`, then opens the PR and turns on auto-merge.
+  - A compromised service can only offer bad label files, which is what the checks are for. Nobody but the owner can push code to the corpus.
+  - The service notices its labels landing on `main` (published).
   - Partial progress is published: the scorer only uses a human file once it's `complete`.
 - **Anti-vandalism** (`labelcheck.py`, the same file as the corpus's `tools/labels/labelcheck.py`; copy it when it changes). Before publishing, a file must:
   - match the schema;
   - not delete more than half of `main`'s hits;
   - not leave a class empty while a reference has hits in it.
 
-  A file that fails is held back (`publish_refused` in the logs). Corpus CI runs the same checks as the gate.
+  A file that fails is held back (`publish_refused` in the logs). The corpus workflow and CI run the same checks as the gate.
 - **The undo is git history.** A track whose file changes on `main` from outside (an owner's fix or revert) takes `main`'s version, and open pages reload it.
 - **Rate limits** apply per client address, on requests and edits. The address is only ever kept as a keyed hash, in the logs.
 - **Version.** `/api/config` reports `LABELS_SERVICE_VERSION`, the git tree hash of `labels-service/` (the image's build arg). The site stamps the same hash into the page, and the page asks for a reload when the two differ.
@@ -44,17 +42,18 @@ Locally, every change is written straight to `edm/drums_human/<stem>.drums.json`
 
 ## Hosted
 
-`deploy/build-host/labels/` has the details. The page calls the API across origins, and the API allows only the site's origin (`--cors-origin`). In hosted mode the server keeps its own clone of the corpus (`--checkout`, refreshed every minute), writes nothing into it, and publishes as above.
+`deploy/build-host/labels/` has the details. The page calls the API across origins, and the API allows only the site's origin (`--cors-origin`). In hosted mode the server keeps its own clone of the corpus (`--checkout`, refreshed every minute). It writes nothing into it and writes nothing anywhere else outside its state volume.
 
 ## API
 
 | | |
 |---|---|
-| `GET /api/config` | hosted?, seed sources, version, publishing (`auto`, `local` or `off`) |
+| `GET /api/config` | hosted?, seed sources, version, publishing (`pulled`, `local` or `off`) |
 | `GET /api/tracks` | every track: source, counts, reviewed share, published / unpublished |
 | `GET /api/track?stem=` | a track: audio, references, its shared labels (`rev`, `onsets` with ids, `reviewed_ranges`) |
 | `GET /api/ops?stem=&since=REV` | the operations after REV, or `{"reset": true}` (reload the track) |
 | `POST /api/ops?stem=` | `{"tab", "audio_sha256", "duration", "ops": [...]}` → `{"rev", "published", "unpublished"}` |
+| `GET /api/export` | for the corpus's labels-sync workflow: `{"ready", "tracks": {path: file text}, "held": {path: problems}}` |
 | `GET /audio/<stem>.mp3` | the audio (range requests) |
 | `GET /healthz` | |
 
@@ -62,9 +61,9 @@ Locally, every change is written straight to `edm/drums_human/<stem>.drums.json`
 
 - `tests/test_state.py`: the shared labels and their operations.
 - `tests/test_server.py`: HTTP, local mode, two pages on one track, refusals, CORS, rate limits, and migrating the old drafts.
-- `tests/test_publisher.py`: batches, rolling, landing, a closed PR, `main` moving, outside changes, vandalism, and the pinned host keys. It pushes to a local bare repository and fakes the public PR lookup (`tests/fake_github.py`).
+- `tests/test_publisher.py`: the export (readiness, vandalism held back), landing, an older version landing, outside changes winning, a revert sticking, and no credential anywhere. A local bare repository stands in for the corpus.
 - `python labels-service/check_js.py`: the page's syntax, and no external resources.
 - CI's **Labels service (container, end to end)** job:
-  - builds the image and runs it in the production sandbox against a bare stand-in for GitHub;
-  - `tests/e2e_hosted.py` checks that two pages see each other's edits, a batch publishes itself, and the merge is noticed;
+  - builds the image and runs it in the production sandbox against a bare stand-in for the corpus;
+  - `tests/e2e_hosted.py` checks that two pages see each other's edits, the export offers the result, and merging it (as `labels-sync.yml` does) shows up as published;
   - `tests/browser_hosted.py` runs two Chromium pages on one track, from another origin.
