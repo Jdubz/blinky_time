@@ -26,6 +26,8 @@ A new issue gets a label when it's filed. When priorities change, change this pa
 3. **P2, smoothness.** No dropped frames, ever.
 4. **P3, next generation.** The ESP32-S3 again: dual cores, and whether NN analysis is feasible there.
 
+**Prioritised now, alongside P0 (owner, 2026-11-25): the hosted label reviewer.** Fixing the corpus labels ([blinky-corpus#4](https://github.com/Jdubz/blinky-corpus/issues/4)) is slow, laborious work and needs more hands, so the reviewer becomes a public page that the owner and recruited helpers use from anywhere. See "Product: two UIs and the hosted tools" below.
+
 ## Quality bars (they hold at every priority)
 
 - **LED smoothness:** dropped frames are never acceptable. "Performance" means accuracy; speed only has to fit the frame budget.
@@ -98,7 +100,7 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 
 - **Record mode (#243):** wanted, but only after a pass at audio, smoothness and ESP32-S3 support (owner, 2026-11-23). Start with the #243 re-scope; its phone checks are listed there.
 
-## Product: two UIs and the hosted tools (owner, 2026-11-25; on the roadmap, not top priority)
+## Product: two UIs and the hosted tools (owner, 2026-11-25; the label reviewer is prioritised now, the rest isn't top priority)
 
 Today one app, blinky-console ("Blinky Fleet"), is both the fleet UI (blinky-server mounts the build) and the public site blinky-time.joshwentworth.com (the same build on Firebase, with `VITE_FIRMWARE_UPDATES=on`). They become two UIs:
 
@@ -110,11 +112,19 @@ Today one app, blinky-console ("Blinky Fleet"), is both the fleet UI (blinky-ser
   - Update its firmware with the signed OTA flow that is live today (blinky-firmware `docs/WEB_FLASHER.md`).
   - Link to further resources and pages, such as the label reviewer and docs.
 - **Shared code:** the device protocol, schemas and firmware services stay one shared package, so the two UIs can't drift apart.
-- **The label reviewer becomes a page of the public site, backed by a long-lived production service on the build host.** Today it's blinky-corpus's `tools/drum-reviewer`, a stdlib server started by hand on the test box from a corpus clone.
-  - **The service:** deployed like the build service, as a stack in the platform's private infrastructure repo. It serves the corpus audio and labels, and takes saves.
-  - **Saves:** a saved track becomes a blinky-corpus PR. Only the owner can write.
-  - **Access:** the site is on the internet, so reads and writes go through authentication (e.g. an access proxy in front of the service). The owner decides the method.
-  - **Topology:** the browser reaches the service only through a public product URL; nothing else in the repos names where it runs.
+- **The label reviewer is a page of the public site, backed by a long-lived production service on the build host** (owner, 2026-11-25; prioritised now). The code is blinky-corpus's `tools/drum-reviewer` (hosted mode); before this it was a stdlib server started by hand on the test box from a corpus clone.
+  - **The page:** `https://blinky-time.joshwentworth.com/labels/`. The site's deploy (`blinky-console-deploy.yml`) ships the reviewer page from the pinned `corpus` submodule and sets the API's URL in it. It's ready to fold into the single-device site later.
+  - **The API:** `https://blinky-labels-api.joshwentworth.com`, deployed like the build service, as a stack in the platform's private infrastructure repo. It serves the corpus audio and labels and takes saves. CORS allows only the site's origin.
+  - **Access:** no login (owner: nothing on the page is sensitive; watch the traffic and react to anything suspicious). The protections:
+    - an optional self-entered contributor name, recorded with each save;
+    - short-lived per-track edit locks ("being edited by …");
+    - a version check, so nobody silently overwrites anyone;
+    - server-side drafts per track and contributor;
+    - rate limits per client address;
+    - logs and alerts in the LGTM stack.
+  - **Saves go straight to the corpus:** a 100%-reviewed save becomes a blinky-corpus PR with auto-merge on, carrying the contributor's name and a hashed client address. Corpus CI's label checks gate the merge: one file per PR, the schema, 100% reviewed, and plausible against the file it replaces. There's no owner approval step.
+  - **The network:** the API is reached only through an existing Cloudflare tunnel, with no published port. The service runs sandboxed, and its egress to private and tailnet ranges is blocked (only HTTPS to GitHub). "Just make sure there's no open access to my network."
+  - **Topology:** the repos name only the public product URLs; hosts, tunnels and networks live in the private stack.
 
 ## Parked
 
