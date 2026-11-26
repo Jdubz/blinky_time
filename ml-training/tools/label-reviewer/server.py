@@ -35,15 +35,22 @@ STATIC_DIR = Path(__file__).parent
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from scripts.audio import storage_root  # noqa: E402
+from scripts.audio import StorageRootUnset, storage_root  # noqa: E402
 
 # Built-in corpus defaults. The training corpus lives under the same
 # `${BLINKY_DATA}` root the configs name, so edits land where
-# prepare_dataset.py reads them (`labels.onset_human_dirs`).
-_TRAINING_DATA = Path(storage_root("BLINKY_DATA"))
-_TRAINING_LABELS_BASE = _TRAINING_DATA / "labels"
-_TRAINING_AUDIO = _TRAINING_DATA / "audio" / "combined"
+# prepare_dataset.py reads them (`labels.onset_human_dirs`). The root has no
+# default (docs/ML_STORAGE_LAYOUT.md): unset, the training corpus is skipped
+# and main() says so.
 _EDM_DIR = REPO_ROOT / "corpus" / "edm"
+
+
+def _training_labels_base() -> Path | None:
+    """`${BLINKY_DATA}/labels`, or None when BLINKY_DATA isn't set."""
+    try:
+        return Path(storage_root("BLINKY_DATA")) / "labels"
+    except StorageRootUnset:
+        return None
 
 
 @dataclass
@@ -91,31 +98,36 @@ class Corpus:
 
 
 def _default_corpora() -> list[Corpus]:
+    edm = Corpus(
+        name="edm",
+        audio_dir=_EDM_DIR,
+        onset_dir=_EDM_DIR,
+        human_edits_dir=_EDM_DIR,
+        description="In-repo validation corpus. Edits commit to git and ride to the test box via pull.",
+    )
+    labels = _training_labels_base()
+    if labels is None:
+        print("[skip] corpus 'training': $BLINKY_DATA is unset (docs/ML_STORAGE_LAYOUT.md)")
+        return [edm]
     return [
         Corpus(
             name="training",
-            audio_dir=_TRAINING_AUDIO,
-            onset_dir=_TRAINING_LABELS_BASE / "onsets_consensus",
-            human_edits_dir=_TRAINING_LABELS_BASE / "onsets_human",
+            audio_dir=labels.parent / "audio" / "combined",
+            onset_dir=labels / "onsets_consensus",
+            human_edits_dir=labels / "onsets_human",
             # No beat markers: consensus_v5 was archived, and beat outputs
             # are never labels (CLAUDE.md, #271). Pass beat_dir via --corpus
             # to show them as reference.
             beat_dir=None,
-            librosa_dir=_TRAINING_LABELS_BASE / "onsets_librosa",
+            librosa_dir=labels / "onsets_librosa",
             description="Training corpus under ${BLINKY_DATA}. Edits stay there and feed prepare_dataset.py.",
         ),
-        Corpus(
-            name="edm",
-            audio_dir=_EDM_DIR,
-            onset_dir=_EDM_DIR,
-            human_edits_dir=_EDM_DIR,
-            description="In-repo validation corpus. Edits commit to git and ride to the test box via pull.",
-        ),
+        edm,
     ]
 
 
-# Defaults; replaced from argparse in main().
-REVIEW_STATE_PATH = _TRAINING_LABELS_BASE / "review_state.json"
+# Set from argparse in main() (default: ${BLINKY_DATA}/labels/review_state.json).
+REVIEW_STATE_PATH: Path
 
 # Global runtime state, populated by main().
 corpora: dict[str, Corpus] = {}
@@ -652,11 +664,18 @@ def main() -> None:
     parser.add_argument(
         "--review-state",
         type=Path,
-        default=REVIEW_STATE_PATH,
-        help="Path to the per-corpus review_state.json (default: %(default)s)",
+        default=None,
+        help="Path to the per-corpus review_state.json (default: "
+        "${BLINKY_DATA}/labels/review_state.json)",
     )
     args = parser.parse_args()
 
+    if args.review_state is None:
+        labels = _training_labels_base()
+        if labels is None:
+            parser.error("$BLINKY_DATA is unset: set it, or pass --review-state "
+                         "(docs/ML_STORAGE_LAYOUT.md)")
+        args.review_state = labels / "review_state.json"
     REVIEW_STATE_PATH = args.review_state
 
     chosen: list[Corpus] = []
@@ -671,7 +690,7 @@ def main() -> None:
 
     # Filter out corpora whose audio_dir doesn't exist — the user shouldn't see
     # a registered corpus that has nothing in it. Print why each was dropped
-    # so a missing /mnt/storage isn't silent.
+    # so a missing ${BLINKY_DATA} copy isn't silent.
     available: list[Corpus] = []
     for c in chosen:
         if not c.audio_dir.is_dir():

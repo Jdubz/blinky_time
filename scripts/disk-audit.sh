@@ -2,10 +2,14 @@
 #
 # Disk audit for blinky_time project
 #
-# Checks all known data locations for bloat and reports actionable findings.
-# Run periodically or before large operations (dataprep, training).
+# Checks the repo and the ML work root for bloat and reports actionable findings.
+# Run periodically or before a local dataprep or training run.
 #
 # Usage: ./scripts/disk-audit.sh
+#
+# The ML part audits ${BLINKY_WORK} (processed_v*, mel_cache, prep's orphaned
+# shard dirs: docs/ML_STORAGE_LAYOUT.md). It has no default: the old build-host
+# mounts are retired, so with BLINKY_WORK unset the ML part is skipped and says so.
 
 set -e
 
@@ -16,14 +20,14 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ML_DATA="/mnt/storage/blinky-ml-data"
+ML_DATA="${BLINKY_WORK:-}"
 
 echo -e "${BOLD}=== Blinky Disk Audit ===${NC}"
 echo ""
 
 # --- Drive overview ---
 echo -e "${BOLD}Drive Usage:${NC}"
-df -h / /mnt/storage /mnt/sda /mnt/speedy 2>/dev/null | tail -n +2 | while read line; do
+df -h / ${BLINKY_DATA:+"$BLINKY_DATA"} ${BLINKY_WORK:+"$BLINKY_WORK"} 2>/dev/null | tail -n +2 | while read line; do
     use_pct=$(echo "$line" | awk '{print $5}' | tr -d '%')
     if [ "$use_pct" -gt 80 ] 2>/dev/null; then
         echo -e "  ${RED}$line${NC}"
@@ -53,7 +57,12 @@ fi
 echo ""
 
 # --- ML processed data ---
-if [ -d "$ML_DATA" ]; then
+if [ -z "$ML_DATA" ]; then
+    echo -e "${YELLOW}ML work data: skipped, \$BLINKY_WORK is unset (docs/ML_STORAGE_LAYOUT.md)${NC}"
+elif [ ! -d "$ML_DATA" ]; then
+    echo -e "${RED}ML work data: \$BLINKY_WORK=$ML_DATA is not a directory${NC}"
+    exit 1
+else
     echo -e "${BOLD}ML Processed Data:${NC}"
     processed_count=0
     for d in "$ML_DATA"/processed_*; do

@@ -3,8 +3,8 @@
 #
 # Run after v34d training stops (early-stop on patience or epoch 60).
 # Produces:
-#   /mnt/storage/blinky-ml-data/outputs/v34d/{export.log, eval/}
-#   /mnt/storage/blinky-ml-data/outputs/v34d/comparison_v33_v34d.txt
+#   $BLINKY_DATA/outputs/v34d/{export.log, eval/}
+#   $BLINKY_DATA/outputs/v34d/comparison_v33_v34d.txt
 #
 # All steps fail loudly. No silent skips. If anything goes wrong the
 # script halts and surfaces the error rather than producing a "completed"
@@ -14,8 +14,8 @@ set -euo pipefail
 
 # Resolve ROOT relative to this script so the pipeline works on any checkout.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-V34D_OUT="/mnt/storage/blinky-ml-data/outputs/v34d"
-# v33's training artifacts predate the move to /mnt/storage and live under
+V34D_OUT="${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}/outputs/v34d"
+# v33's training artifacts predate the move to ${BLINKY_DATA} and live under
 # the in-repo outputs/ tree. We invoke evaluate.py directly (rather than via
 # `make eval`) so we can point at the right OUTPUT_DIR for v33.
 V33_OUT="${ROOT}/outputs/v33_mel_only"
@@ -65,7 +65,7 @@ make eval \
 # same hand-curated onsets_consensus GT, with the post-2026-04-29 evaluator
 # fix that requires onset GT (not the legacy beat GT). Invoking evaluate.py
 # directly (not `make eval`) because v33's artifacts live under the in-repo
-# outputs/ tree, not /mnt/storage.
+# outputs/ tree, not ${BLINKY_DATA}.
 [ -f "${V33_OUT}/model_checkpoint.pt" ] || \
     { echo "ERROR: v33 model_checkpoint.pt not found at ${V33_OUT}"; exit 1; }
 echo

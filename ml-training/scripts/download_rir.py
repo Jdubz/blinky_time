@@ -12,7 +12,7 @@ For loud venue simulation, we want:
   - Clubs/small venues (short RT60, bass-heavy)
 
 Usage:
-    python scripts/download_rir.py --output-dir /mnt/storage/blinky-ml-data/rir
+    python scripts/download_rir.py --output-dir "$BLINKY_DATA/rir"
 """
 
 import argparse
@@ -23,6 +23,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 import soundfile as sf
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
 
 # EchoThief: 115 free RIRs from real spaces, CC0 license
 ECHOTHIEF_URL = "http://www.echothief.com/wp-content/uploads/2016/06/EchoThiefImpulseResponseLibrary.zip"
@@ -97,7 +100,7 @@ def generate_synthetic_rir(sr: int, rt60: float, room_type: str,
 
 def main():
     parser = argparse.ArgumentParser(description="Download/generate room impulse responses")
-    parser.add_argument("--output-dir", default="/mnt/storage/blinky-ml-data/rir")
+    parser.add_argument("--output-dir", type=root_path, default="${BLINKY_DATA}/rir")
     parser.add_argument("--sr", type=int, default=16000, help="Target sample rate")
     parser.add_argument("--skip-download", action="store_true", help="Only generate synthetic RIRs")
     args = parser.parse_args()

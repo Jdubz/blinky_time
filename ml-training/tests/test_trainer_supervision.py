@@ -67,6 +67,10 @@ def job(tmp_path: Path) -> dict:
         "SPARK_INPUT_DATA": str(data),
         "SPARK_OUTPUT_MODEL": str(work / "outputs" / "model"),
         "SPARK_CHECKPOINT_DIR": str(work / "checkpoints"),
+        # spark_entry.py, the Spark's entry point, sets the storage roots before it runs
+        # train.py; they have no default (docs/ML_STORAGE_LAYOUT.md).
+        "BLINKY_DATA": str(tmp_path / "corpus"),
+        "BLINKY_WORK": str(work / "checkpoints" / "work"),
     }
     env.pop("TMUX", None)
     env.pop("STY", None)

@@ -187,7 +187,7 @@ python tools/label-reviewer/server.py --no-defaults \
 | `--port` | 8765 | Server port |
 | `--corpus` | (defaults below) | `name=audio_dir,onset_dir,human_edits_dir[,beat_dir,librosa_dir]`. Repeatable. |
 | `--no-defaults` | off | Skip the built-in `training` + `edm` corpora |
-| `--review-state` | `/mnt/storage/.../labels/review_state.json` | Per-corpus review state file |
+| `--review-state` | `${BLINKY_DATA}/labels/review_state.json` | Per-corpus review state file (required when `BLINKY_DATA` is unset) |
 
 The reviewer probes both `<stem>.onsets_consensus.json` and `<stem>.onsets.json`
 when reading auto onsets — it works against either filename convention.

@@ -12,28 +12,26 @@
 SHELL := /bin/bash
 
 # --- Paths ---
-# Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
-#   STORAGE — /mnt/storage SATA SSD: warm tier for audio corpora, labels, RIR, noise.
-#   NVME    — /mnt/nvme LVM-linear pool over 2× USB-NVMe (~462 GB): hot tier for
-#             processed_v*, mel_cache, training outputs. Single mount point so
-#             prep peak (~370 GB shards+final during merge) doesn't surprise us.
-# Same roots the configs use (${BLINKY_DATA} / ${BLINKY_WORK}, scripts/audio.py
-# STORAGE_ROOT_DEFAULTS): the environment wins, else the old build-host layout (#286).
-BLINKY_DATA   ?= /mnt/storage/blinky-ml-data
-BLINKY_WORK   ?= /mnt/nvme
-STORAGE       := $(BLINKY_DATA)
-NVME          := $(BLINKY_WORK)
-AUDIO_DIR     := $(STORAGE)/audio/combined
+# The storage roots the configs use (${BLINKY_DATA}: audio corpora, labels, RIR,
+# noise; ${BLINKY_WORK}: processed_v*, mel_cache, training outputs), from the
+# environment or the command line (make prepare BLINKY_DATA=... BLINKY_WORK=...).
+# No defaults: the old build-host layout is retired (docs/ML_STORAGE_LAYOUT.md,
+# scripts/audio.py STORAGE_ROOTS). Recursive (=) so a target that needs a root
+# stops, naming it, only when it runs; `help` needs neither (the reviewer reads
+# BLINKY_DATA itself, or takes --review-state).
+STORAGE        = $(if $(BLINKY_DATA),$(BLINKY_DATA),$(error BLINKY_DATA is unset: set it to the dir holding the audio corpora, labels, RIR and noise (docs/ML_STORAGE_LAYOUT.md)))
+NVME           = $(if $(BLINKY_WORK),$(BLINKY_WORK),$(error BLINKY_WORK is unset: set it to the dir for processed_v*, mel_cache and outputs (docs/ML_STORAGE_LAYOUT.md)))
+AUDIO_DIR      = $(STORAGE)/audio/combined
 # Onset labels (the actual training target — see CLAUDE.md "Task is Onset Detection").
 # Was previously $(STORAGE)/labels/consensus_v2 (BEAT consensus); switched 2026-04-29
 # to onsets_consensus to stop silently injecting beat-detection bias into training.
 # The historical consensus_v* dirs were archived to labels/_archive_beats_2026_04_29/.
-LABELS_ONSETS := $(STORAGE)/labels/onsets_consensus
+LABELS_ONSETS  = $(STORAGE)/labels/onsets_consensus
 # Legacy alias preserved so any out-of-tree script that imports this Makefile
 # variable doesn't crash. Points at the onset path; never write beat labels here.
-LABELS_CONSENSUS := $(LABELS_ONSETS)
-PROCESSED_DIR := $(NVME)/processed
-RIR_DIR       := $(STORAGE)/rir/processed
+LABELS_CONSENSUS  = $(LABELS_ONSETS)
+PROCESSED_DIR  = $(NVME)/processed
+RIR_DIR        = $(STORAGE)/rir/processed
 TEST_AUDIO    := ../corpus/edm
 # No default: the old default (configs/wider_rf.yaml) was a legacy BEAT CNN (#271).
 CONFIG        ?=
@@ -44,7 +42,7 @@ REQUIRE_CONFIG = $(if $(CONFIG),,$(error CONFIG is required: pass CONFIG=configs
 _CONFIG_NAME  := $(basename $(notdir $(CONFIG)))
 _TIMESTAMP    := $(shell date +%Y%m%d-%H%M%S)
 RUN_NAME      ?= $(_CONFIG_NAME)-$(_TIMESTAMP)
-OUTPUT_DIR    := $(NVME)/outputs/$(RUN_NAME)
+OUTPUT_DIR     = $(NVME)/outputs/$(RUN_NAME)
 
 # --- Tunables ---
 WORKERS       := 5
@@ -213,7 +211,7 @@ REVIEWER_PORT  := 8765
 # restart needed. Pass --corpus name=audio,onset,human to add more.
 #
 # Edits land in:
-#   training corpus -> /mnt/storage/.../labels/onsets_human/  (local disk)
+#   training corpus -> ${BLINKY_DATA}/labels/onsets_human/  (local disk)
 #   edm corpus      -> corpus/edm/          (commits via git
 #                                                              -> the servers)
 reviewer:

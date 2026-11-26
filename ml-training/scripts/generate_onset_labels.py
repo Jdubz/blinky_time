@@ -4,7 +4,7 @@
 For each audio file that has a consensus_v5 label, runs librosa.onset.onset_detect
 at 16 kHz / hop_length=256 and saves onset times as JSON.
 
-Output: /mnt/storage/blinky-ml-data/labels/onsets_librosa/{stem}.onsets.json
+Output: $BLINKY_DATA/labels/onsets_librosa/{stem}.onsets.json
 Format: {"onsets": [0.1, 0.35, ...], "count": 42,
          "source": "librosa.onset.onset_detect", "sr": 16000, "hop": 256}
 
@@ -26,10 +26,13 @@ from pathlib import Path
 import librosa
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
+
 # Defaults
-AUDIO_DIR = Path("/mnt/storage/blinky-ml-data/audio")
-LABELS_DIR = Path("/mnt/storage/blinky-ml-data/labels/consensus_v5")
-OUTPUT_DIR = Path("/mnt/storage/blinky-ml-data/labels/onsets_librosa")
+AUDIO_DIR = "${BLINKY_DATA}/audio"
+LABELS_DIR = "${BLINKY_DATA}/labels/consensus_v5"
+OUTPUT_DIR = "${BLINKY_DATA}/labels/onsets_librosa"
 SR = 16000
 HOP = 256
 
@@ -78,15 +81,15 @@ def main():
         description="Generate librosa onset labels for training dataset"
     )
     parser.add_argument(
-        "--audio-dir", type=Path, default=AUDIO_DIR,
+        "--audio-dir", type=root_path, default=AUDIO_DIR,
         help=f"Root audio directory (default: {AUDIO_DIR})"
     )
     parser.add_argument(
-        "--labels-dir", type=Path, default=LABELS_DIR,
+        "--labels-dir", type=root_path, default=LABELS_DIR,
         help=f"Consensus labels directory (default: {LABELS_DIR})"
     )
     parser.add_argument(
-        "--output-dir", type=Path, default=OUTPUT_DIR,
+        "--output-dir", type=root_path, default=OUTPUT_DIR,
         help=f"Output directory for onset labels (default: {OUTPUT_DIR})"
     )
     parser.add_argument(

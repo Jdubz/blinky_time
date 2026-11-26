@@ -25,7 +25,7 @@
 # event coverage (all percussive + strongly-confirmed harmonic onsets).
 #
 # Requires: rerun prepare_dataset.py with --output-dir
-# /mnt/nvme/processed_v32 (the labels filter happens at
+# ${BLINKY_WORK}/processed_v32 (the labels filter happens at
 # prep time, so existing processed_v31 cannot be reused).
 
 model:

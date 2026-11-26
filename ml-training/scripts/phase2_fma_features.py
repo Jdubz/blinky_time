@@ -20,16 +20,21 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import storage_root  # noqa: E402
+
 log = logging.getLogger("phase2_pre")
 
-FMA_AUDIO = Path('/mnt/storage/blinky-ml-data/audio/fma')
-FMA_META = Path('/mnt/storage/blinky-ml-data/audio/metadata/fma_metadata')
-ONSETS_DIR = Path('/mnt/storage/blinky-ml-data/labels/onsets_consensus')
+# Under ${BLINKY_DATA}, resolved in main() (scripts/audio.py storage_root: no default).
+FMA_AUDIO: Path
+FMA_META: Path
+ONSETS_DIR: Path
 
 # Mainstream EDM subgenre IDs (from FMA's genres.csv — Electronic top-level
 # subgenres only). Excludes Chip Music, Industrial, Synth Pop, etc. as
@@ -148,6 +153,11 @@ def load_onset_gt(track_id: int) -> np.ndarray:
 
 
 def main():
+    global FMA_AUDIO, FMA_META, ONSETS_DIR
+    data = Path(storage_root("BLINKY_DATA"))
+    FMA_AUDIO = data / 'audio' / 'fma'
+    FMA_META = data / 'audio' / 'metadata' / 'fma_metadata'
+    ONSETS_DIR = data / 'labels' / 'onsets_consensus'
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     id_to_title = load_genre_id_to_title()
 

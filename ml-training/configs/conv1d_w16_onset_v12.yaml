@@ -54,8 +54,8 @@
 #   tmux new-session -d -s training "cd ml-training && source venv/bin/activate && \
 #     PYTHONUNBUFFERED=1 python train.py \
 #       --config configs/conv1d_w16_onset_v12.yaml --swa \
-#       --output-dir /mnt/storage/blinky-ml-data/outputs/v12-wider-swa \
-#       2>&1 | tee /mnt/storage/blinky-ml-data/outputs/v12-wider-swa.log"
+#       --output-dir $BLINKY_DATA/outputs/v12-wider-swa \
+#       2>&1 | tee $BLINKY_DATA/outputs/v12-wider-swa.log"
 
 model:
   type: "frame_conv1d"
