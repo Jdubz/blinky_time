@@ -131,6 +131,10 @@ def test_the_measured_lag_needs_the_calibrated_path(monkeypatch: pytest.MonkeyPa
     assert pb.audio_start()["lag_ms"] == 260.0
     monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "40")
     assert pb.measured_lag_ms() == 240.0
+    monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "none")  # off: the lag is searched (recalibration)
+    assert pb.measured_lag_ms() is None
+    monkeypatch.setenv("BLINKY_AUDIO_PATH_MS", "")  # empty: the constant
+    assert pb.measured_lag_ms() == 260.0
     pb.dac_start_ms = None
     assert pb.measured_lag_ms() is None
 
@@ -359,3 +363,16 @@ def test_the_raw_capture_carries_the_measured_start() -> None:
     assert cap["audio_start_epoch_ms"] == 1000.0  # kept: every t is from it
     assert cap["audio_dac_start_epoch_ms"] == 1150.0
     assert cap["audio_start"]["dac_offset_ms"] == 150.0
+
+
+def test_the_box_is_calibrated_so_runs_are_scored_at_the_measured_lag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The test box's fixed path is calibrated (docs/TEST_BOX.md, "Audio start"): a measured
+    start gives a measured lag without any configuration."""
+    monkeypatch.delenv("BLINKY_AUDIO_PATH_MS", raising=False)
+    assert audio_player.AUDIO_PATH_MS is not None and 0 < audio_player.AUDIO_PATH_MS < 150
+    pb = PlaybackResult(success=True, audio_start_time_ms=1000.0, duration_ms=1.0)
+    pb.dac_start_ms = 1170.0
+    assert pb.measured_lag_ms() == 170.0 + audio_player.AUDIO_PATH_MS
+    assert "note" not in pb.audio_start()
