@@ -57,8 +57,13 @@ if command -v tailscale >/dev/null; then
     targets+=("$ip:22 tailnet peer" "$ip:443 tailnet peer (https)")
   done
 fi
+# Every other container on every network it's on, except the tunnel connector's address on the
+# shared edge network: that's the one peer the service is meant to share a network with (the
+# connector's other addresses are probed like everyone else's).
+peer=$(docker inspect -f '{{with index .NetworkSettings.Networks "blinky-labels-edge"}}{{.IPAddress}}{{end}}' "$LABELS_TUNNEL_CONTAINER" 2>/dev/null || true)
 for ctr in $(docker ps --format '{{.Names}}' | grep -vx "$C"); do
   for ip in $(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$ctr"); do
+    [ -n "$peer" ] && [ "$ip" = "$peer" ] && continue
     targets+=("$ip:80 container $ctr")
   done
 done
@@ -70,8 +75,9 @@ targets+=("ALLOW:github.com:443 GitHub (fetching the corpus)"
           "github.com:80 GitHub on port 80 (only 443 is open)" "1.1.1.1:53 public DNS over TCP (only 443 is open)")
 printf '%s\n' "${targets[@]}" | sort -u | docker exec -i $C python3 -c '
 import socket, sys, errno
-bad = n = failed = 0
-for line in sys.stdin:
+from concurrent.futures import ThreadPoolExecutor
+
+def probe(line):
     spec, what = line.strip().split(" ", 1)
     allow = spec.startswith("ALLOW:")
     host, port = spec.removeprefix("ALLOW:").rsplit(":", 1)
@@ -84,11 +90,18 @@ for line in sys.stdin:
     except OSError as e:
         result, reached = f"unreachable ({errno.errorcode.get(e.errno, e.errno)})", False
     good = reached if allow else not reached
-    bad |= not good; n += 1; failed += not good
+    return good, allow, f"{what:42s} {host}:{port} -> {result}"
+
+lines = [l for l in sys.stdin if l.strip()]
+with ThreadPoolExecutor(max_workers=32) as pool:  # most probes wait out the timeout: in parallel
+    results = list(pool.map(probe, lines))
+failed = 0
+for good, allow, text in results:
+    failed += not good
     if not good or allow:
-        print(("ok   " if good else "FAIL ") + f"{what:42s} {host}:{port} -> {result}", flush=True)
-print(f"{n} probes, {failed} not as expected" if bad else f"ok   all {n} probes as expected (everything private unreachable, GitHub on 443 reachable)")
-sys.exit(1 if bad else 0)
+        print(("ok   " if good else "FAIL ") + text, flush=True)
+print(f"{len(results)} probes, {failed} not as expected" if failed else f"ok   all {len(results)} probes as expected (everything private unreachable, GitHub on 443 reachable)")
+sys.exit(1 if failed else 0)
 ' || fail=1
 
 if [ -n "$PUBLIC" ]; then
