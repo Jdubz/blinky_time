@@ -13,7 +13,7 @@ Generates a per-track report (JSON) and prints aggregate statistics.
 
 Usage:
     python scripts/validate_labels.py \
-        --labels-dir /mnt/storage/blinky-ml-data/labels/multi \
+        --labels-dir $BLINKY_DATA/labels/multi \
         --output report.json
 """
 

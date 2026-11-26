@@ -55,7 +55,7 @@ from onset_label_merge import (  # noqa: E402
 # handler cleans them up on normal exit and Python exceptions. Note: atexit
 # does NOT run on SIGKILL (OOM killer) — orphaned dirs must be found and
 # deleted manually in that case. Placing them in output_dir (not /tmp)
-# makes this straightforward: `find /mnt/storage -name 'blinky_*' -type d`.
+# makes this straightforward: `find "$BLINKY_WORK" -name 'blinky_*' -type d`.
 _active_shard_dirs: list[tuple[Path, Path]] = []  # (shard_dir, manifest_path)
 
 

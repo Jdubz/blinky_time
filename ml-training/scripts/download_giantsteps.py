@@ -8,7 +8,7 @@ Both datasets are available from the MTG GitHub repositories.
 Audio is on Beatport previews (~2 min clips).
 
 Usage:
-    python scripts/download_giantsteps.py --output-dir /mnt/storage/blinky-ml-data/audio/giantsteps
+    python scripts/download_giantsteps.py --output-dir "$BLINKY_DATA/audio/giantsteps"
 """
 
 import argparse
@@ -20,6 +20,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # ml-training, for scripts.audio
+from scripts.audio import root_path  # noqa: E402
 
 # GiantSteps Tempo dataset
 GIANTSTEPS_TEMPO_REPO = "https://github.com/GiantSteps/giantsteps-tempo-dataset.git"
@@ -106,7 +109,7 @@ def convert_giantsteps_annotations(repo_dir: Path, output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Download GiantSteps datasets")
-    parser.add_argument("--output-dir", default="/mnt/storage/blinky-ml-data/audio/giantsteps")
+    parser.add_argument("--output-dir", type=root_path, default="${BLINKY_DATA}/audio/giantsteps")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)

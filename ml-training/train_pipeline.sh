@@ -48,9 +48,15 @@ for arg in "${@:3}"; do
     esac
 done
 
-# Outputs land on the NVMe pool (see docs/ML_STORAGE_LAYOUT.md). Override
-# with OUTPUT_DIR=... if you need a different target.
-OUTPUT_DIR="${OUTPUT_DIR:-${BLINKY_WORK:-/mnt/nvme}/outputs/$RUN_NAME}"
+# The storage roots the config's paths use (docs/ML_STORAGE_LAYOUT.md): no
+# defaults, the old build-host layout is retired. On the Spark, training runs
+# through spark_entry.py instead (`spark_jobs.py train`), which sets both.
+: "${BLINKY_DATA:?is unset: set it to the dir holding the audio corpora, labels, RIR and noise (docs/ML_STORAGE_LAYOUT.md)}"
+: "${BLINKY_WORK:?is unset: set it to the dir for processed_v*, mel_cache and outputs (docs/ML_STORAGE_LAYOUT.md)}"
+export BLINKY_DATA BLINKY_WORK
+
+# Outputs land under ${BLINKY_WORK}. Override with OUTPUT_DIR=... for another target.
+OUTPUT_DIR="${OUTPUT_DIR:-$BLINKY_WORK/outputs/$RUN_NAME}"
 mkdir -p "$OUTPUT_DIR"  # Create early so tee can write the log from the start
 
 # Read processed_dir from config — fail fast on parse errors

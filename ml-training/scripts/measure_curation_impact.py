@@ -16,9 +16,9 @@ Usage:
 
     # Training corpus (auto in one dir, overlays in another)
     python scripts/measure_curation_impact.py \\
-        --auto-dir /mnt/storage/blinky-ml-data/labels/onsets_consensus \\
+        --auto-dir $BLINKY_DATA/labels/onsets_consensus \\
         --auto-glob "*.onsets.json" \\
-        --human-dir /mnt/storage/blinky-ml-data/labels/onsets_human
+        --human-dir $BLINKY_DATA/labels/onsets_human
 
 The script does **not** measure F1 deltas — that requires a model prediction
 stream. To measure F1 lift, run the blinky-server validation harness with and

@@ -32,7 +32,26 @@ Prepared training tensors (about 200 GB at full size) are made inside the job's 
 
 ## Storage roots (#286)
 
-Configs, the Makefile and `train_pipeline.sh` name `${BLINKY_DATA}` (corpora, labels, RIR, noise) and `${BLINKY_WORK}` (`processed_v*`, mel cache, outputs) instead of mounts. Set them to wherever a local copy lives. Unset, they default to the old build-host paths (`/mnt/storage/blinky-ml-data`, `/mnt/nvme`), which no longer exist. `scripts/audio.py:load_config` expands them and refuses any other `${…}`, and `tests/test_storage_roots.py` fails on a config that names a machine mount.
+Configs, scripts, the Makefile and `train_pipeline.sh` name `${BLINKY_DATA}` (corpora, labels, RIR, noise) and `${BLINKY_WORK}` (`processed_v*`, mel cache, outputs) instead of mounts. Set them to wherever a local copy lives.
+
+**There are no defaults.** Until 2026-11-25 an unset root fell back to the old build-host paths (`/mnt/storage/blinky-ml-data`, `/mnt/nvme`), which exist on no machine. A run then failed late, as a missing file under a dead mount, or wrote a fresh tree there. Now an unset or empty root fails at once, naming the variable:
+- `scripts/audio.py` (`storage_root`, `load_config`) raises `StorageRootUnset`.
+- A script's directory default (`type=root_path`, for example `--kw-dir` defaulting to `${BLINKY_DATA}/labels/kick_weighted_drums`) stops with an argparse error naming the option and the variable. It does so only when the default is used, so a run that passes the directory needs no root.
+- The Makefile's targets, `train_pipeline.sh` and the other shell scripts stop with `BLINKY_DATA is unset` or `BLINKY_WORK is unset`.
+- The label reviewer skips its `training` corpus and says why. Its review state then needs `--review-state`.
+- `scripts/disk-audit.sh` skips its ML section and says why.
+
+`load_config` expands every root a config names, so even a script that reads only a config's model or mel settings needs both roots set. Any value will do for those; the CI tests that do this set placeholder values.
+
+**What sets them where:**
+- **On the Spark,** `spark_entry.py` (the `gpu_task` entry point that `spark_jobs.py train` submits) sets `BLINKY_DATA` to the corpus input and `BLINKY_WORK` to the checkpoint dir's `work/` before it loads the config. Nothing there relied on the old defaults.
+- **The CI trainer-contract test** runs `train.py` directly. It did rely on them, silently: its config paths expanded to the dead mounts, and `train.py` read its data from `$SPARK_INPUT_DATA` instead. The test now sets the roots as `spark_entry.py` does.
+
+`load_config` refuses any `${…}` other than the two roots. `tests/test_storage_roots.py` fails in four cases:
+- a root has a default;
+- a config names a machine mount;
+- a tracked file outside the archives names the retired layout (`ml-training/archive/` is dead code, left as it was, and nothing live imports it);
+- a script default doesn't fail as described above.
 
 New configs set paths through the roots:
 

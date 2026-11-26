@@ -7,7 +7,7 @@ echo "=== V17 DATA PREPARATION ==="
 PYTHONUNBUFFERED=1 python scripts/prepare_dataset.py \
   --config configs/conv1d_w16_onset_v17.yaml \
   --augment --band-flux \
-  --teacher-soft-dir "${TEACHER_SOFT_DIR:-/mnt/storage/blinky-ml-data/labels/onset_teacher_soft}" \
+  --teacher-soft-dir "${TEACHER_SOFT_DIR:-${BLINKY_DATA:?is unset (docs/ML_STORAGE_LAYOUT.md)}/labels/onset_teacher_soft}" \
   --output-dir data/processed_v17
 
 echo "=== V17 TRAINING ==="

@@ -10,10 +10,10 @@ The FMA dataset is hosted on GitHub/Zenodo:
 
 Usage:
     # Download and filter electronic tracks
-    python scripts/download_fma.py --output-dir /mnt/storage/blinky-ml-data/audio/fma
+    python scripts/download_fma.py --output-dir $BLINKY_DATA/audio/fma
 
     # Just show what would be downloaded (dry run)
-    python scripts/download_fma.py --output-dir /mnt/storage/blinky-ml-data/audio/fma --dry-run
+    python scripts/download_fma.py --output-dir $BLINKY_DATA/audio/fma --dry-run
 """
 
 import argparse

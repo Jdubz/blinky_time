@@ -33,8 +33,8 @@
 #   tmux new-session -d -s training "cd ml-training && source venv/bin/activate && \
 #     PYTHONUNBUFFERED=1 python train.py \
 #       --config configs/conv1d_w16_onset_v14.yaml \
-#       --output-dir /mnt/storage/blinky-ml-data/outputs/v14-owbce-fixed \
-#       2>&1 | tee /mnt/storage/blinky-ml-data/outputs/v14-owbce-fixed.log"
+#       --output-dir $BLINKY_DATA/outputs/v14-owbce-fixed \
+#       2>&1 | tee $BLINKY_DATA/outputs/v14-owbce-fixed.log"
 
 model:
   type: "frame_conv1d"

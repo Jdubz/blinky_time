@@ -10,13 +10,13 @@ Improvements over v1:
 
 Usage:
     python scripts/merge_consensus_labels_v2.py \
-        --labels-dir /mnt/storage/blinky-ml-data/labels/multi \
-        --output-dir /mnt/storage/blinky-ml-data/labels/consensus_v2
+        --labels-dir $BLINKY_DATA/labels/multi \
+        --output-dir $BLINKY_DATA/labels/consensus_v2
 
     # Stricter: only keep tracks with quality >= 0.5
     python scripts/merge_consensus_labels_v2.py \
-        --labels-dir /mnt/storage/blinky-ml-data/labels/multi \
-        --output-dir /mnt/storage/blinky-ml-data/labels/consensus_v2 \
+        --labels-dir $BLINKY_DATA/labels/multi \
+        --output-dir $BLINKY_DATA/labels/consensus_v2 \
         --min-quality 0.5
 """
 

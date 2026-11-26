@@ -9,12 +9,12 @@ Checks for quality issues that would degrade model training:
 
 Usage:
     python scripts/validate_kick_weighted.py \
-        --label-dir /mnt/storage/blinky-ml-data/labels/kick_weighted_drums \
-        --consensus-dir /mnt/storage/blinky-ml-data/labels/onsets_consensus
+        --label-dir $BLINKY_DATA/labels/kick_weighted_drums \
+        --consensus-dir $BLINKY_DATA/labels/onsets_consensus
 
     # Quarantine bad tracks (move to .quarantined/ subdir):
     python scripts/validate_kick_weighted.py \
-        --label-dir /mnt/storage/blinky-ml-data/labels/kick_weighted_drums \
+        --label-dir $BLINKY_DATA/labels/kick_weighted_drums \
         --quarantine
 
 Output: summary stats + list of flagged tracks with reasons.

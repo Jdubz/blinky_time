@@ -155,11 +155,10 @@ export:
   header_name: "frame_onset_model_data_unversioned.h"
   c_array_name: "frame_onset_model_data"
 
-# Storage tiering (see docs/ML_STORAGE_LAYOUT.md):
-#   /mnt/nvme    — 463 GB LVM-linear pool over 2× USB-NVMe. Hot path for prep+train.
-#                  Holds processed_v*/, mel_cache/, outputs/, scratch/.
-#   /mnt/storage — 458 GB SATA SSD. Warm tier: audio corpora, labels, noise, RIR,
-#                  stems archive. Read-heavy but not latency-critical.
+# Storage roots (see docs/ML_STORAGE_LAYOUT.md), set in the environment, no defaults:
+#   ${BLINKY_WORK} — hot tier: processed_v*/, mel_cache/, outputs/, scratch/.
+#   ${BLINKY_DATA} — warm tier: audio corpora, labels, noise, RIR, stems.
+# On the Spark, spark_entry.py sets them (the corpus input, the checkpoint dir's work/).
 #
 # Processed data is large (80-220 GB per version) and regenerable from audio+labels.
 #
