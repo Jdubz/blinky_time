@@ -255,6 +255,7 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
             "posted": desc,
         }
         status(gh_, sha, st, desc, url)
+        # "rig error N in a row" is matched by the LGTM alert BlinkyHardwareCheckRigError (N >= 6).
         log(f"{sha[:12]} (#{number}): {desc} (rig error {n} in a row)")
         return
     status(gh_, sha, st, desc, url)

@@ -116,9 +116,18 @@ loki.write "central" {
 
 // ============================================================ host metrics → Prometheus (remote-write)
 // Bare-metal agent, so the default /proc and /sys are the host's. thermal_zone and hwmon carry the
-// Pi's SoC temperature: a throttled host is a test failure, not a slow run (TEST_BOX.md).
+// Pi's SoC temperature and under-voltage alarm: a throttled host is a test failure, not a slow run
+// (TEST_BOX.md). The systemd collector reports the server's and the runners' units and timers
+// (state, last trigger, automatic restarts), read over D-Bus; the central stack's alerts on a failing
+// runner or a crash-looping server key on it (TEST_BOX.md "Alerts").
 prometheus.exporter.unix "node" {
 	include_exporter_metrics = true
+	enable_collectors        = ["systemd"]
+
+	systemd {
+		unit_include    = "(blinky-.+|alloy)\\.(service|timer)"
+		enable_restarts = true
+	}
 }
 
 prometheus.scrape "node" {
