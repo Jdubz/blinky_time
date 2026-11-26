@@ -10,7 +10,6 @@ import pytest
 
 from blinky_server.testing import staging, strict_rules
 
-
 health = staging.health.__wrapped__  # type: ignore[attr-defined]  # the step's body, no DBOS
 
 
