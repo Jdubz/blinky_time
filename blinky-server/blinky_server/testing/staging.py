@@ -83,9 +83,8 @@ DEFAULTS: dict[str, float] = {
     "validation_ms": 35000.0,
 }
 # One json info per < 5 s: every loop-metrics window is read. Health starts right after the
-# deploy, whose settings restore + save stalls the loop ~85-115 ms (blinky-firmware#49): the
-# windows that may hold that save are listed as excluded from the frame-time rule, by the
-# server's record of its saves (strict_rules), not skipped silently.
+# deploy's settings restore + save; since blinky-firmware#49 a save doesn't stall the loop, so
+# every window counts.
 HEALTH_POLL_S = 4.0
 # json info fields with onset-path timing, when the firmware reports them (#178).
 TIMING_FIELDS = ("onsetUs", "onsetMaxUs")
@@ -175,7 +174,7 @@ async def strict(
 ) -> dict[str, Any]:
     """The strict rules over the run's windows, music, beat pace and detection latency
     (strict_rules.judge)."""
-    return strict_rules.judge(device_ids, windows, "quality", music, latency)
+    return strict_rules.judge(windows, "quality", music, latency)
 
 
 @durable.step

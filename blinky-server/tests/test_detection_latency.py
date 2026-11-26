@@ -75,7 +75,7 @@ def test_the_calibration_runs_pass_and_only_the_two_sparse_tracks_are_left_out()
     counted = [r["offset_ms"] for r in got["runs"] if r["counted"]]
     # Every counted run sits well inside the rule's limit: its spread set the limit.
     assert max(abs(x) for x in counted) < strict_rules.threshold("detection_latency") * 0.7
-    row = {r["rule"]: r for r in strict_rules.evaluate([], [], latency=got)}["detection_latency"]
+    row = {r["rule"]: r for r in strict_rules.evaluate([], latency=got)}["detection_latency"]
     assert row["status"] == strict_rules.PASS and row["samples"] == 26
     assert row["where"] == "median of 26 of 28 tracks"
     assert [x["track"] for x in row["left_out"]] == left
@@ -89,7 +89,7 @@ def test_the_calibration_runs_pass_and_only_the_two_sparse_tracks_are_left_out()
 )
 def test_the_rule_is_a_band_around_the_calibration(offset: float, status: str) -> None:
     latency = detection_latency.summarize(results([("t", 0.9, 210.0, 210.0 + offset)]))["CHIP"]
-    row = {r["rule"]: r for r in strict_rules.evaluate([], [], latency=latency)}
+    row = {r["rule"]: r for r in strict_rules.evaluate([], latency=latency)}
     assert row["detection_latency"]["status"] == status
     assert row["detection_latency"]["worst"] == pytest.approx(offset)
 
@@ -97,12 +97,12 @@ def test_the_rule_is_a_band_around_the_calibration(offset: float, status: str) -
 def test_no_counted_track_is_no_data_never_a_pass() -> None:
     sparse = detection_latency.summarize(results([("dubstep", 0.25, 206.9, 264.1)]))["CHIP"]
     assert sparse["median_ms"] is None and sparse["counted"] == 0
-    row = {r["rule"]: r for r in strict_rules.evaluate([], [], latency=sparse)}
+    row = {r["rule"]: r for r in strict_rules.evaluate([], latency=sparse)}
     assert row["detection_latency"]["status"] == strict_rules.NO_DATA
     assert row["detection_latency"]["where"] == "none of 1 tracks counted"
     assert row["detection_latency"]["left_out"][0]["offset_ms"] == 57.2
     # A run that scored no tracks (the hardware checks) has no row data either.
-    assert {r["rule"]: r for r in strict_rules.evaluate([], [])}["detection_latency"][
+    assert {r["rule"]: r for r in strict_rules.evaluate([])}["detection_latency"][
         "status"
     ] == strict_rules.NO_DATA
 
@@ -112,7 +112,7 @@ def test_the_summary_names_the_worst_device_by_distance_either_way() -> None:
         **detection_latency.summarize(results([("t", 0.9, 210.0, 213.0)], "A")),
         **detection_latency.summarize(results([("t", 0.9, 210.0, 202.0)], "B")),
     }
-    out = strict_rules.report({}, {}, None, latency)
+    out = strict_rules.report({}, None, latency)
     row = {r["rule"]: r for r in out["rules"]}["detection_latency"]
     assert row["device"] == "B" and row["worst"] == -8.0 and row["status"] == "pass"
     assert set(out["devices"]) == {"A", "B"}
@@ -157,7 +157,7 @@ def test_the_summary_is_keyed_by_the_full_chip_id_like_the_strict_rules_windows(
     chip = "87DE9B58C90AFE2D"
     latency = detection_latency.summarize(results(CALIBRATION[:3], chip[:12]), [chip])
     assert list(latency) == [chip]
-    out = strict_rules.report({chip: []}, {}, None, latency)
+    out = strict_rules.report({chip: []}, None, latency)
     assert list(out["devices"]) == [chip]
     row = {r["rule"]: r for r in out["rules"]}["detection_latency"]
     assert row["device"] == chip and row["status"] == strict_rules.PASS

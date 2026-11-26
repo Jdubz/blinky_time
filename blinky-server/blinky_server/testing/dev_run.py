@@ -48,10 +48,9 @@ from .workflows import _connected, lit, plan, reserve, validation_run
 
 KINDS = ("info", "health", "validate", "pace", "commands")
 # The firmware's loop metrics (maxFrameMs, every ...MaxUs) cover one 5 s window, and a dev run
-# usually starts right after a deploy, whose settings restore + save stalls the loop ~100 ms
-# (blinky-firmware#49). Wait out one full window plus a margin, as deploy.sh's
-# LOOP_METRICS_SETTLE_S does, so the info check reports a window that began after the run did.
-# A window that may still hold the save is listed as excluded by the strict rules, not hidden.
+# usually starts right after a deploy (a reboot, then the settings restore + save). Wait out one
+# full window plus a margin, as deploy.sh's LOOP_METRICS_SETTLE_S does, so the info check
+# reports a window that began after the run did.
 INFO_SETTLE_S = 6.0
 # json info fields reported by the info check: every timer (…Us, …MaxUs, the frame times) and
 # the memory and audio counters a firmware change can move.
@@ -116,7 +115,7 @@ async def strict(
 ) -> dict[str, Any]:
     """The strict rules over the run's loop windows, its pace check and detection latency, if
     any."""
-    return strict_rules.judge(device_ids, windows, "dev", music, latency)
+    return strict_rules.judge(windows, "dev", music, latency)
 
 
 def validated(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:

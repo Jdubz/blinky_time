@@ -1,5 +1,5 @@
 """The strict rules (testing/strict_rules.py): non-blocking warnings until the owner makes each
-one block, the settings-save exclusion, and the readiness tracker."""
+one block, and the readiness tracker."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from blinky_server import telemetry
-from blinky_server.device.device import Device, saves_between
+from blinky_server.device.device import Device
 from blinky_server.device.protocol import DeviceProtocol
 from blinky_server.testing import dev_run, hardware_checks, strict_rules
 
@@ -31,8 +31,8 @@ def win(t: float, frame: int = 20, fps: float = 120.0, over: int = 0, ms: int | 
     }
 
 
-def rows(windows: list[dict[str, Any]], saves: list[dict[str, Any]] | None = None, **kw: Any):
-    return {r["rule"]: r for r in strict_rules.evaluate(windows, saves or [], **kw)}
+def rows(windows: list[dict[str, Any]], **kw: Any):
+    return {r["rule"]: r for r in strict_rules.evaluate(windows, **kw)}
 
 
 def block(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
@@ -52,41 +52,20 @@ def test_the_table_is_the_release_gates_limits_all_warning_today() -> None:
     assert got["overrun_growth"] == (0.0, "warn")
     assert got["beat_pace"] == (0.03, "warn")
     assert {r.mode for r in strict_rules.RULES} == {"warn"}
-    assert strict_rules.BY_NAME["frame_time"].issues == (49, 23)
-    assert [r.name for r in strict_rules.RULES if r.save_excluded] == ["frame_time"]
+    assert strict_rules.BY_NAME["frame_time"].issues == (23,)
 
 
-# -- the settings-save exclusion ---------------------------------------------------------------
+# -- frame time: every window counts --------------------------------------------------------
 
 
-def test_a_window_that_may_hold_a_save_is_excluded_and_said_and_a_real_stall_is_not() -> None:
-    save = {"t": T0 + 3.0, "t_end": T0 + 3.1}
-    ws = [
-        win(T0 + 5.0, frame=113),  # the save's window: excluded
-        win(T0 + 12.9, frame=95),  # still within 10 s of the save: excluded too
-        win(T0 + 14.0, frame=31),  # clear of it
-        win(T0 + 60.0, frame=1118),  # a stall nobody sent: never excluded
-    ]
-    frame = rows(ws, [save])["frame_time"]
-    assert frame["status"] == strict_rules.WARNED and frame["worst"] == 1118
-    assert frame["samples"] == 2
-    assert [e["max_frame_ms"] for e in frame["excluded"]] == [113, 95]
-    assert frame["excluded"][0]["reason"] == (
-        f"settings save at {strict_rules.clock(T0 + 3.0)} (blinky-firmware#49)"
-    )
-    # Only the frame-time rule excludes: fps still sees every window.
-    assert rows(ws, [save])["fps"]["samples"] == 4
-
-
-def test_the_window_span_is_two_windows_before_the_read() -> None:
-    """The firmware publishes its last closed 5 s window: a read at t reports one inside
-    [t - 10 s, t]. A save in that span (with a small margin) may be in it; one before isn't, and
-    a save after the read can't be."""
-    s = strict_rules.covering_save
-    assert s(T0, [{"t": T0 - 9.9, "t_end": T0 - 9.8}])
-    assert s(T0, [{"t": T0 - 0.1, "t_end": T0 + 0.1}])
-    assert s(T0, [{"t": T0 - 10.6, "t_end": T0 - 10.5}]) is None
-    assert s(T0, [{"t": T0 + 1.0, "t_end": T0 + 1.1}]) is None
+def test_every_window_counts_a_save_is_not_excused() -> None:
+    """Since blinky-firmware#49 a settings save only writes flash: no window is left out, and
+    the slowest one is the rule's value."""
+    ws = [win(T0 + 5.0, frame=19), win(T0 + 12.9, frame=113), win(T0 + 60.0, frame=31)]
+    frame = rows(ws)["frame_time"]
+    assert frame["status"] == strict_rules.WARNED and frame["worst"] == 113
+    assert frame["samples"] == 3 and "excluded" not in frame
+    assert rows([])["frame_time"]["status"] == strict_rules.NO_DATA
 
 
 def info(t: float, end_before_s: float, length_s: float, frame: int = 20) -> dict[str, Any]:
@@ -105,91 +84,21 @@ def info(t: float, end_before_s: float, length_s: float, frame: int = 20) -> dic
 def test_the_reported_close_time_places_the_window_in_host_time() -> None:
     w = strict_rules.window(info(T0, 2.0, 5.2), T0, "health")
     assert (w["w_start"], w["w_end"]) == (round(T0 - 7.2, 3), round(T0 - 2.0, 3))
-    # Older firmware, or no window closed yet: no span, the read falls back to SPAN_S.
+    # Older firmware, or no window closed yet: no span.
     assert "w_start" not in strict_rules.window({"millis": 600_000, "maxFrameMs": 20}, T0, "x")
     none_yet = {"millis": 900, "frameWindowEndMs": 0, "frameWindowMs": 0}
     assert strict_rules.window_span(none_yet, T0) is None
 
 
-def test_with_the_close_time_only_the_window_holding_the_save_is_excluded() -> None:
-    """The exact window replaces the 10 s span: a save just before a window (or after it)
-    no longer costs that window, and the one holding it is still excluded and said."""
-    save = {"t": T0 + 3.0, "t_end": T0 + 3.1}
-    ws = [
-        strict_rules.window(info(T0 + 5.0, 0.5, 5.1, frame=113), T0 + 5.0, "a"),  # holds it
-        strict_rules.window(
-            info(T0 + 9.6, 0.1, 5.0, frame=31), T0 + 9.6, "b"
-        ),  # starts 1.4 s after
-        strict_rules.window(info(T0 + 12.9, 3.0, 5.0, frame=40), T0 + 12.9, "c"),  # was in the span
-    ]
-    frame = rows(ws, [save])["frame_time"]
-    assert [e["max_frame_ms"] for e in frame["excluded"]] == [113]
-    assert frame["excluded"][0]["window"] == (
-        f"{strict_rules.clock(T0 - 0.6)}-{strict_rules.clock(T0 + 4.5)}"
-    )
-    assert frame["samples"] == 2 and frame["worst"] == 40
-    # The same reads from older firmware: both later windows fall in the save's span.
-    old = [win(w["t"], frame=w["max_frame_ms"]) for w in ws]
-    old_frame = rows(old, [save])["frame_time"]
-    assert [e["max_frame_ms"] for e in old_frame["excluded"]] == [113, 31, 40]
-    assert old_frame["excluded"][0]["window"].endswith("(span)")
-
-
-def test_a_long_window_widens_the_save_query(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A window that ran long (a stall in it) starts before the SPAN_S before its read."""
-    import blinky_server.device.device as device_mod
-
-    asked: list[tuple[float, float]] = []
-
-    def fake_between(_ids: list[str], lo: float, hi: float) -> dict[str, Any]:
-        asked.append((lo, hi))
-        return {}
-
-    monkeypatch.setattr(device_mod, "saves_between", fake_between)
-    w = strict_rules.window(info(T0, 4.0, 9.0), T0, "x")  # starts 13 s before the read
-    strict_rules.run_saves(["CHIP"], {"CHIP": [w]})
-    assert asked == [
-        (round(T0 - 13.0, 3) - strict_rules.SAVE_MARGIN_S, T0 + strict_rules.SAVE_MARGIN_S)
-    ]
-
-
-def test_every_window_excluded_is_no_data_never_a_pass() -> None:
-    frame = rows([win(T0 + 5.0, frame=113)], [{"t": T0 + 3.0, "t_end": T0 + 3.1}])["frame_time"]
-    assert frame["status"] == strict_rules.NO_DATA and len(frame["excluded"]) == 1
-
-
-async def test_every_save_the_server_sends_is_recorded_even_one_that_times_out() -> None:
-    """The deploy's restore + save and any `save` command go through the protocol: each is
-    recorded with its host time. A save whose reply never comes may still have run: recorded."""
-
-    class Silent(MockTransport):
-        def _generate_response(self, command: str) -> str | None:
-            return None if command == "save" else super()._generate_response(command)
-
-    t = Silent()
-    d = Device("CHIP", "/dev/x", "nrf52840", t)
-    await t.connect()
-    before = time.time()
-    with pytest.raises(TimeoutError):
-        await d.protocol.send_command("save", timeout=0.2)
-    got = saves_between(["CHIP"], before - 1, time.time() + 1)
-    assert len(got["CHIP"]) == 1
-    await d.protocol.send_command("json info")
-    assert len(saves_between(["CHIP"], before - 1, time.time() + 1)["CHIP"]) == 1
-
-
-async def test_a_reconnected_protocol_still_records_saves_and_alerts() -> None:
+async def test_a_reconnected_protocol_still_records_alerts() -> None:
     """The fleet manager gives a reconnected device a new protocol: wire_protocol routes all of
-    its callbacks, the save record and the alert record included."""
+    its callbacks, the alert record included."""
     d = Device("CHIP", "/dev/x", "nrf52840", MockTransport())
     t2 = MockTransport()
     d.protocol = DeviceProtocol(t2)
     d.wire_protocol()
     await t2.connect()
-    t0 = time.time()
-    await d.protocol.send_command("save")
     d.protocol._handle_line("[ASSERT] after the reconnect")
-    assert saves_between(["CHIP"], t0 - 1, time.time() + 1)["CHIP"]
     assert d.alerts[-1] == "[ASSERT] after the reconnect"
 
 
@@ -221,7 +130,7 @@ def test_fps_overruns_and_music_rules() -> None:
 
 def test_the_summary_names_the_worst_device() -> None:
     out = strict_rules.report(
-        {"A": [win(T0, frame=30), win(T0 + 4, frame=40)], "B": [win(T0, frame=150)]}, {}
+        {"A": [win(T0, frame=30), win(T0 + 4, frame=40)], "B": [win(T0, frame=150)]}
     )
     frame = next(r for r in out["rules"] if r["rule"] == "frame_time")
     assert frame["device"] == "B" and frame["worst"] == 150 and frame["status"] == "warn"
@@ -232,7 +141,7 @@ def test_a_warning_never_fails_a_run_and_a_blocking_rule_does(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ws = {"C": [win(T0, frame=150), win(T0 + 4)]}
-    warned = strict_rules.report(ws, {})
+    warned = strict_rules.report(ws)
     assert strict_rules.failures(warned) == [] and len(strict_rules.warnings(warned)) == 1
     hw = {"rig_error": None, "plan": ["upload"], "phases": [{"name": "upload", "result": "yes"}]}
     assert hardware_checks.verdict({**hw, "strict": warned})
@@ -240,7 +149,7 @@ def test_a_warning_never_fails_a_run_and_a_blocking_rule_does(
     assert dev_run.verdict({"checks": [], "final": {}, "strict": warned})
 
     block(monkeypatch, "frame_time")
-    blocked = strict_rules.report(ws, {})
+    blocked = strict_rules.report(ws)
     (failed,) = strict_rules.failures(blocked)
     assert failed["rule"] == "frame_time" and failed["status"] == strict_rules.FAILED
     assert not hardware_checks.verdict({**hw, "strict": blocked})
@@ -250,7 +159,7 @@ def test_a_warning_never_fails_a_run_and_a_blocking_rule_does(
 
 
 def test_the_metrics_carry_each_rule() -> None:
-    strict_rules.judge(["C"], {"C": [win(T0, frame=150), win(T0 + 4, fps=55)]}, "dev")
+    strict_rules.judge({"C": [win(T0, frame=150), win(T0 + 4, fps=55)]}, "dev")
 
     def v(name: str, **labels: str) -> float | None:
         return telemetry.REGISTRY.get_sample_value(name, labels)
