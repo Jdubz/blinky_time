@@ -57,8 +57,13 @@ if command -v tailscale >/dev/null; then
     targets+=("$ip:22 tailnet peer" "$ip:443 tailnet peer (https)")
   done
 fi
+# Every other container on every network it's on, except the tunnel connector's address on the
+# shared edge network: that's the one peer the service is meant to share a network with (the
+# connector's other addresses are probed like everyone else's).
+peer=$(docker inspect -f '{{with index .NetworkSettings.Networks "blinky-labels-edge"}}{{.IPAddress}}{{end}}' "$LABELS_TUNNEL_CONTAINER" 2>/dev/null || true)
 for ctr in $(docker ps --format '{{.Names}}' | grep -vx "$C"); do
   for ip in $(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$ctr"); do
+    [ -n "$peer" ] && [ "$ip" = "$peer" ] && continue
     targets+=("$ip:80 container $ctr")
   done
 done
