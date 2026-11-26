@@ -87,6 +87,68 @@ def test_track_list_and_seeding(web, edm):
     assert c["seed"] == "human" and [o["time"] for o in c["onsets"]] == [4.0] and c["reviewed_ranges"] == [[0.0, 5.0]]
 
 
+def _suspect_map(schema=2):
+    """A suspect map as blinky-corpus scripts/drum_suspect.py writes it: 5 bars of 2 s."""
+    def bar(i, tier, **kw):
+        row = {"bar": i, "start": 2.0 * i, "end": 2.0 * i + 2, "missing_kick": 0, "unexpected_kick": 0,
+               "missing_snare": 0, "unexpected_snare": 0, "disagree": 0, "filter": False, "filter_z": 0.4,
+               "score": 0.0, "rank": None, "tier": tier, **kw}
+        if schema >= 2:
+            row.setdefault("expected", [])
+        return row
+    bars = [bar(0, None), bar(1, "high", missing_snare=2, disagree=3, filter=True, score=4.5, rank=1,
+                                 expected=[{"time": 2.5012, "type": "snare", "p": 1.0, "attack": 1.4, "at": "attack"},
+                                           {"time": 3.5, "type": "snare", "p": 0.75, "attack": 1.3, "at": "grid"}]),
+            bar(2, "medium", disagree=1, score=1.0, rank=2), bar(3, "low", missing_kick=1, score=0.6, rank=3,
+                                                               expected=[{"time": 6.0, "type": "kick", "p": 0.5, "attack": 2.0, "at": "attack"}]),
+            bar(4, None)]
+    if schema < 2:
+        for b in bars:
+            b.pop("expected", None)
+    return {"schema": schema, "track": "a", "duration": DUR, "grid": {"bpm": 120.0}, "ranges": [], "bars": bars}
+
+
+def test_track_without_a_suspect_map(web):
+    assert web.req("GET", "/api/track?stem=a")[2]["suspect"] is None
+    a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
+    assert a["suspect_s"] is None and a["suspect_left"] is None
+
+
+def test_track_with_a_suspect_map(web, edm):
+    write_json(edm / "drums_suspect" / "a.json", _suspect_map())
+    sus = web.req("GET", "/api/track?stem=a")[2]["suspect"]
+    # the lane: high and medium bars only, with their evidence
+    assert [(b["start"], b["tier"]) for b in sus["bars"]] == [(2.0, "high"), (4.0, "medium")]
+    assert sus["bars"][0] == {"start": 2.0, "end": 4.0, "tier": "high", "rank": 1, "filter": True, "missing_kick": 0,
+                              "missing_snare": 2, "disagree": 3, "unexpected_kick": 0, "unexpected_snare": 0}
+    # the markers: every bar's expected hits, low tier included
+    assert sus["expected"] == [{"time": 2.5012, "type": "snare", "p": 1.0, "at": "attack"},
+                               {"time": 3.5, "type": "snare", "p": 0.75, "at": "grid"},
+                               {"time": 6.0, "type": "kick", "p": 0.5, "at": "attack"}]
+    a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
+    assert a["suspect_s"] == 4.0 and a["suspect_left"] == 1.0
+    web.ops("a", [{"op": "review", "a": 0, "b": 3, "on": True}])  # half the high bar
+    a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]
+    assert a["suspect_left"] == 0.75
+    # hints only: nothing of the map reaches the labels
+    doc = json.loads((edm / "drums_human" / "a.drums.json").read_text())
+    assert len(doc["onsets"]) == 19 and 2.5012 not in [o["time"] for o in doc["onsets"]] and "suspect" not in doc
+
+
+def test_schema_1_suspect_map_has_bars_but_no_expected_hits(web, edm):
+    write_json(edm / "drums_suspect" / "a.json", _suspect_map(schema=1))
+    sus = web.req("GET", "/api/track?stem=a")[2]["suspect"]
+    assert len(sus["bars"]) == 2 and sus["expected"] == [] and sus["schema"] == 1
+
+
+def test_unreadable_suspect_map_is_said_not_fatal(web, edm):
+    (edm / "drums_suspect").mkdir()
+    (edm / "drums_suspect" / "a.json").write_text('{"schema": 2, "bars": [{"start": "x", "tier": "high"}]}')
+    st, _, t = web.req("GET", "/api/track?stem=a")
+    assert st == 200 and t["suspect"] is None and "suspect map is unreadable" in t["warning"]
+    assert len(t["onsets"]) == 19
+
+
 def test_opening_a_track_doesnt_make_it_human(web):
     web.req("GET", "/api/track?stem=a")
     a = {t["stem"]: t for t in web.req("GET", "/api/tracks")[2]["tracks"]}["a"]

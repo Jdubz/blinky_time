@@ -28,6 +28,8 @@ Files (paths relative to edm/):
     <stem>.mp3                          the audio
     drums_human/<stem>.drums.json       human ground truth
     <seed dir>/<stem><suffix>           seed labels, in the precedence of seeds.json (read-only)
+    drums_suspect/<stem>.json           the suspect map (scripts/drum_suspect.py): which bars to check
+                                        first and the hits their pattern expects (hints, read-only)
 
 A track's shared state starts from its human file, else the first seeds.json source that has it.
 Python standard library only.
@@ -63,6 +65,8 @@ from labelcheck import (  # noqa: E402
     f_measure, file_sha256, is_complete, merge_ranges,
 )
 
+SUSPECT_DIR = "drums_suspect"
+SUSPECT_TIERS = ("high", "medium")  # the page shows these; "low" stays hidden
 DEFAULT_EDM = STATIC_DIR.parent.parent / "edm"  # a corpus clone; /edm in the image (unused there)
 MAX_POST_BYTES = 2 * 1024 * 1024  # a 1000-hit track is ~50 KB
 # The service's version: the git tree hash of labels-service/ (the image's build arg). The site
@@ -98,6 +102,7 @@ class Corpus:
         self._seeds_file = seeds_file
         self._seeds: tuple[float, tuple[list[labelcheck.SeedSource], list[labelcheck.SeedSource]]] | None = None
         self._sha_cache: dict[str, tuple[float, int, str]] = {}
+        self._suspect_cache: dict[str, tuple[float, int, dict[str, Any] | str]] = {}
         self._lock = threading.Lock()
 
     def seeds_file(self) -> Path:
@@ -145,6 +150,29 @@ class Corpus:
 
     def seed_path(self, seed: labelcheck.SeedSource, stem: str) -> Path:
         return self._inside(seed.path(self.edm, stem), self.edm / seed.dir)
+
+    def suspect_path(self, stem: str) -> Path:
+        return self._inside(self.edm / SUSPECT_DIR / f"{stem}.json", self.edm / SUSPECT_DIR)
+
+    def suspect(self, stem: str) -> dict[str, Any] | str | None:
+        """The track's suspect map as the page uses it (suspect_public), None when it has none, or
+        the reason it's unreadable. Cached until the file changes (the track list reads all 18)."""
+        path = self.suspect_path(stem)
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            return None
+        with self._lock:
+            hit = self._suspect_cache.get(stem)
+            if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+                return hit[2]
+        try:
+            out: dict[str, Any] | str = suspect_public(json.loads(path.read_text()))
+        except (ValueError, TypeError, KeyError) as e:
+            out = f"{path.name}: {e}"[:300]
+        with self._lock:
+            self._suspect_cache[stem] = (st.st_mtime, st.st_size, out)
+        return out
 
     def stems(self) -> list[str]:
         return sorted(p.stem for p in self.edm.glob("*.mp3") if STEM_RE.match(p.stem))
@@ -242,6 +270,60 @@ def seed_docs(c: Corpus, stem: str) -> tuple[list[SeedDoc], list[str]]:
     return out, skipped
 
 
+# --- The suspect map (hints, never labels) ------------------------------------
+
+
+def _num(x: Any, what: str) -> float:
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or x != x or x in (float("inf"), float("-inf")):
+        raise ValueError(f"{what} is not a number")
+    return float(x)
+
+
+def suspect_public(doc: Any) -> dict[str, Any]:
+    """What the page needs from edm/drums_suspect/<stem>.json (blinky-corpus scripts/drum_suspect.py):
+    the high and medium bars with their evidence (the suspect lane, Next suspect), and every bar's
+    expected-but-missing hits (schema 2; the hollow markers). A schema-1 map has no expected hits.
+    Raises ValueError on a malformed map."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("bars"), list):
+        raise ValueError("no bars")
+    schema = doc.get("schema")
+    if not isinstance(schema, int) or schema < 1:
+        raise ValueError(f"bad schema {schema!r}")
+    bars, expected = [], []
+    for b in doc["bars"]:
+        if not isinstance(b, dict):
+            raise ValueError("a bar is not an object")
+        for e in b.get("expected") or []:
+            if not isinstance(e, dict) or e.get("type") not in LABEL_TYPES:
+                raise ValueError(f"bad expected hit {e!r:.80}")
+            expected.append({"time": round(_num(e["time"], "an expected hit's time"), 4), "type": e["type"],
+                             "p": round(_num(e.get("p", 0), "p"), 2), "at": "attack" if e.get("at") == "attack" else "grid"})
+        if b.get("tier") not in SUSPECT_TIERS:
+            continue
+        row = {"start": round(_num(b["start"], "start"), 4), "end": round(_num(b["end"], "end"), 4),
+               "tier": b["tier"], "rank": b.get("rank") if isinstance(b.get("rank"), int) else None,
+               "filter": bool(b.get("filter"))}
+        for k in ("missing_kick", "missing_snare", "disagree", "unexpected_kick", "unexpected_snare"):
+            v = b.get(k, 0)
+            row[k] = v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+        if row["end"] > row["start"]:
+            bars.append(row)
+    bars.sort(key=lambda r: r["start"])
+    expected.sort(key=lambda e: e["time"])
+    return {"schema": schema, "bars": bars, "expected": expected}
+
+
+def suspect_left(sus: dict[str, Any], ranges: list[list[float]]) -> tuple[float, float | None]:
+    """The high and medium bars' seconds, and the share of them not yet marked reviewed."""
+    total = left = 0.0
+    merged = merge_ranges(ranges) if ranges else []
+    for b in sus["bars"]:
+        a, z = b["start"], b["end"]
+        total += z - a
+        left += (z - a) - sum(max(0.0, min(z, y) - max(a, x)) for x, y in merged)
+    return round(total, 3), (round(left / total, 4) if total > 0 else None)
+
+
 # --- Track list and seeding ---------------------------------------------------
 
 
@@ -277,6 +359,8 @@ def track_summary(c: Corpus, stem: str, human_override: dict[str, Any] | None = 
         disagreement = round(1 - sum(fs) / len(fs), 3) if fs else None
 
     reviewed_s = covered(ranges, duration)
+    sus = c.suspect(stem)
+    sus_s, sus_left = suspect_left(sus, ranges) if isinstance(sus, dict) else (None, None)
     return {
         "stem": stem,
         "duration": duration,
@@ -290,6 +374,8 @@ def track_summary(c: Corpus, stem: str, human_override: dict[str, Any] | None = 
         "disagreement": disagreement,
         "disagreement_between": [s.seed.name for s in seeds[:2]] if len(seeds) >= 2 else None,
         "updated": human.get("updated") if human else None,
+        "suspect_s": sus_s,
+        "suspect_left": sus_left,
     }
 
 
@@ -364,6 +450,10 @@ def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = Non
         out["onsets"] = []
         out["warning"] = "No labels found for this track: starting from nothing."
     out["onsets"].sort(key=lambda o: o["time"])
+    sus = c.suspect(stem)
+    out["suspect"] = sus if isinstance(sus, dict) else None
+    if isinstance(sus, str):
+        out["warning"] = " ".join(filter(None, [out["warning"], f"The suspect map is unreadable ({sus}): no suspect lane."]))
 
     return out
 

@@ -30,6 +30,12 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
   A file that fails is held back (`publish_refused` in the logs). The corpus workflow and CI run the same checks as the gate.
 - **The undo is git history.** A track whose file changes on `main` from outside (an owner's fix or revert) takes `main`'s version, and open pages reload it.
 - **Rate limits** apply per client address, on requests and edits. The address is only ever kept as a keyed hash, in the logs.
+- **Suspect bars and expected hits (hints, never labels).** A track's suspect map, `edm/drums_suspect/<stem>.json` in the corpus (blinky-corpus `scripts/drum_suspect.py`), is read from the same corpus checkout as the seeds and the audio.
+  - The page draws its high and medium bars as a red and amber strip above *reviewed* (and in the overview), with the reason on hover. Reviewed bars fade.
+  - **Next suspect** (`J`) jumps to the next unreviewed one. The setting *Review order: suspect first* makes *Reviewed → next* do the same, falling back to in-order when none are left.
+  - The map's expected hits (schema 2) are hollow markers. One click, or `A` on a region, adds them through the normal `add` op. Markers aren't state: they're never sent, saved or published.
+  - The track list's *suspect left* is the share of the high and medium bars not yet reviewed, and it sorts tracks with work left.
+  - A page and an API on different versions both work: without `suspect` the page shows no strip or markers, and an older page ignores the field.
 - **Version.** `/api/config` reports `LABELS_SERVICE_VERSION`, the git tree hash of `labels-service/` (the image's build arg). The site stamps the same hash into the page, and the page asks for a reload when the two differ.
 
 ## Run it locally
@@ -49,8 +55,8 @@ Locally, every change is written straight to `edm/drums_human/<stem>.drums.json`
 | | |
 |---|---|
 | `GET /api/config` | hosted?, seed sources, version, publishing (`pulled`, `local` or `off`) |
-| `GET /api/tracks` | every track: source, counts, reviewed share, published / unpublished |
-| `GET /api/track?stem=` | a track: audio, references, its shared labels (`rev`, `onsets` with ids, `reviewed_ranges`) |
+| `GET /api/tracks` | every track: source, counts, reviewed share, published / unpublished, `suspect_s` and `suspect_left` (null without a suspect map) |
+| `GET /api/track?stem=` | a track: audio, references, its shared labels (`rev`, `onsets` with ids, `reviewed_ranges`), `suspect` (`{schema, bars: [high and medium bars with their evidence], expected: [{time, type, p, at}]}`, or null) |
 | `GET /api/ops?stem=&since=REV` | the operations after REV, or `{"reset": true}` (reload the track) |
 | `POST /api/ops?stem=` | `{"tab", "audio_sha256", "duration", "ops": [...]}` → `{"rev", "published", "unpublished"}` |
 | `GET /api/export` | for the corpus's labels-sync workflow: `{"ready", "tracks": {path: file text}, "held": {path: problems}}` |
