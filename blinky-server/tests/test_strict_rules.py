@@ -89,6 +89,70 @@ def test_the_window_span_is_two_windows_before_the_read() -> None:
     assert s(T0, [{"t": T0 + 1.0, "t_end": T0 + 1.1}]) is None
 
 
+def info(t: float, end_before_s: float, length_s: float, frame: int = 20) -> dict[str, Any]:
+    """A ``json info`` from firmware that says when its window closed (blinky-firmware#80):
+    read at host time ``t``, the window closed ``end_before_s`` earlier and ran ``length_s``."""
+    now = 600_000
+    return {
+        "millis": now,
+        "maxFrameMs": frame,
+        "fps": 120.0,
+        "frameWindowEndMs": now - round(end_before_s * 1000),
+        "frameWindowMs": round(length_s * 1000),
+    }
+
+
+def test_the_reported_close_time_places_the_window_in_host_time() -> None:
+    w = strict_rules.window(info(T0, 2.0, 5.2), T0, "health")
+    assert (w["w_start"], w["w_end"]) == (round(T0 - 7.2, 3), round(T0 - 2.0, 3))
+    # Older firmware, or no window closed yet: no span, the read falls back to SPAN_S.
+    assert "w_start" not in strict_rules.window({"millis": 600_000, "maxFrameMs": 20}, T0, "x")
+    none_yet = {"millis": 900, "frameWindowEndMs": 0, "frameWindowMs": 0}
+    assert strict_rules.window_span(none_yet, T0) is None
+
+
+def test_with_the_close_time_only_the_window_holding_the_save_is_excluded() -> None:
+    """The exact window replaces the 10 s span: a save just before a window (or after it)
+    no longer costs that window, and the one holding it is still excluded and said."""
+    save = {"t": T0 + 3.0, "t_end": T0 + 3.1}
+    ws = [
+        strict_rules.window(info(T0 + 5.0, 0.5, 5.1, frame=113), T0 + 5.0, "a"),  # holds it
+        strict_rules.window(
+            info(T0 + 9.6, 0.1, 5.0, frame=31), T0 + 9.6, "b"
+        ),  # starts 1.4 s after
+        strict_rules.window(info(T0 + 12.9, 3.0, 5.0, frame=40), T0 + 12.9, "c"),  # was in the span
+    ]
+    frame = rows(ws, [save])["frame_time"]
+    assert [e["max_frame_ms"] for e in frame["excluded"]] == [113]
+    assert frame["excluded"][0]["window"] == (
+        f"{strict_rules.clock(T0 - 0.6)}-{strict_rules.clock(T0 + 4.5)}"
+    )
+    assert frame["samples"] == 2 and frame["worst"] == 40
+    # The same reads from older firmware: both later windows fall in the save's span.
+    old = [win(w["t"], frame=w["max_frame_ms"]) for w in ws]
+    old_frame = rows(old, [save])["frame_time"]
+    assert [e["max_frame_ms"] for e in old_frame["excluded"]] == [113, 31, 40]
+    assert old_frame["excluded"][0]["window"].endswith("(span)")
+
+
+def test_a_long_window_widens_the_save_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A window that ran long (a stall in it) starts before the SPAN_S before its read."""
+    import blinky_server.device.device as device_mod
+
+    asked: list[tuple[float, float]] = []
+
+    def fake_between(_ids: list[str], lo: float, hi: float) -> dict[str, Any]:
+        asked.append((lo, hi))
+        return {}
+
+    monkeypatch.setattr(device_mod, "saves_between", fake_between)
+    w = strict_rules.window(info(T0, 4.0, 9.0), T0, "x")  # starts 13 s before the read
+    strict_rules.run_saves(["CHIP"], {"CHIP": [w]})
+    assert asked == [
+        (round(T0 - 13.0, 3) - strict_rules.SAVE_MARGIN_S, T0 + strict_rules.SAVE_MARGIN_S)
+    ]
+
+
 def test_every_window_excluded_is_no_data_never_a_pass() -> None:
     frame = rows([win(T0 + 5.0, frame=113)], [{"t": T0 + 3.0, "t_end": T0 + 3.1}])["frame_time"]
     assert frame["status"] == strict_rules.NO_DATA and len(frame["excluded"]) == 1
