@@ -7,8 +7,9 @@ score the algorithm (the report comment and the score record; it never posts a f
 1. Deploy: the staging build of the commit, through the fleet deploy pipeline
    (deploy_pipeline.run_deploy with ``staging_sha``: test devices only, the single flash path,
    settings restore + save, the post-deploy version assertion).
-2. Health: ``stable_minutes`` of ``json info`` with no music, the bench gate's checks
-   (blinky-firmware's tools/release_gate.py): fps floor, longest frame, no reboot, overrun growth.
+2. Health: ``stable_minutes`` of ``json info`` with no music: no reboot, and every loop window
+   read for the strict rules (testing/strict_rules.py: the bench gate's fps floor, longest
+   frame and overrun growth, non-blocking warnings until the owner makes them block).
 3. In a test session (runtime defaults, streaming), with the box speaker, every track is
    played once:
    - validation: every edm/ track, scored like /api/test/validate (drum metrics);
@@ -20,6 +21,9 @@ score the algorithm (the report comment and the score record; it never posts a f
    the deploy), the onset-path timing from ``json info`` when the firmware reports it, and no
    firmware [ASSERT] / [FALLBACK] line from the flash on (the server's alert record,
    device.alerts_since, which survives a restart).
+5. The strict rules over every loop window the run read (health's, one after each track while
+   the chips stream, the last), music and beat pace: the report's ``strict`` section, and a line
+   in the readiness record (strict_rules.record_run).
 
 The chips' LEDs are lit from the deploy's end to the job's end, however it ends: the box's
 chips idle dark (testing/leds.py). Nothing here needs the light.
@@ -28,7 +32,8 @@ The whole job holds the audio lock (workflows.reserve): no other test job plays 
 the chips while it deploys and measures them. Fleet deploys refuse to start while it runs
 (routes_firmware._deploy_active) and it refuses to start during one.
 
-Pass = every check passes. The validation numbers are reported, not gated: the box's numbers
+Pass = every check passes, and no strict rule in block mode fails (a warning never fails it).
+The validation numbers are reported, not gated: the box's numbers
 aren't trusted as a floor yet (docs/TEST_BOX.md, "Trusting the box's numbers").
 The operator's visual check is not here: it happens at promotion to stable.
 """
@@ -50,6 +55,7 @@ from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir
 from ..work import durable, jobs
+from . import strict_rules
 from .audio_player import play_audio, stop_audio
 from .workflows import (
     _connected,
@@ -64,27 +70,20 @@ from .workflows import (
 
 log = logging.getLogger(__name__)
 
-# The bench gate's thresholds (blinky-firmware's tools/release_gate.py defaults and
-# docs/RELEASE_PROCESS.md).
+# How long each measurement runs (the bench gate's, blinky-firmware's tools/release_gate.py).
+# Its pass/fail limits (fps, longest frame, overrun growth, music level and onsets, beat pace)
+# are the strict rules, defined once in testing/strict_rules.py.
 DEFAULTS: dict[str, float] = {
     "stable_minutes": 5.0,
-    "min_fps": 60.0,
-    "max_frame_ms": 100.0,
-    "max_overrun_growth": 5.0,
     "music_seconds": 15.0,
-    "min_level": 0.05,
-    "min_onsets_per_s": 1.0,
     "pace_seconds": 60.0,
-    "max_pace_error": 0.03,
     "validation_ms": 35000.0,
 }
-HEALTH_POLL_S = 4.0  # one json info per < 5 s: every loop-metrics window is read
-# The firmware publishes the last *closed* 5 s loop-metrics window. The deploy step just
-# before health ends with restore_runtime_settings + save, and a flash page erase stalls the
-# loop ~85 ms; that can sit in the window open when health starts (the first run on the box's
-# Sense Plus: 113 ms in the first window, 30-35 ms in the other 72). Health waits out two
-# windows before its baseline, so it measures the steady state it is meant to.
-HEALTH_SETTLE_S = 2 * 5.0
+# One json info per < 5 s: every loop-metrics window is read. Health starts right after the
+# deploy, whose settings restore + save stalls the loop ~85-115 ms (blinky-firmware#49): the
+# windows that may hold that save are listed as excluded from the frame-time rule, by the
+# server's record of its saves (strict_rules), not skipped silently.
+HEALTH_POLL_S = 4.0
 # json info fields with onset-path timing, when the firmware reports them (#178).
 TIMING_FIELDS = ("onsetUs", "onsetMaxUs")
 
@@ -121,69 +120,55 @@ def beat_pace(samples: list[tuple[float, float, int]]) -> dict[str, Any] | None:
 # -- steps -------------------------------------------------------------------------------------
 
 
+async def _window(device_id: str, where: str) -> dict[str, Any]:
+    """One json info read as a loop-metrics window, stamped with the host time of the read."""
+    info = await _info(device_id)
+    return strict_rules.window(info, time.time(), where)
+
+
 @durable.step
 async def health(device_ids: list[str], limits: dict[str, float]) -> dict[str, Any]:
-    """``stable_minutes`` of json info per device, no music: fps, longest frame, reboots,
-    overrun growth. Safe to repeat: it only reads."""
-    await asyncio.sleep(HEALTH_SETTLE_S)
-    first = {i: await _info(i) for i in device_ids}
-    seen: dict[str, dict[str, Any]] = {
-        i: {
-            "fps": [],
-            "frame_ms": [],
-            "over": [],
-            "rebooted": False,
-            "last_ms": int(first[i].get("millis", 0)),
-        }
-        for i in device_ids
-    }
-    last = dict(first)
+    """``stable_minutes`` of json info per device, no music: no reboot, and every loop window
+    (fps, longest frame, audio overruns, with the host time of each read) for the strict rules.
+    Safe to repeat: it only reads."""
+    windows: dict[str, list[dict[str, Any]]] = {i: [await _window(i, "health")] for i in device_ids}
+    rebooted = dict.fromkeys(device_ids, False)
     end = time.monotonic() + limits["stable_minutes"] * 60
     while time.monotonic() < end:
         await asyncio.sleep(HEALTH_POLL_S)
         for i in device_ids:
-            cur = await _info(i)
-            s = seen[i]
-            ms = int(cur.get("millis", 0))
-            if ms <= s["last_ms"]:
-                s["rebooted"] = True
-            s["last_ms"] = ms
-            s["fps"].append(float(cur.get("fps") or 0.0))
-            if cur.get("maxFrameMs") is not None:
-                frame = int(cur["maxFrameMs"])
-                s["frame_ms"].append(frame)
-                if frame > limits["max_frame_ms"]:
-                    # When: the device's uptime and wall time, so a long frame can be lined
-                    # up with what the server and box were doing then (the first full run
-                    # had one 1118 ms window out of 73, and only its size was kept).
-                    s["over"].append(
-                        {"uptime_s": ms // 1000, "at": round(time.time(), 1), "max_ms": frame}
-                    )
-            last[i] = cur
+            w = await _window(i, "health")
+            if int(w["ms"] or 0) <= int(windows[i][-1]["ms"] or 0):
+                rebooted[i] = True
+            windows[i].append(w)
     out: dict[str, Any] = {}
     for i in device_ids:
-        s = seen[i]
-        growth = int(last[i].get("audioOverruns") or 0) - int(first[i].get("audioOverruns") or 0)
-        fps_min = min(s["fps"]) if s["fps"] else 0.0
-        # Missing maxFrameMs is an instrumentation regression, not a pass (release_gate).
-        frame_max = max(s["frame_ms"]) if s["frame_ms"] else None
+        ws = windows[i]
+        growth = int(ws[-1]["overruns"] or 0) - int(ws[0]["overruns"] or 0)
         out[i] = {
-            "fps": {"pass": fps_min >= limits["min_fps"], "min": fps_min},
-            "frametime": {
-                "pass": frame_max is not None and frame_max <= limits["max_frame_ms"],
-                "max_ms": frame_max,
-                "windows": len(s["frame_ms"]),
-                "over_limit": s["over"],
-                # Every 5 s window's longest frame, in order (small: about 75 numbers).
-                "series_ms": s["frame_ms"],
-            },
             "stability": {
-                "pass": not s["rebooted"] and growth <= limits["max_overrun_growth"],
-                "rebooted": s["rebooted"],
+                "pass": not rebooted[i],
+                "rebooted": rebooted[i],
                 "overrun_growth": growth,
             },
+            # Every read, in order (small: about 75), judged by the strict rules.
+            "windows": ws,
         }
     return out
+
+
+@durable.step
+async def loop_reads(device_ids: list[str], where: str) -> dict[str, Any]:
+    """One loop window per device now (after a track: a window of streaming and music)."""
+    return {i: await _window(i, where) for i in device_ids}
+
+
+@durable.step
+async def strict(
+    device_ids: list[str], windows: dict[str, list[dict[str, Any]]], music: dict[str, Any]
+) -> dict[str, Any]:
+    """The strict rules over the run's windows, music and beat pace (strict_rules.judge)."""
+    return strict_rules.judge(device_ids, windows, "quality", music)
 
 
 @durable.step
@@ -241,25 +226,18 @@ async def music_and_pace(
     out: dict[str, Any] = {}
     for d in devices:
         lv = levels[d.id]
+        # Measured here, judged by the strict rules (music_level, music_onsets, beat_pace).
         if lv:
-            mean = sum(lv) / len(lv)
-            rate = onsets[d.id] / limits["music_seconds"]
             music: dict[str, Any] = {
-                "pass": mean >= limits["min_level"] and rate >= limits["min_onsets_per_s"],
-                "level_mean": round(mean, 3),
-                "onsets_per_s": round(rate, 2),
+                "level_mean": round(sum(lv) / len(lv), 3),
+                "onsets_per_s": round(onsets[d.id] / limits["music_seconds"], 2),
                 "samples": len(lv),
             }
         else:
-            music = {"pass": False, "detail": "no audio stream lines"}
+            music = {"detail": "no audio stream lines"}
         pace: dict[str, Any] | None = beat_pace(samples[d.id])
         if pace is None:
-            pace = {"pass": False, "detail": f"no tempo tracked ({len(samples[d.id])} samples)"}
-        else:
-            # A beat either way is sampling, not drift: +-1 at each end of the window.
-            pace["pass"] = abs(pace["counted"] - pace["expected"]) <= max(
-                2.0, limits["max_pace_error"] * pace["expected"]
-            )
+            pace = {"detail": f"no tempo tracked ({len(samples[d.id])} samples)"}
         out[d.id] = {"music": music, "beatpace": pace}
     return out
 
@@ -280,11 +258,12 @@ def choose_pace_track(
 
 
 def no_pace_track(device_ids: list[str]) -> dict[str, Any]:
-    """The music section when no track is long enough: both checks fail, with the reason."""
+    """The music section when no track is long enough: nothing measured (the strict rules show
+    no data), with the reason."""
     return {
         d: {
-            "music": {"pass": False, "detail": "no track long enough for the music check"},
-            "beatpace": {"pass": False, "detail": "no track long enough"},
+            "music": {"detail": "no track long enough for the music check"},
+            "beatpace": {"detail": "no track long enough"},
         }
         for d in device_ids
     }
@@ -306,6 +285,7 @@ async def final_state(device_ids: list[str], version: str, start: dict[str, Any]
     alerts = alerts_since(device_ids, start["alert_t"])
     for i in device_ids:
         info = await _info(i)
+        loop = strict_rules.window(info, time.time(), "end")
         ms = int(info.get("millis", 0))
         want = start["ms"].get(i, 0) + (time.time() - start["t"]) * 1000 - REBOOT_SLACK_MS
         out[i] = {
@@ -313,6 +293,7 @@ async def final_state(device_ids: list[str], version: str, start: dict[str, Any]
             "no_reboot": {"pass": ms >= want, "uptime_s": ms // 1000},
             "alerts": {"pass": not alerts.get(i), "lines": alerts.get(i, [])[:30]},
             "timing": {k: info[k] for k in TIMING_FIELDS if k in info} or None,
+            "loop": loop,
         }
     return out
 
@@ -392,6 +373,15 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{sha}.json"
     path.write_text(json.dumps(report, indent=2) + "\n")
+    if report.get("strict") and (report.get("deploy") or {}).get("pass"):
+        # A staging head's run counts for the strict rules' readiness (strict_rules.readiness).
+        strict_rules.record_run(
+            report["strict"],
+            source="quality",
+            sha=sha,
+            version=report.get("version"),
+            build=report.get("build"),
+        )
     if (report.get("validation") or {}).get("results"):
         rec = data_dir() / "staging-scores.jsonl"
         keep = [
@@ -475,10 +465,17 @@ def _passed(node: Any) -> bool:
 
 @durable.workflow("test.staging")
 async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
-    """req: sha, device_ids, track_dir, optional limits (DEFAULTS' keys)."""
+    """req: sha, device_ids, track_dir, optional limits (DEFAULTS' keys), optional build_of (the
+    PR head whose tree this commit has: the same firmware build, for the strict rules'
+    readiness)."""
     sha, device_ids = req["sha"], list(req["device_ids"])
     limits = {**DEFAULTS, **(req.get("limits") or {})}
-    report: dict[str, Any] = {"sha": sha, "devices": device_ids, "limits": limits}
+    report: dict[str, Any] = {
+        "sha": sha,
+        "build": req.get("build_of") or sha,
+        "devices": device_ids,
+        "limits": limits,
+    }
 
     async with reserve(device_ids):
         report["corpus"] = await corpus_pin(req["track_dir"])
@@ -531,6 +528,9 @@ async def _measure(
     """Health, validation with music and beat pace, and the final state, on the deployed build."""
     jobs.report(10, f"health: {limits['stable_minutes']:.0f} min of json info")
     report["health"] = await health(device_ids, limits)
+    loops: dict[str, list[dict[str, Any]]] = {
+        i: list(h["windows"]) for i, h in report["health"].items()
+    }
 
     p = await plan(device_ids, req["track_dir"], req.get("track_names"), None)
     if "error" in p:
@@ -547,6 +547,9 @@ async def _measure(
                     p["devices"], track, 1, limits["validation_ms"], 0.0, False
                 )
                 results.append(r if r is not None else {"track": track["name"], "failed": True})
+                # The window that just closed: the chips streaming to music (blinky-firmware#23).
+                for i, w in (await loop_reads(p["devices"], f"after {track['name']}")).items():
+                    loops.setdefault(i, []).append(w)
                 if n - 1 == pace_i:
                     # The same track goes on from where its validation window ended.
                     jobs.report(
@@ -563,7 +566,12 @@ async def _measure(
         }
 
     report["final"] = await final_state(device_ids, version, start)
-    report["passed"] = _passed({k: v for k, v in report.items() if k != "limits"})
+    for i, f in report["final"].items():
+        loops.setdefault(i, []).append(f["loop"])
+    report["strict"] = await strict(device_ids, loops, report.get("music") or {})
+    report["passed"] = _passed(
+        {k: v for k, v in report.items() if k not in ("limits", "strict")}
+    ) and not strict_rules.failures(report["strict"])
     await _finish(sha, report)
     jobs.report(100, "passed" if report["passed"] else "FAILED")
     return report

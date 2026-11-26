@@ -352,6 +352,8 @@ class Box:
             return {"status": "complete", "result": RUN_REPORT}
         if path == "/api/work":
             return {"in_flight": []}
+        if path == "/api/test/strict-rules":
+            return STRICT_STATUS
         raise AssertionError(path)
 
 
@@ -382,9 +384,8 @@ RUN_REPORT = {
             "minutes": 1.0,
             "devices": {
                 DEV: {
-                    "fps": {"pass": True, "min": 150.0},
-                    "frametime": {"pass": True, "max_ms": 15},
                     "stability": {"pass": True, "rebooted": False, "overrun_growth": 0},
+                    "windows": [{"t": 1.0, "fps": 150.0, "max_frame_ms": 15}],
                 }
             },
         },
@@ -401,7 +402,29 @@ RUN_REPORT = {
         },
     ],
     "final": {DEV: {"no_reboot": {"pass": True}, "alerts": {"pass": True, "lines": []}}},
-}
+    "strict": {
+        "rules": [
+            {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 15.0,
+             "threshold": 100.0, "unit": "ms", "worst_is": "max", "issues": [49, 23],
+             "where": "health", "at": "14:05:31.204", "samples": 15,
+             "excluded": [{"read_at": "14:03:12.101", "where": "health", "max_frame_ms": 113,
+                           "reason": "settings save at 14:03:05.320 (blinky-firmware#49)"}]},
+            {"rule": "fps", "mode": "warn", "status": "warn", "worst": 52.0, "threshold": 60.0,
+             "unit": "fps", "worst_is": "min", "issues": [23], "where": "after techno",
+             "at": "14:06:00.000", "samples": 16},
+            {"rule": "beat_pace", "mode": "warn", "status": "no data", "worst": None,
+             "threshold": 0.03, "unit": "", "worst_is": "max", "issues": []},
+        ]
+    },
+}  # fmt: skip
+STRICT_STATUS = {
+    "ready_after": 5,
+    "readiness": {
+        "frame_time": {"mode": "warn", "streak": 5, "ready": True, "broken_by": None},
+        "fps": {"mode": "warn", "streak": 0, "ready": False,
+                "broken_by": {"version": "b220-dev-abcdef01"}},
+    },
+}  # fmt: skip
 
 
 def test_flash_waits_out_the_60_s_rule_once() -> None:
@@ -458,6 +481,14 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
     assert "acfUs=7185, plpUs=589, heapPeak=9" in report  # the named timers first
     assert "drumF=0.71" in report and "verdict (health + asserts): PASSED" in report
     assert "box: DEV mode since" in report
+    # The strict rules: a warning is shown, never a failure (the verdict above passed).
+    assert "⚠ strict rules (non-blocking):" in report
+    assert "  fps: WARN (52 fps, after techno, 14:06:00.000, 16 reads), limit ≥ 60 fps" in report
+    assert "frame_time: pass (15 ms" in report and "beat_pace: no data, limit ≤ 0.03" in report
+    assert (
+        "frame_time: the window read at 14:03:12.101 (health, 113 ms) excluded: settings save "
+        "at 14:03:05.320 (blinky-firmware#49)" in report
+    )
 
 
 def test_try_hw_runs_the_hardware_checks_against_the_flashed_version(
@@ -530,6 +561,8 @@ def test_status_shows_what_waits_behind_dev_mode(capsys: pytest.CaptureFixture[s
     assert "box: DEV mode since" in out and "waiting behind dev mode: 1" in out
     assert "staging: ssssssssssss" in out and "preempted" in out and "dev.py mode queue" in out
     assert "chip 87DE9B58C90A testbox_grid_v1: connected, b211" in out
+    assert "  frame_time: warn, streak 5/5: READY to block" in out
+    assert "  fps: warn, streak 0/5, last warning b220-dev-abcdef01" in out
 
 
 def test_a_cache_hit_is_done_at_once(

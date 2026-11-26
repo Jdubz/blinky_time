@@ -73,6 +73,12 @@ class StagingSuiteRequest(BaseModel):
     track_dir: str = Field(..., description="The validation corpus (corpus/edm)")
     track_names: list[str] | None = None
     limits: dict[str, float] | None = None
+    build_of: str | None = Field(
+        None,
+        pattern=r"^[0-9a-f]{40}$",
+        description="The PR head whose tree this commit has (the same firmware build): the "
+        "strict rules' readiness counts the two as one build",
+    )
 
 
 class HardwareChecksRequest(BaseModel):
@@ -353,6 +359,22 @@ async def capture_nn(device_id: str, body: NnCaptureRequest) -> dict[str, Any]:
 def _require_store() -> None:
     if not durable.launched():
         raise HTTPException(503, "the durable work store isn't running")
+
+
+@router.get("/strict-rules")
+async def strict_rules_status() -> dict[str, Any]:
+    """The strict rules (testing/strict_rules.py): the table (each rule's threshold, mode and
+    the blinky-firmware issues it waits on), and each rule's readiness: how many distinct
+    firmware builds in a row it has passed on, and whether that makes it ready to block."""
+    import asyncio
+
+    from ..testing import strict_rules
+
+    return {
+        "rules": strict_rules.table(),
+        "ready_after": strict_rules.READY_AFTER,
+        "readiness": await asyncio.to_thread(strict_rules.readiness),
+    }
 
 
 @router.get("/jobs")

@@ -54,7 +54,14 @@ another runner's ready item that has waited longer, so neither starves the other
 
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
 successor carries its changes). ``--retest`` forgets the head's verdict (a rig flake), and
-``--dry-run`` shows what a pass would post without posting or submitting anything. State is in
+``--dry-run`` shows what a pass would post without posting or submitting anything.
+
+The strict rules (blinky-server testing/strict_rules.py) are in every report as a non-blocking
+section, and a status's description says how many warned. After each quality suite the runner
+reads each rule's readiness (GET /api/test/strict-rules): a rule that has passed on enough
+builds in a row is said in the report, and gets ONE blinky_time issue, "Ready to enable strict
+rule: X", never a second (the state's ``strict_issues`` and a title search). Switching a rule to
+block stays the owner's call. State is in
 ~/.local/share/blinky-server/staging.json; the log goes to the journal
 (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
 """
@@ -75,6 +82,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import strict
 from deploy import review_verdict  # the deployer's parser: one reading of the verdict comment
 
 # The firmware and its staging flow live in blinky-firmware (blinky_time#357): its staging
@@ -113,6 +121,8 @@ RUNNER = "staging"  # this runner's name in the box's hardware queue (PUT /api/b
 # Another runner's waiting item counts (we yield to it) only while that runner still reports:
 # both run every 2 minutes, so a report older than this is a runner that stopped.
 REPORT_STALE_S = 10 * 60
+TOOLING_REPO = "Jdubz/blinky_time"  # where a strict rule's "ready to block" issue goes
+READY_TITLE = "Ready to enable strict rule: {}"
 
 Gh = Callable[..., str]
 
@@ -587,7 +597,7 @@ def quality_lines(report: dict[str, Any]) -> list[str]:
     if not dep.get("pass"):
         lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]
         return lines
-    lines += check_rows(report, ("health", "music", "final"))
+    lines += check_rows(report, ("health", "final"))
     val = report.get("validation") or {}
     if val.get("results"):
         by_dev: dict[str, dict[str, list[float | None]]] = {}
@@ -622,6 +632,8 @@ def quality_lines(report: dict[str, Any]) -> list[str]:
     for dev, f in (report.get("final") or {}).items():
         lines.append(f"Onset-path timing ({dev[:12]}): {f.get('timing') or 'not reported'}")
     lines += alert_lines(report)
+    if report.get("strict"):
+        lines += ["", *strict.md_lines(report["strict"])]
     return lines
 
 
@@ -655,7 +667,10 @@ def quality_summary(report: dict[str, Any] | None) -> str:
     val = report["validation"]
     parts = [f"{k} {_mean(v)}" for k, v in means.items()]
     health = "health ok" if report.get("passed") else "health/asserts: see report"
-    return f"non-blocking: {', '.join(parts)} over {val.get('played')}/{val.get('tracks')} tracks; {health}"
+    return (
+        f"non-blocking: {', '.join(parts)} over {val.get('played')}/{val.get('tracks')} tracks; "
+        f"{health}{strict.suffix(report.get('strict'))}"
+    )
 
 
 # -- the hardware checks' report (shared with pr_queue.py and dev.py) -----------------------------
@@ -680,7 +695,7 @@ def hw_status(report: dict[str, Any]) -> tuple[str, str]:
         return "pending", f"rig error: {report['rig_error']}"[:110] + ", retrying"
     if report.get("passed"):
         phases = ", ".join(p["name"] for p in report.get("phases") or [])
-        return "success", f"{HW_PASSED}: {phases}"
+        return "success", f"{HW_PASSED}: {phases}{strict.suffix(report.get('strict'))}"
     return "failure", f"hardware checks FAILED at {hw_failed_at(report)}"
 
 
@@ -723,6 +738,8 @@ def hw_lines(report: dict[str, Any]) -> list[str]:
             f"{meta.get('lag_source')} ({meta.get('lag_matched')} hits), "
             f"{meta.get('rows')} stream lines, {meta.get('detections')} detections."
         )
+    if report.get("strict"):
+        lines += ["", *strict.md_lines(report["strict"])]
     return lines
 
 
@@ -915,6 +932,8 @@ def confirm(
         + (f" [Its report]({url})." if url else "")
     )
     state["hw_md"] = {"sha": sha, "text": hardware}
+    # The same firmware build as that head's, for the strict rules' readiness record.
+    state["confirmed"] = {"sha": sha, "head": head}
     link = report_comment(gh_, sha, hardware, QUALITY_PENDING)
     post_status(gh_, sha, "success", desc, link or url)
     state.pop("rig", None)
@@ -923,7 +942,112 @@ def confirm(
     passed(gh_, state, sha, link or url)
 
 
-def finish_quality(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
+def existing_issue(gh_: Gh, title: str) -> str | None:
+    """The URL of a blinky_time issue titled exactly ``title`` (open or closed), else None.
+    RuntimeError when GitHub can't be asked: the caller then opens nothing."""
+    raw = gh_(
+        "api",
+        "-X",
+        "GET",
+        "search/issues",
+        "-f",
+        f'q=repo:{TOOLING_REPO} is:issue in:title "{title}"',
+        "--jq",
+        ".items[] | {title, url: .html_url}",
+    )
+    for ln in raw.splitlines():
+        if ln.strip():
+            it = json.loads(ln)
+            if it.get("title") == title:
+                return str(it.get("url"))
+    return None
+
+
+def ready_issue_body(rule: str, r: dict[str, Any], n: int) -> str:
+    lines = [
+        f"The strict rule `{rule}` has passed on the last {r['streak']} distinct firmware builds "
+        f"with real runs on the test box ({n} needed), with no warning in between: it is ready "
+        'to block (blinky_time docs/DEV_LOOP.md, "Strict rules").',
+        "",
+        "| build | version | run | worst |",
+        "|---|---|---|---|",
+    ]
+    for b in r.get("builds") or []:
+        for run in b.get("runs") or []:
+            pr = f" (PR #{run['pr']})" if run.get("pr") else ""
+            lines.append(
+                f"| `{str(b['build'])[:12]}` | `{run.get('version')}` | "
+                f"{run.get('source')}{pr} | {run.get('worst')} |"
+            )
+    lines += [
+        "",
+        "Switching it is the owner's decision, never automatic: set its mode to `BLOCK` in "
+        "blinky-server `testing/strict_rules.py` (one line). A failing block rule then fails "
+        "the hardware checks (`Hardware test (PR)`/`(staging)` red) and dev runs.",
+        "",
+        "Opened by the test box's staging runner (scripts/testbox/staging.py), once per rule.",
+    ]
+    return "\n".join(lines)
+
+
+def ready_issue(gh_: Gh, state: dict[str, Any], rule: str, r: dict[str, Any], n: int) -> str | None:
+    """ONE "Ready to enable strict rule" issue per rule, ever: the state remembers it, and a
+    title search finds one the state lost. Its URL, or None (GitHub unreachable: next time)."""
+    issues = state.setdefault("strict_issues", {})
+    if issues.get(rule):
+        return str(issues[rule])
+    title = READY_TITLE.format(rule)
+    try:
+        found = existing_issue(gh_, title)
+        if found is None:
+            got = _gh_stdin(
+                gh_,
+                json.dumps({"title": title, "body": ready_issue_body(rule, r, n)}),
+                "-X",
+                "POST",
+                f"repos/{TOOLING_REPO}/issues",
+            )
+            found = str(got.get("html_url") or "opened") if isinstance(got, dict) else "opened"
+            log(f"strict rule {rule}: ready to block, issue {found}")
+    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+        log(f"strict rule {rule}: ready, but its issue can't be checked or opened now: {e}")
+        return None
+    issues[rule] = found
+    return found
+
+
+def strict_readiness(
+    gh_: Gh, server: Callable[..., Any] | None, state: dict[str, Any]
+) -> list[str]:
+    """The report's readiness lines: each rule's streak, and for a ready warn rule "strict rule
+    X has passed on N consecutive builds: ready to block" with its issue. Nothing when the
+    server can't say (an older server, not answering): it never guesses."""
+    if server is None:
+        return []
+    try:
+        got = server("GET", "/api/test/strict-rules")
+    except (urllib.error.URLError, OSError, ValueError) as e:  # HTTPError included
+        log(f"strict rule readiness unreadable ({e}); not reported this time")
+        return []
+    n = int(got.get("ready_after") or 0)
+    ready = got.get("readiness") or {}
+    streaks = ", ".join(f"`{k}` {v.get('streak')}" for k, v in ready.items())
+    lines = [f"Strict rule readiness (builds passed in a row, {n} to be ready): {streaks}."]
+    for rule, r in ready.items():
+        if r.get("ready") and r.get("mode") == "warn":
+            url = ready_issue(gh_, state, rule, r, n)
+            lines.append(
+                f"**Strict rule `{rule}` has passed on {r.get('streak')} consecutive builds: "
+                f"ready to block**"
+                + (f" ({url})" if url and url != "opened" else "")
+                + ". Switching it is the owner's call."
+            )
+    return lines
+
+
+def finish_quality(
+    gh_: Gh, state: dict[str, Any], job: dict[str, Any], server: Callable[..., Any] | None = None
+) -> None:
     run = state.pop("running")
     sha = run["sha"]
     report = job.get("result") if job.get("status") == "complete" else None
@@ -934,6 +1058,9 @@ def finish_quality(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
         quality = f"Didn't complete ({job.get('status')}: {job.get('error') or 'no result'})."
     else:
         quality = _archive_line(report) + "\n".join(quality_lines(report))
+    ready = strict_readiness(gh_, server, state)
+    if ready:
+        quality += "\n\n" + "\n\n".join(ready)
     md = state.get("hw_md") or {}
     hardware = md["text"] if md.get("sha") == sha else "Passed (see the status)."
     url = report_comment(gh_, sha, hardware, quality)
@@ -1005,7 +1132,7 @@ def _poll(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> dict[st
     if kind == "hw":
         finish_hw(gh_, state, job)
     else:
-        finish_quality(gh_, state, job)
+        finish_quality(gh_, state, job, server)
     save_state(state)
     return state
 
@@ -1027,16 +1154,16 @@ def quality(gh_: Gh, server: Callable[..., Any], state: dict[str, Any], sha: str
         if w.get("runner") != RUNNER and w.get("ready") and at and now - float(at) < REPORT_STALE_S:
             log(f"{sha[:12]}: quality suite yields to {w.get('runner')} {str(w.get('sha'))[:12]}")
             return
+    body: dict[str, Any] = {"sha": sha, "track_dir": str(LINK / CORPUS)}
+    confirmed = state.get("confirmed") or {}
+    if confirmed.get("sha") == sha:
+        body["build_of"] = confirmed["head"]  # the PR head's build: one build for readiness
     try:
         devices = test_devices(server("GET", "/api/devices"))
         if not devices:
             log(f"{sha[:12]}: no test device for the quality suite")
             return
-        job = server(
-            "POST",
-            "/api/test/staging",
-            {"sha": sha, "device_ids": devices, "track_dir": str(LINK / CORPUS)},
-        )
+        job = server("POST", "/api/test/staging", {**body, "device_ids": devices})
     except urllib.error.HTTPError as e:
         if not (400 <= e.code < 500) or e.code in RETRY_CODES:
             log(f"{sha[:12]}: quality suite: server answered {e.code}; next pass")

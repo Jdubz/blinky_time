@@ -80,10 +80,21 @@ class GitHub:
         # Comments on PR #12: by default a clean review of its last commit.
         self.pr_comments: list[dict[str, Any]] = [verdict(PR_HEAD, "No issues found. Checked.")]
         self.fail_reviews = False
+        # blinky_time issues: (title, url); fail_search makes the title search fail.
+        self.issues: list[tuple[str, str]] = []
+        self.fail_search = False
 
     def __call__(self, *args: str, stdin: str | None = None) -> str:
         self.calls.append(args)
         a = " ".join(args)
+        if "search/issues" in a:
+            if self.fail_search:
+                raise RuntimeError("gh api search/issues -> 1: HTTP 503")
+            return "".join(json.dumps({"title": t, "url": u}) + "\n" for t, u in self.issues)
+        if f"repos/{staging.TOOLING_REPO}/issues" in a and "-X POST" in a:
+            url = f"https://github.com/{staging.TOOLING_REPO}/issues/{500 + len(self.issues)}"
+            self.issues.append((json.loads(stdin or "{}")["title"], url))
+            return json.dumps({"html_url": url})
         if a.startswith(f"api repos/{staging.GH_REPO}/branches/staging"):
             return json.dumps({"commit": {"sha": SHA}})
         if "actions/artifacts?name=staging-firmware-" + SHA in a:
@@ -184,10 +195,16 @@ class Server:
         # The box's mode (GET /api/box/mode) and what the runner reports as waiting.
         self.mode: dict[str, Any] = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
         self.queue: list[list[dict[str, Any]]] = []
+        # GET /api/test/strict-rules: each rule's readiness (an Exception: unreadable).
+        self.strict: dict[str, Any] | Exception = {"ready_after": 5, "readiness": {}}
 
     def __call__(self, method: str, path: str, body: Any = None) -> Any:
         if path == "/api/devices":
             return self.devices
+        if method == "GET" and path == "/api/test/strict-rules":
+            if isinstance(self.strict, Exception):
+                raise self.strict
+            return self.strict
         if method == "GET" and path == "/api/box/mode":
             if isinstance(self.mode, Exception):
                 raise self.mode
@@ -984,3 +1001,132 @@ def test_a_dry_run_posts_and_submits_nothing(capsys: pytest.CaptureFixture[str])
     out = capsys.readouterr().out
     assert "DRY RUN would: gh api -X POST" in out and "same tree" in out
     assert state["reported"] == SHA  # what the pass would have recorded
+
+
+# -- the strict rules (non-blocking warnings; readiness) ------------------------------------------
+
+STRICT_ROWS = [
+    {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 18.0, "threshold": 100.0,
+     "unit": "ms", "worst_is": "max", "issues": [49, 23], "where": "upload",
+     "at": "14:05:31.204", "samples": 14,
+     "excluded": [{"read_at": "14:03:12.101", "where": "upload", "max_frame_ms": 113,
+                   "reason": "settings save at 14:03:05.320 (blinky-firmware#49)"}]},
+    {"rule": "fps", "mode": "warn", "status": "warn", "worst": 52.0, "threshold": 60.0,
+     "unit": "fps", "worst_is": "min", "issues": [23], "where": "after the response stream",
+     "at": "14:07:00.000", "samples": 18},
+    {"rule": "overrun_growth", "mode": "warn", "status": "warn", "worst": 3.0, "threshold": 0.0,
+     "unit": "", "worst_is": "max", "issues": [49, 23], "samples": 18},
+]  # fmt: skip
+
+
+def test_strict_warnings_never_change_the_status_only_its_description() -> None:
+    report = {**HW_GOOD, "strict": {"rules": STRICT_ROWS}}
+    st, desc = staging.hw_status(report)
+    assert st == "success" and desc.startswith(staging.HW_PASSED)  # staging still matches on it
+    assert desc.endswith(" · 2 strict warnings")
+    assert staging.hw_status({**HW_BAD, "strict": {"rules": STRICT_ROWS}})[0] == "failure"
+    text = "\n".join(staging.hw_lines(report))
+    assert "**⚠ strict rules (non-blocking)**" in text
+    assert (
+        "| fps | ⚠️ warn | 52 fps | after the response stream, 14:07:00.000, 18 reads | ≥ 60 fps |"
+        in text
+    )
+    assert "| frame_time | ✅ pass | 18 ms |" in text and "blinky-firmware#49" in text
+    assert (
+        "- frame_time: the window read at 14:03:12.101 (upload, 113 ms) excluded: settings save "
+        "at 14:03:05.320 (blinky-firmware#49)" in text
+    )
+
+
+def test_the_quality_status_says_how_many_strict_rules_warned() -> None:
+    report = {**GOOD_REPORT, "strict": {"rules": STRICT_ROWS[1:2]}}
+    assert staging.quality_summary(report).endswith("health ok · 1 strict warning")
+    assert "**⚠ strict rules (non-blocking)**" in "\n".join(staging.quality_lines(report))
+
+
+def ready(streak: int, mode: str = "warn") -> dict[str, Any]:
+    runs = [{"source": "quality", "version": f"b{n}", "status": "pass", "worst": 18.0}
+            for n in range(streak)]  # fmt: skip
+    return {
+        "mode": mode,
+        "streak": streak,
+        "ready": streak >= 5,
+        "builds": [{"build": f"{n:040d}", "runs": [r]} for n, r in enumerate(runs)],
+        "broken_by": None,
+    }
+
+
+def finished_quality(g: GitHub, srv: Server) -> None:
+    """Run the head to a finished quality suite."""
+    srv.quality_job = {"status": "complete", "result": GOOD_REPORT}
+    for _ in range(4):
+        staging.run_once(g, srv)
+
+
+def test_a_ready_rule_is_reported_and_gets_one_issue_ever() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
+    srv.strict = {"ready_after": 5, "readiness": {"frame_time": ready(5), "fps": ready(2)}}
+    finished_quality(g, srv)
+    text = g.comments[0][1]
+    assert (
+        "Strict rule readiness (builds passed in a row, 5 to be ready): `frame_time` 5, `fps` 2"
+        in text
+    )
+    assert (
+        "**Strict rule `frame_time` has passed on 5 consecutive builds: ready to block** "
+        f"(https://github.com/{staging.TOOLING_REPO}/issues/500)" in text
+    )
+    assert "`fps` has passed" not in text
+    ((title, _),) = g.issues
+    assert title == "Ready to enable strict rule: frame_time"
+    # Never a second one: not from the state, nor after the state is lost (the title search).
+    state = json.loads(staging.STATE.read_text())
+    assert state["strict_issues"] == {"frame_time": g.issues[0][1]}
+    state.pop("quality_done")
+    staging.save_state(state)
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    state = json.loads(staging.STATE.read_text())
+    state.pop("quality_done")
+    state.pop("strict_issues")
+    staging.save_state(state)
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    assert len(g.issues) == 1
+    assert json.loads(staging.STATE.read_text())["strict_issues"]["frame_time"] == g.issues[0][1]
+
+
+def test_the_issue_carries_the_evidence_and_leaves_the_switch_to_the_owner() -> None:
+    body = staging.ready_issue_body("frame_time", ready(5), 5)
+    assert "passed on the last 5 distinct firmware builds" in body
+    assert body.count("| quality | 18.0 |") == 5
+    assert "never automatic" in body and "`testing/strict_rules.py`" in body
+
+
+def test_no_issue_without_knowing_none_exists_and_none_for_a_blocking_rule() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
+    g.fail_search = True
+    srv.strict = {"ready_after": 5, "readiness": {"frame_time": ready(5), "fps": ready(6, "block")}}
+    finished_quality(g, srv)
+    assert g.issues == []
+    assert not json.loads(staging.STATE.read_text()).get("strict_issues")  # asked again next time
+    text = g.comments[0][1]
+    assert "`frame_time` has passed on 5 consecutive builds: ready to block**." in text
+    assert "`fps` has passed" not in text  # already blocking: nothing to propose
+
+
+def test_unreadable_readiness_is_left_out_not_guessed() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
+    srv.strict = urllib.error.URLError("refused")
+    finished_quality(g, srv)
+    assert "readiness" not in g.comments[0][1] and g.issues == []
+    assert g.quality[-1][0] == "success"
+
+
+def test_a_head_confirmed_by_tree_is_its_pr_heads_build_for_readiness() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    g.trees[PR_HEAD] = g.trees[SHA]
+    g.fingerprints[PR_HEAD] = [pr_status("success", "hardware checks passed: upload, lights")]
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    assert srv.quality[0]["build_of"] == PR_HEAD

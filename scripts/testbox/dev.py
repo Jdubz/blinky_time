@@ -8,7 +8,7 @@ CI. Run it on the box from inside a blinky-firmware checkout (or with --repo PAT
       flashes, runs the info check plus the ones asked for (--hw: the blocking hardware
       checks, as a PR head gets them), and prints a short report
   dev.py mode dev|queue [--note TEXT] [--preempt]
-  dev.py status
+  dev.py status                       the mode, the queue, the chips, each strict rule's streak
   dev.py build [REF] [--wip]          prints the build id
   dev.py flash BUILD_ID
   dev.py test CHECK...                info | health[=MIN] | validate=a,b | pace[=a,b] | cmd=c1;c2
@@ -29,6 +29,10 @@ ignore included, becomes a throwaway commit on top of HEAD, made through a tempo
 The box stays in dev mode until you switch it back (``dev.py mode queue``): no expiry, by the
 owner's decision. While it is in dev mode the hardware runners (staging, PR queue) hold their
 work, which `status` shows.
+
+Every run's report ends with the strict rules (blinky-server testing/strict_rules.py): the bench
+gate's limits, non-blocking warnings until the owner makes each one block. `status` shows how
+many builds in a row each has passed (readiness).
 
 Config: the build service from ~/.config/blinky/build.env (BLINKY_BUILD_URL,
 BLINKY_BUILD_TOKEN; the environment overrides it). There is no default address: the repo is
@@ -53,6 +57,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import strict
 
 HOME = Path.home()
 GH_REPO = "Jdubz/blinky-firmware"
@@ -592,6 +598,7 @@ def report_hw(res: dict[str, Any]) -> list[str]:
     for c in res.get("checks") or []:
         mark = HW_MARK.get(c["result"], c["result"])
         lines.append(f"  {c['phase']}/{c['name']} {c['device'][:8]}: {mark}: {c['evidence']}")
+    lines += strict.text_lines(res.get("strict"))
     if res.get("rig_error"):
         lines.append(f"hardware checks: RIG ERROR (no verdict on the firmware): {res['rig_error']}")
     else:
@@ -641,16 +648,12 @@ def report_run(res: dict[str, Any]) -> list[str]:
                 lines.append(f"info {dev[:12]} {d.get('version')}: {timers_line(d['timers'])}")
         elif kind == "health":
             for dev, d in c["devices"].items():
-                parts = [
-                    f"fps {_mark(d['fps']['pass'])} (min {d['fps']['min']})",
-                    f"frame {_mark(d['frametime']['pass'])} (max {d['frametime']['max_ms']} ms)",
-                    (
-                        f"stability {_mark(d['stability']['pass'])} "
-                        f"(overruns +{d['stability']['overrun_growth']}"
-                        f"{', REBOOTED' if d['stability']['rebooted'] else ''})"
-                    ),
-                ]
-                lines.append(f"health {c['minutes']:g} min {dev[:12]}: " + "; ".join(parts))
+                st = d["stability"]
+                lines.append(
+                    f"health {c['minutes']:g} min {dev[:12]}: no reboot {_mark(st['pass'])}, "
+                    f"{len(d.get('windows') or [])} loop windows read (judged below), overruns "
+                    f"+{st['overrun_growth']}{', REBOOTED' if st['rebooted'] else ''}"
+                )
         elif kind == "validate":
             lines.append(
                 f"validate: {c['played']}/{c['tracks']} played (scores reported, not gated)"
@@ -681,6 +684,7 @@ def report_run(res: dict[str, Any]) -> list[str]:
             f"alerts {_mark(f['alerts']['pass'])}"
             + "".join(f"\n  {a}" for a in f["alerts"].get("lines", [])[:10])
         )
+    lines += strict.text_lines(res.get("strict"))
     lines.append(f"verdict (health + asserts): {'PASSED' if res.get('passed') else 'FAILED'}")
     return lines
 
@@ -723,6 +727,13 @@ def cmd_status(server: Server) -> int:
         say(
             f"running: {s.get('workflow_id')} {str(s.get('step')).rsplit('.', 1)[-1]} ({s.get('running_s')} s)"
         )
+    try:
+        ready = server("GET", "/api/test/strict-rules")
+    except DevError as e:  # an older server without the route
+        say(f"strict rules: not reported by the server ({e})")
+    else:
+        for line in strict.readiness_text(ready):
+            say(line)
     return 0
 
 

@@ -97,6 +97,7 @@ class DeviceProtocol:
         self._on_stream_line: Callable[[str], None] | None = None
         self._on_raw_line: Callable[[str], None] | None = None
         self._on_alert: Callable[[str], None] | None = None
+        self._on_save: Callable[[float, float], None] | None = None
 
         # Wire up the transport line callback
         transport.on_line(self._handle_line)
@@ -118,6 +119,11 @@ class DeviceProtocol:
         including those that arrive in the middle of a command's response."""
         self._on_alert = callback
 
+    def on_save(self, callback: Callable[[float, float], None]) -> None:
+        """Register callback(sent, done) for every ``save`` sent: wall times from just before
+        the line is written to its reply (or failure: the device may have saved anyway)."""
+        self._on_save = callback
+
     async def send_command(self, command: str, timeout: float | None = None) -> str:
         """Send a command and wait for the multi-line response.
 
@@ -136,8 +142,8 @@ class DeviceProtocol:
         return await self._command(command, timeout)
 
     async def _command(self, command: str, timeout: float | None) -> tuple[str, float, list[float]]:
+        base = command.split()[0] if command.strip() else ""
         if timeout is None:
-            base = command.split()[0] if command.strip() else ""
             if base in SLOW_FLASH_COMMANDS:
                 # Don't shorten a transport that's already more generous
                 # (BLE = 15 s); only raise the floor for the slow flash op.
@@ -169,10 +175,15 @@ class DeviceProtocol:
             # ends at its "OK..." line: once a stream starts the device sends a line every
             # 10-50 ms, so the reply never goes quiet for the line timeout and would always
             # time out (the first staging run on hardware, #349).
+            t_save = time.time() if base == "save" else None
             try:
-                response = await self._send_and_collect(
-                    command, timeout, ack=is_stream_enable or is_stream_disable
-                )
+                try:
+                    response = await self._send_and_collect(
+                        command, timeout, ack=is_stream_enable or is_stream_disable
+                    )
+                finally:
+                    if t_save is not None:
+                        self._saved(t_save)
                 sent_at, line_times = self._last_timing
             except BaseException:
                 # A command that times out or fails must not leave the stream paused: the
@@ -200,6 +211,14 @@ class DeviceProtocol:
                 self._streaming = True
 
             return response, sent_at, line_times
+
+    def _saved(self, t0: float) -> None:
+        if self._on_save is None:
+            return
+        try:
+            self._on_save(t0, time.time())
+        except Exception:
+            log.exception("[FALLBACK] the save callback failed")
 
     async def get_info(self) -> dict[str, Any]:
         """Get device info as parsed JSON."""

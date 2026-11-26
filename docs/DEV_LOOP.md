@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`), phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py`; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue") and phase 2.1 (the blocking hardware checks, the server's `test.hardware-checks` job, in place of phase 2's smoke test; [TEST_BOX.md](TEST_BOX.md), "Hardware checks"). The owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`), phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py`; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue") and phase 2.1 (the blocking hardware checks, the server's `test.hardware-checks` job, in place of phase 2's smoke test; [TEST_BOX.md](TEST_BOX.md), "Hardware checks") and phase 2.2 (the strict rules in warn mode, with readiness tracking: "Strict rules" below). The owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
 
 ## Why
 
@@ -86,7 +86,7 @@ Code reads the location from config and never has a default address.
   - `camera --tracks …` (`dev.py try --camera`: the existing `camera_review.py`, which submits its own validation job);
   - `commands …` (no reboot or config write: those aren't checks).
 
-  These are the staging suite's own functions; the suite becomes the "everything" set. A durable job (`test.dev-run`): the audio lock and the LEDs lit for the whole run, runtime settings restored once at the start (so a `commands` check's `set` holds for the checks after it), streaming only while a track plays. Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) set pass/fail; scores are reported, never gating.
+  These are the staging suite's own functions; the suite becomes the "everything" set. A durable job (`test.dev-run`): the audio lock and the LEDs lit for the whole run, runtime settings restored once at the start (so a `commands` check's `set` holds for the checks after it), streaming only while a track plays. No reboot and the end-of-run asserts (no `[ASSERT]`/`[FALLBACK]`) set pass/fail; the strict rules (below) warn; scores are reported, never gating.
 - **`scripts/testbox/dev.py`** (stdlib only, run from a blinky-firmware checkout or with `--repo`):
   - `mode dev|queue [--note] [--preempt]`;
   - `status`: the mode, what waits behind it, the chips;
@@ -118,6 +118,26 @@ Code reads the location from config and never has a default address.
 - **The box is shared** with the staging runner: one hardware test at a time (409: next pass), whichever ready item has waited longest first.
 - **Staging** keeps skipping images whose firmware fingerprint is unchanged.
 
+### 5.1 Strict rules: warn, then ready, then block
+
+The bench release gate's limits that don't block on the box yet (owner, 2026-11-25: "until then leave them as non-blocking warnings. As soon as they pass we can enable the strict rules"). One table, `RULES` in `blinky-server/blinky_server/testing/strict_rules.py`:
+
+| Rule | Limit | Measured | Waits on |
+|---|---|---|---|
+| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | blinky-firmware#49, #23 |
+| `fps` | ≥ 60 in every window | the same reads | #23 |
+| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | #49, #23 |
+| `beat_pace` | beats counted within 3% (±2 beats) of the tempo, 60 s of music | quality suite, `dev.py test pace` | — |
+| `music_level`, `music_onsets` | mean level ≥ 0.05, ≥ 1 pulse onset/s with music | the same | — |
+
+The reads: the hardware checks' (upload's stability wait, audio before and after the noise, the first read after the response stream, the last), the quality suite's (5 min of health, one after each track while the chip streams, the last) and a dev run's (info, health, after each validated track).
+
+- **warn** (every rule now): a section "⚠ strict rules (non-blocking)" in every report (PR and staging comments, `dev.py`), each rule with pass/warn, its worst value, where and when it was read, and the windows excluded. A warning never changes a commit status; the description may end "· 2 strict warnings". Metrics: `blinky_strict_rule_pass{rule,source}`, `_worst`, `_excluded_windows`, `_streak`, `_ready`, `_blocking`.
+- **ready:** passed on the last 5 distinct firmware builds with real runs (staging quality suites, and PR or staging heads that passed the hardware checks; a staging commit with a PR head's tree is that head's build), no warning in between. A run without data for a rule counts neither way. `BLINKY_STRICT_READY_AFTER` changes the 5. The staging report then says "strict rule X has passed on 5 consecutive builds: ready to block", and the staging runner opens one blinky_time issue, "Ready to enable strict rule: X", with the evidence (never a second one). `dev.py status` and `GET /api/test/strict-rules` show each rule's streak.
+- **block:** the owner sets the rule's mode to `BLOCK` (its one line in `RULES`). A failing block rule is then a failing check in the hardware checks (red `Hardware test`) and fails a dev run. Never automatic. Beat pace and music are measured only by the quality suite and `dev.py test pace`, so blocking them fails dev runs but no commit status (`Quality suite (staging)` is always `success`): that needs a decision on where they block.
+
+**The settings-save exclusion.** A `save` stalls the loop ~85–115 ms (blinky-firmware#49), and a deploy does a restore + save. The server records the host time of every `save` it sends (the protocol, so deploys and commands alike; `settings-saves.jsonl` in its data dir). The firmware reports its last *closed* window without saying when it closed, so a read at t covers a window inside [t − 10 s, t]: a read with a recorded save in that span is excluded from `frame_time` and listed, "excluded: settings save at hh:mm:ss.mmm (blinky-firmware#49)". Nothing else is excluded. (A window-close time in `json info` would make the span exact.)
+
 ### 6. Stable candidates from scores
 
 - **Recording:** each staging quality suite records its scores with the corpus pin and the test setup (built in phase 2.1: `staging-scores.jsonl` in the server's data dir, one line per commit, each track's drum scores with `lagSource`/`lagAmbiguous`). Scores are compared only within the same pin.
@@ -135,6 +155,7 @@ Code reads the location from config and never has a default address.
    - drafts run no heavy jobs.
 2. **The PR hardware queue:** `Hardware test (PR)` on each firmware PR head (built).
    - **2.1, the blocking hardware checks:** upload, lights, audio, response, interfaces, yes/no, on the PR head; staging confirms them by tree; the quality suite non-blocking after (built). `Hardware test (PR)` becomes required on blinky-firmware's `staging` ruleset by the owner.
+   - **2.2, the strict rules** in warn mode, with the readiness tracker (built; "Strict rules" above). Each blocks once it passes and the owner switches it.
 3. **The build service takes the heavy CI jobs for owner commits; score-ranked stable proposals.**
 
 Leaving dev mode stays manual until phase 1 has been used enough to show what should trigger it.
