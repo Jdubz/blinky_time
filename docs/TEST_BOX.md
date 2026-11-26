@@ -104,7 +104,7 @@ To recalibrate after a change of speaker, placement or detection latency: run va
 
 **Recorded:** every raw capture keeps `audio_start_epoch_ms` (the spawn: every `t` is measured from it) and adds `audio_dac_start_epoch_ms` and `audio_start` (offset, spread, the lag used, or why there was none). Every validation result carries `audio_start`, and every score carries `audioStart`.
 
-**Failures are explicit.** If the player can't play anything (no libasound, the device won't open), ffplay plays the file as before. A timestamp spread over 10 ms, an underrun (the audio after it is late by the gap) or a missing calibration leaves the audio playing but the start untrusted. In all these cases the run isn't measured: `audioStart.measured` is false with the reason, the scorer searches as before, and the server logs a `[FALLBACK]` line.
+**Failures are explicit.** If the player can't play anything (no libasound, the device won't open), ffplay plays the file as before. A timestamp spread over 10 ms, an underrun (the audio after it is late by the gap) or a missing calibration leaves the audio playing but the start untrusted. In all these cases the run isn't measured: `audioStart.measured` is false with the reason, and the server logs a `[FALLBACK]` line. The scorer then searches for the lag, and a tie between periodic aliases goes to the typical lag of the player that ran, which `audioStart.player` records (blinky-corpus `lag.acoustic_search`): 220 ms for the ALSA player (the median of 40 runs the music resolved, 2026-11-25) and 270 ms for ffplay. The drum score's `lagPriorMs` says which prior was used.
 
 ## Recovery chain (hands-off)
 

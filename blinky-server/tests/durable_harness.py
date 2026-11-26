@@ -141,7 +141,12 @@ async def fake_play(device_ids: list[str], track: dict[str, Any], duration_ms: f
     devs = [devices[d] for d in device_ids]
     return (
         devs,
-        PlaybackResult(success=True, audio_start_time_ms=0.0, duration_ms=300.0),
+        PlaybackResult(
+            success=True,
+            audio_start_time_ms=0.0,
+            duration_ms=300.0,
+            start_measure={"method": "alsa", "error": "fake player: not measured"},
+        ),
         {d: "data" for d in device_ids},
     )
 
