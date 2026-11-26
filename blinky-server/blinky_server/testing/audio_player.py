@@ -47,15 +47,26 @@ PCM_DEVICE = os.environ.get("BLINKY_AUDIO_PCM", "plughw")
 MAX_SPREAD_MS = 10.0
 
 # The fixed part of the lag after the DAC: the speaker's own processing, the air, and the
-# device's mic buffering and detection. Calibrated on the test box against the music (the
-# scorer's lag on runs it resolves, minus the measured DAC start); None until it is, and then
-# runs are scored with the lag searched for, as before. Override: BLINKY_AUDIO_PATH_MS.
-AUDIO_PATH_MS: float | None = None
+# device's mic buffering and detection. Calibrated on the test box against the music: the
+# scorer's searched lag minus the measured DAC offset, on the 14 of 28 runs it resolved
+# unambiguously (2026-11-25, firmware b211-dev-c5f4d51a; techno-machine-drum x5,
+# techno-minimal-01 x5, edm/ x1): 42.0-49.7 ms, median 45.2, sd 2.5. The 14 ambiguous runs
+# fell in the same range (41-50). Recalibrate when the speaker, its placement or the chip's
+# detection latency changes: a drift shows as ``lagCheckMs - lagMs`` in the drum scores (the
+# scorer's check over the music, +-100 ms around the measured lag). None scores every run
+# with the lag searched for. Override: BLINKY_AUDIO_PATH_MS (a number, or none).
+AUDIO_PATH_MS: float | None = 45.0
 
 
 def audio_path_ms() -> float | None:
-    raw = os.environ.get("BLINKY_AUDIO_PATH_MS")
-    return float(raw) if raw else AUDIO_PATH_MS
+    """The fixed path in use: BLINKY_AUDIO_PATH_MS when set (``none`` turns the measured lag
+    off, so every run's lag is searched for: how to recalibrate), else AUDIO_PATH_MS."""
+    raw = (os.environ.get("BLINKY_AUDIO_PATH_MS") or "").strip()
+    if not raw:
+        return AUDIO_PATH_MS
+    if raw.lower() == "none":
+        return None
+    return float(raw)
 
 
 @dataclass
