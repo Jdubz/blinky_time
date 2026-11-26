@@ -17,8 +17,10 @@ the staging suite's own functions (testing/staging.py, testing/workflows.py):
 
 Validation and pace stream from the chips while they play; health and info read ``json info``
 with no stream, as the suite measures them. At the end: no reboot since the start and no
-firmware ``[ASSERT]``/``[FALLBACK]`` line, and the strict rules (testing/strict_rules.py) over
-every loop window the run read (info, health, one after each validated track) and its pace.
+firmware ``[ASSERT]``/``[FALLBACK]`` line, the chip's detection latency over the validated tracks
+(testing/detection_latency.py: ``detection_latency``), and the strict rules
+(testing/strict_rules.py) over every loop window the run read (info, health, one after each
+validated track), its pace and that detection latency.
 
 Pass = every health check (no reboot) and those asserts pass, and no strict rule in block mode
 fails. Strict warnings and scores (validation, music, beat pace) are reported, never gating.
@@ -39,7 +41,7 @@ from typing import Any
 
 from ..device.device import alerts_since
 from ..work import durable, jobs
-from . import staging, strict_rules
+from . import detection_latency, staging, strict_rules
 from .audio_player import kill_orphan_audio, stop_audio
 from .test_runner import _configure_device, _start_streaming, _stop_streaming
 from .workflows import _connected, lit, plan, reserve, validation_run
@@ -107,10 +109,25 @@ async def info(device_ids: list[str]) -> dict[str, Any]:
 
 @durable.step
 async def strict(
-    device_ids: list[str], windows: dict[str, list[dict[str, Any]]], music: dict[str, Any]
+    device_ids: list[str],
+    windows: dict[str, list[dict[str, Any]]],
+    music: dict[str, Any],
+    latency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The strict rules over the run's loop windows and its pace check, if any."""
-    return strict_rules.judge(device_ids, windows, "dev", music)
+    """The strict rules over the run's loop windows, its pace check and detection latency, if
+    any."""
+    return strict_rules.judge(device_ids, windows, "dev", music, latency)
+
+
+def validated(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every played validation result of the run's validate checks, in order."""
+    return [
+        r
+        for c in checks
+        if c["kind"] == "validate"
+        for r in c.get("results") or []
+        if not r.get("failed")
+    ]
 
 
 def loop_windows(checks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -257,8 +274,14 @@ async def dev_run(req: dict[str, Any]) -> dict[str, Any]:
             pace = next(
                 (c for c in report["checks"] if c["kind"] == "pace" and "devices" in c), None
             )
+            played = validated(report["checks"])
+            if played:
+                report["detection_latency"] = detection_latency.summarize(played)
             report["strict"] = await strict(
-                device_ids, loop_windows(report["checks"]), (pace or {}).get("devices") or {}
+                device_ids,
+                loop_windows(report["checks"]),
+                (pace or {}).get("devices") or {},
+                report.get("detection_latency"),
             )
     report["passed"] = verdict(report)
     jobs.report(100, "passed" if report["passed"] else "FAILED")

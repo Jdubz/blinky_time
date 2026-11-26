@@ -634,8 +634,36 @@ def report_flash(res: dict[str, Any]) -> list[str]:
     return lines
 
 
+def latency_note(run: dict[str, Any] | None) -> str:
+    """A validated track's detection latency (blinky-server testing/detection_latency.py):
+    ", latency +1.2 ms", with why it isn't counted when it isn't."""
+    if not run:
+        return ""
+    off = run.get("offset_ms")
+    shown = f", latency {off:+.1f} ms" if isinstance(off, (int, float)) else ", latency n/a"
+    return shown + ("" if run.get("counted") else f" (not counted: {run.get('why')})")
+
+
+def latency_lines(res: dict[str, Any]) -> list[str]:
+    """Per device, the run's detection latency median over the tracks that count."""
+    out = []
+    for dev, d in (res.get("detection_latency") or {}).items():
+        med = d.get("median_ms")
+        out.append(
+            f"detection latency {dev[:12]}: median "
+            + (f"{med:+.1f} ms" if isinstance(med, (int, float)) else "n/a")
+            + f" over {d.get('counted', 0)} of {len(d.get('runs') or [])} tracks "
+            "(lagCheckMs - lagMs; 0 = the 45 ms calibration, + = later)"
+        )
+    return out
+
+
 def report_run(res: dict[str, Any]) -> list[str]:
     lines: list[str] = []
+    # Each device's scored runs in the order the report lists them (one per validated track).
+    latency = {
+        dev: list(d.get("runs") or []) for dev, d in (res.get("detection_latency") or {}).items()
+    }
     if res.get("error"):
         lines.append(f"test run: FAILED: {res['error']}")
     for c in res.get("checks") or []:
@@ -666,7 +694,9 @@ def report_run(res: dict[str, Any]) -> list[str]:
                     drums = s.get("drums") or {}
                     keys = ("drumF", "kickR50", "snareR50", "onDrum", "loneHat")
                     shown = ", ".join(f"{k}={drums.get(k)}" for k in keys if k in drums)
-                    lines.append(f"  {r['track']} {dev}: {shown or _kv(s)}")
+                    queue = latency.get(dev) or []
+                    note = latency_note(queue.pop(0) if queue else None)
+                    lines.append(f"  {r['track']} {dev}: {shown or _kv(s)}{note}")
         elif kind == "pace":
             for dev, d in c["devices"].items():
                 m, p = d["music"], d["beatpace"]
@@ -678,6 +708,7 @@ def report_run(res: dict[str, Any]) -> list[str]:
                 for r in replies:
                     first = (r["reply"].strip().splitlines() or [""])[0][:100]
                     lines.append(f"cmd {dev[:12]} `{r['command']}`: {first}")
+    lines += latency_lines(res)
     for dev, f in (res.get("final") or {}).items():
         lines.append(
             f"asserts {dev[:12]}: no reboot {_mark(f['no_reboot']['pass'])}, "

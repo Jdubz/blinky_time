@@ -21,9 +21,12 @@ score the algorithm (the report comment and the score record; it never posts a f
    the deploy), the onset-path timing from ``json info`` when the firmware reports it, and no
    firmware [ASSERT] / [FALLBACK] line from the flash on (the server's alert record,
    device.alerts_since, which survives a restart).
-5. The strict rules over every loop window the run read (health's, one after each track while
-   the chips stream, the last), music and beat pace: the report's ``strict`` section, and a line
-   in the readiness record (strict_rules.record_run).
+5. The chip's detection latency against the rig's calibration (testing/detection_latency.py:
+   per track the music's check minus the measured lag, ``lagCheckMs - lagMs``, and the median):
+   the report's ``detection_latency``.
+6. The strict rules over every loop window the run read (health's, one after each track while
+   the chips stream, the last), music, beat pace and the detection latency: the report's
+   ``strict`` section, and a line in the readiness record (strict_rules.record_run).
 
 The chips' LEDs are lit from the deploy's end to the job's end, however it ends: the box's
 chips idle dark (testing/leds.py). Nothing here needs the light.
@@ -55,7 +58,7 @@ from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir
 from ..work import durable, jobs
-from . import strict_rules
+from . import detection_latency, strict_rules
 from .audio_player import play_audio, stop_audio
 from .workflows import (
     _connected,
@@ -165,10 +168,14 @@ async def loop_reads(device_ids: list[str], where: str) -> dict[str, Any]:
 
 @durable.step
 async def strict(
-    device_ids: list[str], windows: dict[str, list[dict[str, Any]]], music: dict[str, Any]
+    device_ids: list[str],
+    windows: dict[str, list[dict[str, Any]]],
+    music: dict[str, Any],
+    latency: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The strict rules over the run's windows, music and beat pace (strict_rules.judge)."""
-    return strict_rules.judge(device_ids, windows, "quality", music)
+    """The strict rules over the run's windows, music, beat pace and detection latency
+    (strict_rules.judge)."""
+    return strict_rules.judge(device_ids, windows, "quality", music, latency)
 
 
 @durable.step
@@ -341,6 +348,7 @@ SCORE_FIELDS = (
     "lagSource",
     "lagAmbiguous",
     "lagNote",
+    "lagCheckMs",  # minus lagMs: the chip's detection latency vs the calibration
 )
 
 
@@ -362,6 +370,11 @@ def score_record(report: dict[str, Any]) -> dict[str, Any]:
         "limits": report.get("limits"),
         "at": round(time.time(), 1),
         "tracks": rows,
+        # Per device: the median offset and how many tracks it counted (detection_latency).
+        "detection_latency": {
+            dev: {"median_ms": d.get("median_ms"), "counted": d.get("counted")}
+            for dev, d in (report.get("detection_latency") or {}).items()
+        },
     }
 
 
@@ -564,11 +577,14 @@ async def _measure(
             "played": len(played),
             "results": results,
         }
+        report["detection_latency"] = detection_latency.summarize(played)
 
     report["final"] = await final_state(device_ids, version, start)
     for i, f in report["final"].items():
         loops.setdefault(i, []).append(f["loop"])
-    report["strict"] = await strict(device_ids, loops, report.get("music") or {})
+    report["strict"] = await strict(
+        device_ids, loops, report.get("music") or {}, report.get("detection_latency")
+    )
     report["passed"] = _passed(
         {k: v for k, v in report.items() if k not in ("limits", "strict")}
     ) and not strict_rules.failures(report["strict"])

@@ -57,7 +57,9 @@ class Rule:
     what: str
     threshold: float
     unit: str
-    worst: str  # "max": the run's largest value must be <= threshold; "min": its smallest >=
+    # "max": the run's largest value must be <= threshold; "min": its smallest >=; "abs": its
+    # value must be within +-threshold (a signed offset from a calibration).
+    worst: str
     issues: tuple[int, ...]  # the blinky-firmware issues it waits on
     mode: str = WARN
     save_excluded: bool = False  # windows that may hold one of the server's saves don't count
@@ -81,6 +83,21 @@ RULES: tuple[Rule, ...] = (
     Rule("beat_pace", "beats counted vs the tempo over 60 s of music", 0.03, "", "max", (), WARN),
     Rule("music_level", "mean mic level with music playing", 0.05, "", "min", (), WARN),
     Rule("music_onsets", "pulse onsets with music playing", 1.0, "/s", "min", (), WARN),
+    # The chip's detection latency within +-10 ms of the rig's calibration (testing/
+    # detection_latency.py): per track the music's check minus the measured lag, the median over
+    # the run's tracks that caught kickR50 >= 0.5. Calibration spread: sd 2.9 ms per track, so
+    # even a one-track run sits 3.4 sd inside; 10 ms is a third of the tight +-30 ms window
+    # (kickR30), so a drift warns well before it costs score at that tolerance.
+    Rule(
+        "detection_latency",
+        "detection latency vs the 45 ms calibration: median lagCheckMs - lagMs over tracks "
+        "with kickR50 >= 0.5",
+        10.0,
+        "ms",
+        "abs",
+        (),
+        WARN,
+    ),
 )
 BY_NAME = {r.name: r for r in RULES}
 
@@ -150,7 +167,15 @@ def _row(rule: Rule, value: float | None, ok: bool | None, **extra: Any) -> dict
 
 
 def _within(rule: Rule, value: float) -> bool:
+    if rule.worst == "abs":
+        return abs(value) <= rule.threshold
     return value <= rule.threshold if rule.worst == "max" else value >= rule.threshold
+
+
+def _badness(rule: Rule, value: float | None) -> float:
+    """How far toward failing a value is, larger worse (the worst device first)."""
+    v = float(value or 0)
+    return abs(v) if rule.worst == "abs" else v if rule.worst == "max" else -v
 
 
 def _frame_time(windows: list[dict[str, Any]], saves: list[dict[str, Any]]) -> dict[str, Any]:
@@ -248,14 +273,42 @@ def _music(music: dict[str, Any] | None, pace: dict[str, Any] | None) -> list[di
     return out
 
 
+def _detection(latency: dict[str, Any] | None) -> dict[str, Any]:
+    """detection_latency over one device's runs (detection_latency.summarize's entry): the
+    median offset of the runs that count; the ones left out are named with the reason."""
+    rule = BY_NAME["detection_latency"]
+    if not latency:
+        return _row(rule, None, None)
+    runs = latency.get("runs") or []
+    left_out = [
+        {"track": x.get("track"), "offset_ms": x.get("offset_ms"), "why": x.get("why")}
+        for x in runs
+        if not x.get("counted")
+    ]
+    n = int(latency.get("counted") or 0)
+    median = latency.get("median_ms")
+    where = f"median of {n} of {len(runs)} tracks" if n else f"none of {len(runs)} tracks counted"
+    if median is None:
+        return _row(rule, None, None, where=where, samples=0, left_out=left_out)
+    v = float(median)
+    return _row(rule, v, _within(rule, v), where=where, samples=n, left_out=left_out)
+
+
 def evaluate(
     windows: list[dict[str, Any]],
     saves: list[dict[str, Any]],
     music: dict[str, Any] | None = None,
     pace: dict[str, Any] | None = None,
+    latency: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One device's run: every rule's row (status, worst value, where, exclusions)."""
-    rows = [_frame_time(windows, saves), _fps(windows), _overruns(windows), *_music(music, pace)]
+    rows = [
+        _frame_time(windows, saves),
+        _fps(windows),
+        _overruns(windows),
+        *_music(music, pace),
+        _detection(latency),
+    ]
     by = {r["rule"]: r for r in rows}
     return [by[r.name] for r in RULES]
 
@@ -272,8 +325,7 @@ def combine(per_device: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]
         ]
         if not rows:
             continue
-        sign = 1 if rule.worst == "max" else -1
-        rows.sort(key=lambda r: (ORDER[r["status"]], sign * float(r["worst"] or 0)), reverse=True)
+        rows.sort(key=lambda r: (ORDER[r["status"]], _badness(rule, r["worst"])), reverse=True)
         excluded = [{**e, "device": r["device"]} for r in rows for e in r.get("excluded") or []]
         out.append({**rows[0], "excluded": excluded} if excluded else rows[0])
     return out
@@ -283,16 +335,20 @@ def report(
     windows: dict[str, list[dict[str, Any]]],
     saves: dict[str, list[dict[str, Any]]],
     music: dict[str, dict[str, Any]] | None = None,
+    latency: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The run's strict section: {"rules": the summary rows, "devices": each device's rows}.
-    ``music``: per device, the quality suite's {"music", "beatpace"} (None: not measured)."""
-    devices = sorted(set(windows) | set(music or {}))
+    ``music``: per device, the quality suite's {"music", "beatpace"} (None: not measured).
+    ``latency``: per device, detection_latency.summarize over the run's scored tracks (None:
+    the run scored none)."""
+    devices = sorted(set(windows) | set(music or {}) | set(latency or {}))
     per = {
         d: evaluate(
             windows.get(d) or [],
             saves.get(d) or [],
             ((music or {}).get(d) or {}).get("music"),
             ((music or {}).get(d) or {}).get("beatpace"),
+            (latency or {}).get(d),
         )
         for d in devices
     }
@@ -323,13 +379,16 @@ def judge(
     windows: dict[str, list[dict[str, Any]]],
     source: str,
     music: dict[str, dict[str, Any]] | None = None,
+    latency: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """The run's strict section with the save record read, and the metrics set. Call it from a
     durable step (it reads the save record)."""
     from .. import telemetry
 
-    out = report(windows, run_saves(device_ids, windows), music)
+    out = report(windows, run_saves(device_ids, windows), music, latency)
     telemetry.record_strict(source, out)
+    if latency is not None:
+        telemetry.record_detection_latency(source, latency)
     return out
 
 
