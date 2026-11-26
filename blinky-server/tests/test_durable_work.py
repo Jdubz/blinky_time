@@ -234,7 +234,8 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    "workflow", ["param-sweep", "tune-threshold", "capture-nn", "staging", "dev-run", "pr-smoke"]
+    "workflow",
+    ["param-sweep", "tune-threshold", "capture-nn", "staging", "dev-run", "hardware-checks"],
 )
 def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow: str) -> None:
     """The other test jobs, as validate above: crashed in the middle of a unit, then started
@@ -267,14 +268,15 @@ def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow:
             res = {k: res[k] for k in ("sha", "version", "passed")} | {
                 "played": res["validation"]["played"]
             }
-        if workflow == "pr-smoke":  # likewise: the verdict, the gates and what was played
+        if workflow == "hardware-checks":  # likewise: the verdict, each phase and each check
             assert res["passed"] is True, res
             res = {
                 "passed": res["passed"],
                 "version": res["version"],
-                "played": res["validation"]["played"],
-                "gates": res["gates"],
-                "info": sorted(res["info"]),
+                "phases": [(p["name"], p["result"]) for p in res["phases"]],
+                "checks": [
+                    (c["phase"], c["name"], c["device"], c["result"]) for c in res["checks"]
+                ],
             }
         if workflow == "dev-run":  # likewise: the verdict, the checks and what each played
             assert res["passed"] is True, res
@@ -306,7 +308,8 @@ RESTART_TESTS = {
     "test.capture-nn": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.staging": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
     "test.dev-run": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
-    "test.pr-smoke": "test_durable_work.py::test_every_test_job_resumes_after_a_crash_mid_unit",
+    "test.hardware-checks": "test_durable_work.py::"
+    "test_every_test_job_resumes_after_a_crash_mid_unit",
     "fleet.flash": "test_durable_flash.py::test_killed_before_the_bytes_land_reflashes_that_device_only",
     "fleet.deploy": "test_durable_flash.py::test_a_deploy_cut_off_mid_flash_resumes_with_that_device",
     "fleet.deploy-staging": "test_durable_flash.py::"

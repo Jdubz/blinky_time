@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
-from typing import Any
+from typing import Any, Literal
 
 from blinky_scoring.track_discovery import discover_tracks
 from fastapi import APIRouter, Depends, HTTPException
@@ -75,14 +75,23 @@ class StagingSuiteRequest(BaseModel):
     limits: dict[str, float] | None = None
 
 
-class PrSmokeRequest(BaseModel):
-    sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The PR head (full sha).")
-    build_id: str = Field(..., pattern=r"^[A-Za-z0-9_-]{1,64}$", description="Its build.")
+class HardwareChecksRequest(BaseModel):
+    sha: str = Field(..., pattern=r"^[0-9a-f]{40}$", description="The commit (full sha).")
     device_ids: list[str] = Field(..., min_length=1, description="Explicit TEST device IDs.")
+    source: Literal["dev_build", "staging"] = Field(
+        ..., description="dev_build: a build-service build (a PR head); staging: its artifact"
+    )
+    build_id: str | None = Field(None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
     pr: int | None = Field(None, ge=1, description="The PR's number (display only)")
-    tracks: list[str] | None = Field(None, min_length=1, max_length=10)
-    health_minutes: float | None = Field(None, gt=0, le=30)
-    track_dir: str | None = Field(None, description="default: the server's corpus/edm")
+    runner: Literal["pr", "staging"] | None = Field(
+        None, description="who submits it (box queue): default pr for dev_build, else staging"
+    )
+
+    @model_validator(mode="after")
+    def _build(self) -> HardwareChecksRequest:
+        if self.source == "dev_build" and not self.build_id:
+            raise ValueError("a dev_build source names its build_id")
+        return self
 
 
 class ParamSweepRequest(BaseModel):
@@ -183,54 +192,45 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
         return await _submit(staging_suite, body.model_dump())
 
 
-@router.post("/pr-smoke", dependencies=[Depends(require_api_key)])
-async def pr_smoke(body: PrSmokeRequest) -> dict[str, Any]:
-    """The PR hardware queue's smoke test (docs/DEV_LOOP.md; testing/pr_smoke.py): deploy a
-    build-service build of the PR head to the test chips, then health, the info timers, a few
-    tracks and the asserts. Queue mode only, on a server started with --staging; the same lock
-    and refusals as /test/staging, and the 60 s rule between resets as /dev/deploy. Returns a
-    job_id; poll /test/jobs/{id}. ``passed`` is deploy + health + asserts; scores never gate."""
+@router.post("/hardware-checks", dependencies=[Depends(require_api_key)])
+async def hardware_checks(body: HardwareChecksRequest) -> dict[str, Any]:
+    """The hardware checks (testing/hardware_checks.py; docs/TEST_BOX.md): deploy the commit's
+    build (a build-service build of a PR head, or staging's artifact) to the test chips, then
+    the blocking yes/no checks in order: upload, lights, audio, response, interfaces. Queue mode
+    only, on a server started with --staging; the deploy lock and the 60 s rule between resets
+    as /dev/deploy. Returns a job_id; poll /test/jobs/{id}. The result's ``passed`` is the
+    verdict; ``rig_error`` set means no verdict (a rig fault: try again)."""
     import asyncio
-    from pathlib import Path
 
     from ..firmware import build_service, deploy_pipeline
     from ..testing import box_mode
-    from ..testing.pr_smoke import DEFAULT_TRACKS
-    from ..testing.pr_smoke import pr_smoke as wf
+    from ..testing.hardware_checks import hardware_checks as wf
     from . import routes_dev, routes_firmware
 
     if not get_fleet().staging_enabled:
         raise HTTPException(
-            403, "PR smoke tests are off on this server (start it with --staging: the test box)"
+            403, "hardware checks are off on this server (start it with --staging: the test box)"
         )
-    if build_service.config() is None:
-        raise HTTPException(503, build_service.disabled_reason())
-    dev_mode = "the box is in dev mode: PR smoke tests wait for queue mode"
+    dev_mode = "the box is in dev mode: hardware checks wait for queue mode"
     if box_mode.holds_queue():
         raise HTTPException(409, dev_mode)
-    track_dir = Path(body.track_dir) if body.track_dir else routes_dev.default_track_dir()
-    resolved = track_dir.resolve()
-    if not any(resolved.is_relative_to(d) for d in (Path.home(), Path("/tmp"))):
-        raise HTTPException(400, f"track_dir must be under home or /tmp: {resolved}")
-    tracks = list(body.tracks or DEFAULT_TRACKS)
-    try:
-        have = {t["name"] for t in discover_tracks(str(track_dir))}
-    except FileNotFoundError as e:
-        raise HTTPException(400, f"no tracks: {e}") from e
-    if missing := sorted(set(tracks) - have):
-        raise HTTPException(400, f"unknown tracks in {track_dir}: {missing}")
-    try:
-        rec = await asyncio.to_thread(build_service.build, body.build_id)
-    except build_service.BuildServiceError as e:
-        if e.code == 404:
-            # Pruned or lost by the service: the runner builds the head again (410, not a 5xx
-            # it would retry with the same id forever).
-            raise HTTPException(410, f"the build service has no build {body.build_id}") from e
-        raise HTTPException(502, str(e)) from e
-    if rec.get("sha") != body.sha:
-        raise HTTPException(400, f"build {body.build_id} is not of {body.sha[:12]}")
-    if rec.get("state") != "done":
-        raise HTTPException(409, f"build {body.build_id} is {rec.get('state')!r}, not done")
+    source: dict[str, Any] = {"kind": body.source, "sha": body.sha}
+    if body.source == "dev_build":
+        if build_service.config() is None:
+            raise HTTPException(503, build_service.disabled_reason())
+        try:
+            rec = await asyncio.to_thread(build_service.build, str(body.build_id))
+        except build_service.BuildServiceError as e:
+            if e.code == 404:
+                # Pruned or lost by the service: the runner builds the head again (410, not a
+                # 5xx it would retry with the same id forever).
+                raise HTTPException(410, f"the build service has no build {body.build_id}") from e
+            raise HTTPException(502, str(e)) from e
+        if rec.get("sha") != body.sha:
+            raise HTTPException(400, f"build {body.build_id} is not of {body.sha[:12]}")
+        if rec.get("state") != "done":
+            raise HTTPException(409, f"build {body.build_id} is {rec.get('state')!r}, not done")
+        source["build_id"] = body.build_id
     async with routes_firmware._deploy_lock:
         if box_mode.holds_queue():
             # Again under the lock, as the staging route: a switch to dev may have won it.
@@ -252,30 +252,27 @@ async def pr_smoke(body: PrSmokeRequest) -> dict[str, Any]:
             )
         req: dict[str, Any] = {
             "sha": body.sha,
-            "build_id": body.build_id,
             "device_ids": body.device_ids,
+            "source": source,
             "pr": body.pr,
-            "tracks": tracks,
-            "track_dir": str(track_dir),
+            "runner": body.runner or ("pr" if body.source == "dev_build" else "staging"),
         }
-        if body.health_minutes is not None:
-            req["limits"] = {"stable_minutes": body.health_minutes}
         return await _submit(wf, req)
 
 
-@router.delete("/pr-smoke/{job_id}", dependencies=[Depends(require_api_key)])
-async def cancel_pr_smoke(job_id: str) -> dict[str, Any]:
-    """Cancel a PR smoke test (its PR was closed, merged or superseded). It stops at its next
+@router.delete("/hardware-checks/{job_id}", dependencies=[Depends(require_api_key)])
+async def cancel_hardware_checks(job_id: str) -> dict[str, Any]:
+    """Cancel hardware checks (their PR was closed, merged or superseded). They stop at the next
     step boundary (a flash in flight finishes); the LEDs go dark and the lock is released as
-    on any other end. Only PR smoke jobs: nothing else is cancelled here."""
+    on any other end. Only hardware-checks jobs: nothing else is cancelled here."""
     from dbos import DBOS
 
     from ..testing.workflows import TEST_JOBS
 
     _require_store()
     job = await jobs.get(TEST_JOBS, job_id)
-    if not job or job["kind"] != "pr-smoke":
-        raise HTTPException(404, f"no PR smoke job {job_id}")
+    if not job or job["kind"] != "hardware-checks":
+        raise HTTPException(404, f"no hardware-checks job {job_id}")
     if job["status"] in ("complete", "error", "cancelled"):
         return {"job_id": job_id, "status": job["status"]}
     await DBOS.cancel_workflow_async(job_id)

@@ -1,42 +1,62 @@
 #!/usr/bin/env python3
-"""Hardware-test the staging branch on the test box (#349, docs/RELEASE_PROCESS.md "Staging").
+"""Hardware-test the staging branch on the test box (#349, docs/RELEASE_PROCESS.md "Staging";
+docs/TEST_BOX.md, "Staging runner").
 
 blinky-staging.timer runs this every 2 minutes, from the deploy worktree (master code, like
-deploy.py). One pass:
+deploy.py). Two tiers (owner, 2026-11-25):
 
-1. A suite is in flight: poll it (GET /api/test/jobs/{id}). Finished: post the commit status
-   HARDWARE_CONTEXT on its sha (success only if the report passed) and the report as a comment
-   on the PR that merged it into staging. On a pass, if staging's head is still that sha, open
-   the staging -> master PR if none is open and turn on its auto-merge, pinned to that sha (a
-   merge commit: master's tree is the tested tree).
+- **The hardware checks, blocking** (blinky-server testing/hardware_checks.py): the status
+  HARDWARE_CONTEXT, which blinky-firmware's master ruleset requires for staging -> master. A red
+  commit must not reach the history, so the checks run on each PR head before its merge
+  (pr_queue.py), and this runner only confirms them: a staging head whose tree is a PR head
+  that passed them (strict up-to-date and squash merges make the two identical) gets
+  ``success`` "hardware checks passed before merge as PR #N head <sha8> (same tree)" without a
+  run. Any other head is checked here (a fork PR's merge, a head nobody tested).
+- **The quality suite, non-blocking** (testing/staging.py: every edm/ track, music and beat
+  pace, scores with the corpus pin and the scorer's lag evidence): run on the staging head after
+  its hardware checks pass. It reports in the head's comment and the score record, and posts
+  QUALITY_CONTEXT, always ``success`` with a short score summary (never a failing status: it
+  doesn't judge, it scores).
+
+One pass:
+
+1. A job in flight (GET /api/test/jobs/{id}): finished hardware checks post HARDWARE_CONTEXT
+   (success, failure, or pending "rig error: ..., retrying": a rig fault is no verdict and is
+   tried again, the next pass first, then backing off) and the report comment on the PR that
+   merged the head (one per head, updated in place: the checks table, then the quality
+   section). On a pass, if staging's head is still that sha, open the staging -> master PR if
+   none is open and turn on its auto-merge, pinned to that sha (a merge commit: master's tree
+   is the tested tree). A finished quality suite updates the comment and posts QUALITY_CONTEXT.
    The report and the promotion PR list the Claude review verdict of every PR merged into
    staging since master: informational, never a gate.
-2. Otherwise, the staging head: already reported, nothing to do. No change under the
-   firmware's paths (tools/firmware_paths.json at the head) since master: post a passing
-   status saying the test was skipped, and promote. Its staging build
-   (staging-build.yml, artifact staging-firmware-<sha>) failed: post a failure. Not built yet:
-   a pending status. Built, with the same Firmware fingerprint (the build's hash of the image
-   with per-commit fields fixed) as the staging commit master was last merged from, and no
-   change under the list's "unfingerprinted" paths: the same image, so skip and promote as
-   above. Otherwise submit the suite (POST /api/test/staging)
-   for every connected, configured chip on the box (every box chip is a test chip) and post a
-   pending status.
+2. Otherwise, the staging head: already settled, nothing to do but its quality suite if it is
+   due. No change under the firmware's paths (tools/firmware_paths.json at the head) since
+   master: a passing status saying the test was skipped, and promote. Its staging build
+   (staging-build.yml, artifact staging-firmware-<sha>) failed: a failure. Not built yet: a
+   pending status. Built, with the same Firmware fingerprint (the build's hash of the image with
+   per-commit fields fixed) as the staging commit master was last merged from, and no change
+   under the list's "unfingerprinted" paths: the same image, so skip and promote as above. Its
+   tree a PR head's that passed the hardware checks: confirmed, promoted. Otherwise the hardware
+   checks (POST /api/test/hardware-checks, source staging) on every connected, configured chip.
 
 The box's mode (GET /api/box/mode, docs/DEV_LOOP.md): in dev mode (or switching to it) a head
 that would be submitted is held instead, with the pending status "queued: box in dev mode since
 HH:MM (N waiting)", and reported to the server as waiting (PUT /api/box/queue/staging) so it
 shows in GET /api/box/mode, dev.py status and /metrics. Back in queue mode it is submitted as
-before. A suite that dev mode preempted (its job among the mode's "preempted") is not a
+before. A job that dev mode preempted (its job among the mode's "preempted") is not a
 failure: its head goes back in the queue and is tested again.
 
 The box is shared with the PR hardware queue (pr_queue.py), and the server serialises them (one
 hardware test at a time; a busy box answers 409 and the head is tried again next pass). A head
-ready to submit is reported as waiting in queue mode too, and the runner yields to another
-runner's ready item that has waited longer, so neither starves the other (older_elsewhere).
+ready for its hardware checks is reported as waiting in queue mode too, and the runner yields to
+another runner's ready item that has waited longer, so neither starves the other
+(older_elsewhere). The quality suite, being non-blocking, yields to any ready PR head.
 
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
-successor carries its changes). State is in ~/.local/share/blinky-server/staging.json; the log
-goes to the journal (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
+successor carries its changes). ``--retest`` forgets the head's verdict (a rig flake), and
+``--dry-run`` shows what a pass would post without posting or submitting anything. State is in
+~/.local/share/blinky-server/staging.json; the log goes to the journal
+(`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
 """
 
 from __future__ import annotations
@@ -61,7 +81,10 @@ from deploy import review_verdict  # the deployer's parser: one reading of the v
 # head is what gets tested, and its statuses and PRs are what this posts.
 GH_REPO = "Jdubz/blinky-firmware"
 BRANCH = "staging"
-HARDWARE_CONTEXT = "Hardware test (staging)"  # deploy.py gates staging -> master merges on it
+# The hardware checks' status: blinky-firmware's master ruleset requires it for staging -> master.
+HARDWARE_CONTEXT = "Hardware test (staging)"
+PR_CONTEXT = "Hardware test (PR)"  # pr_queue.py's, on PR heads: what a staging head confirms
+QUALITY_CONTEXT = "Quality suite (staging)"  # always success: scores, never a verdict
 HOME = Path.home()
 LINK = HOME / "blinky-deploy"
 BASE_URL = "http://127.0.0.1:8420"
@@ -200,7 +223,20 @@ def report_queue(server: Callable[..., Any], state: dict[str, Any]) -> None:
         waiting[0]["preempted"] = True
     if q and q.get("ready"):
         waiting[0]["ready"] = True
+    due = quality_due(state)
+    if due and not waiting and "running" not in state:
+        # Never "ready": the PR runner's blocking checks don't wait for a non-blocking suite.
+        since = float(state.get("quality_since") or time.time())
+        waiting = [{"sha": due, "since": since, "what": "staging quality suite (non-blocking)"}]
     put_queue(server, RUNNER, waiting)
+
+
+def quality_due(state: dict[str, Any]) -> str | None:
+    """The settled head whose quality suite is still to run: it passed the hardware checks."""
+    sha = state.get("hw_passed")
+    if sha and sha == state.get("reported") and state.get("quality_done") != sha:
+        return str(sha)
+    return None
 
 
 def older_elsewhere(
@@ -506,10 +542,13 @@ DRUM_HEAD = "kick R@50 | snare R@50 | on-drum | drum F | lone hat"
 
 
 def verdict_line(report: dict[str, Any]) -> str:
+    """The quality suite's headline: what ran where, and whether its health and end-of-run
+    checks held. Reported, never a verdict on the commit (the hardware checks are that)."""
+    held = "all hold" if report.get("passed") else "some don't (see below)"
     return (
-        f"**{'PASSED' if report.get('passed') else 'FAILED'}** — "
         f"`{report.get('version', '?')}` on "
-        f"{', '.join(d[:12] for d in report.get('devices', []))}"
+        f"{', '.join(d[:12] for d in report.get('devices', []))}: health and end-of-run checks "
+        f"{held}. Reported, not gated."
     )
 
 
@@ -540,22 +579,14 @@ def alert_lines(report: dict[str, Any]) -> list[str]:
     return ["", "Firmware alerts:", "```", *[f"{d[:12]} {a}" for d, a in alerts[:30]], "```"]
 
 
-def render(report: dict[str, Any]) -> str:
-    """The report as markdown: verdict, every check per device, drum means, timing, alerts."""
-    lines = [f"{REPORT_HEADER}{report.get('sha', '?')}", "", verdict_line(report), ""]
-    if report.get("artifact"):
-        # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
-        # signs its LAN address, so the link opens from the home network.
-        key = report["artifact"]
-        link = f"{host_setting('BLINKY_TESTBOX_URL')}/api/spark/artifacts/{key}"
-        lines += [
-            f"Full report in the Spark artifact store: `{key}` ([open]({link}), home network)",
-            "",
-        ]
+def quality_lines(report: dict[str, Any]) -> list[str]:
+    """The quality suite's report as markdown: what ran, every check per device, drum means
+    with the corpus pin, timing, alerts. Non-blocking: it scores, the hardware checks judge."""
+    lines = [verdict_line(report), ""]
     dep = report.get("deploy") or {}
     if not dep.get("pass"):
         lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]
-        return "\n".join(lines) + "\n"
+        return lines
     lines += check_rows(report, ("health", "music", "final"))
     val = report.get("validation") or {}
     if val.get("results"):
@@ -565,10 +596,11 @@ def render(report: dict[str, Any]) -> str:
                 drums = s.get("drums") or {}
                 for k in DRUMS:
                     by_dev.setdefault(dev, {}).setdefault(k, []).append(drums.get(k))
+        pin = str(report.get("corpus") or "unknown")[:12]
         lines += [
             (
                 f"Validation: {val.get('played')}/{val.get('tracks')} edm/ tracks played "
-                "(reported, not gated). Means over tracks:"
+                f"(reported, not gated; corpus `{pin}`). Means over tracks:"
             ),
             "",
             f"| device | {DRUM_HEAD} |",
@@ -578,12 +610,163 @@ def render(report: dict[str, Any]) -> str:
             vals = [_mean(m[k]) for k in DRUMS]
             lines.append(f"| {dev[:12]} | " + " | ".join(str(v) for v in vals) + " |")
         lines.append("")
+        lags = lag_counts(report)
+        if lags:
+            lines += [
+                f"Scorer lag: {lags} (blinky-corpus lag.py: an ambiguous or fallback lag is "
+                "flagged, not hidden).",
+                "",
+            ]
     elif val:
-        lines += [f"Validation: ❌ {val.get('detail')}", ""]
+        lines += [f"Validation: not played ({val.get('detail')})", ""]
     for dev, f in (report.get("final") or {}).items():
         lines.append(f"Onset-path timing ({dev[:12]}): {f.get('timing') or 'not reported'}")
     lines += alert_lines(report)
-    return "\n".join(lines) + "\n"
+    return lines
+
+
+def lag_counts(report: dict[str, Any]) -> str:
+    """Where each track's scoring lag came from, counted: "16 ESTIMATED, 2 FALLBACK; 3
+    ambiguous"."""
+    src: dict[str, int] = {}
+    ambiguous = 0
+    for r in (report.get("validation") or {}).get("results") or []:
+        for s_ in (r.get("scores") or {}).values():
+            d = s_.get("drums") or {}
+            if d.get("lagSource"):
+                src[str(d["lagSource"])] = src.get(str(d["lagSource"]), 0) + 1
+            ambiguous += bool(d.get("lagAmbiguous"))
+    if not src:
+        return ""
+    out = ", ".join(f"{n} {k}" for k, n in sorted(src.items()))
+    return out + (f"; {ambiguous} ambiguous" if ambiguous else "")
+
+
+def quality_summary(report: dict[str, Any] | None) -> str:
+    """QUALITY_CONTEXT's description: a few means, always a success."""
+    if not report or not (report.get("validation") or {}).get("results"):
+        why = "no scores" if report else "the suite didn't complete"
+        return f"non-blocking: {why} (see the report)"
+    means: dict[str, list[float | None]] = {}
+    for r in report["validation"]["results"]:
+        for s_ in (r.get("scores") or {}).values():
+            for k in ("drumF", "kickR50", "snareR50"):
+                means.setdefault(k, []).append((s_.get("drums") or {}).get(k))
+    val = report["validation"]
+    parts = [f"{k} {_mean(v)}" for k, v in means.items()]
+    health = "health ok" if report.get("passed") else "health/asserts: see report"
+    return f"non-blocking: {', '.join(parts)} over {val.get('played')}/{val.get('tracks')} tracks; {health}"
+
+
+# -- the hardware checks' report (shared with pr_queue.py and dev.py) -----------------------------
+
+HW_PASSED = "hardware checks passed"  # every passing status starts so (staging matches on it)
+HW_MARK = {"yes": "✅ yes", "no": "❌ no", "not applicable": "n/a"}
+PHASE_MARK = {"yes": "✅", "no": "❌", "rig error": "⚠️ rig error"}
+
+
+def hw_failed_at(report: dict[str, Any]) -> str:
+    """The first failing check, as "phase: check (evidence)"."""
+    for c in report.get("checks") or []:
+        if c.get("result") == "no":
+            return f"{c['phase']}: {c['name']} ({str(c.get('evidence'))[:60]})"
+    return "no checks ran"
+
+
+def hw_status(report: dict[str, Any]) -> tuple[str, str]:
+    """The commit status for a hardware-checks report: (state, description). A rig error is
+    pending (no verdict on the firmware), never a failure."""
+    if report.get("rig_error"):
+        return "pending", f"rig error: {report['rig_error']}"[:110] + ", retrying"
+    if report.get("passed"):
+        phases = ", ".join(p["name"] for p in report.get("phases") or [])
+        return "success", f"{HW_PASSED}: {phases}"
+    return "failure", f"hardware checks FAILED at {hw_failed_at(report)}"
+
+
+def hw_lines(report: dict[str, Any]) -> list[str]:
+    """The hardware checks as markdown: the verdict, each phase's time, the table of checks
+    (check, yes/no, evidence)."""
+    devices = ", ".join(d[:12] for d in report.get("devices") or [])
+    version = report.get("version") or "?"
+    if report.get("rig_error"):
+        head = f"**RIG ERROR, no verdict** (retried): {report['rig_error']}"
+    elif report.get("passed"):
+        head = f"**PASSED** — `{version}` on {devices}"
+    else:
+        head = f"**FAILED** at {hw_failed_at(report)} — `{version}` on {devices}"
+    lines = [head, ""]
+    phases = report.get("phases") or []
+    if phases:
+        lines += [
+            "Phases (in order, stopping at the first failure): "
+            + " · ".join(
+                f"{p['name']} {PHASE_MARK.get(p['result'], p['result'])}"
+                + (f" {p['seconds']:.0f} s" if isinstance(p.get("seconds"), (int, float)) else "")
+                for p in phases
+            ),
+            "",
+        ]
+    checks = report.get("checks") or []
+    if checks:
+        multi = len({c["device"] for c in checks}) > 1
+        lines += ["| phase | check | | evidence |", "|---|---|---|---|"]
+        for c in checks:
+            name = f"{c['name']} ({c['device'][:8]})" if multi else c["name"]
+            ev = str(c.get("evidence")).replace("|", "\\|").replace("\n", " ")
+            mark = HW_MARK.get(c["result"], c["result"])
+            lines.append(f"| {c['phase']} | {name} | {mark} | {ev} |")
+        lines.append("")
+    for dev, meta in ((report.get("response") or {}).get("meta") or {}).items():
+        lines.append(
+            f"Response ({dev[:12]}): rig lag {meta.get('lag_ms'):.0f} ms from the "
+            f"{meta.get('lag_source')} ({meta.get('lag_matched')} hits), "
+            f"{meta.get('rows')} stream lines, {meta.get('detections')} detections."
+        )
+    return lines
+
+
+def upsert_comment(gh_: Gh, number: str, header: str, body: str) -> str | None:
+    """The comment on issue/PR ``number`` whose first line is ``header``: updated in place,
+    else added. Returns its URL."""
+    raw = gh_(
+        "api",
+        "--paginate",
+        f"repos/{GH_REPO}/issues/{number}/comments?per_page=100",
+        "--jq",
+        '.[] | {id, url: .html_url, first: (.body | split("\\n")[0])}',
+    )
+    found = next(
+        (
+            c
+            for ln in raw.splitlines()
+            if ln.strip()
+            for c in [json.loads(ln)]
+            if c["first"].strip() == header
+        ),
+        None,
+    )
+    payload = json.dumps({"body": body})
+    if found:
+        got = _gh_stdin(
+            gh_, payload, "-X", "PATCH", f"repos/{GH_REPO}/issues/comments/{found['id']}"
+        )
+    else:
+        got = _gh_stdin(gh_, payload, "-X", "POST", f"repos/{GH_REPO}/issues/{number}/comments")
+    return str(got.get("html_url")) if isinstance(got, dict) and got.get("html_url") else None
+
+
+def _gh_stdin(gh_: Gh, payload: str, *args: str) -> Any:
+    return json.loads(gh_("api", *args, "--input", "-", stdin=payload) or "null")
+
+
+def rig_backoff(n: int) -> float:
+    """Seconds before the next try after ``n`` rig errors in a row: the next pass first, then
+    doubling to RIG_BACKOFF_MAX_S, so a broken rig isn't flashed every pass for good."""
+    return float(min(RIG_BACKOFF_MAX_S, 120.0 * 2 ** max(0, n - 1)))
+
+
+RIG_BACKOFF_MAX_S = 30 * 60
 
 
 # -- one pass ----------------------------------------------------------------------------------
@@ -603,43 +786,160 @@ def save_state(state: dict[str, Any]) -> None:
     tmp.replace(STATE)
 
 
-def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
-    sha = state["running"]["sha"]
+QUALITY_PENDING = "Runs on this commit after its hardware checks, on the box; non-blocking."
+QUALITY_NOT_RUN = "Not run: the hardware checks didn't pass."
+
+
+def report_comment(gh_: Gh, sha: str, hardware: str, quality: str) -> str | None:
+    """The head's one comment on the PR that merged it (updated in place): the hardware checks
+    first, then the quality section, then the review verdicts. Its URL, or None (no PR)."""
+    pr = staging_pr(gh_, sha)
+    if pr is None:
+        return None
+    body = "\n".join(
+        [
+            f"{REPORT_HEADER}{sha}",
+            "",
+            "### Hardware checks (blocking)",
+            "",
+            hardware,
+            "",
+            "### Quality suite (non-blocking)",
+            "",
+            quality,
+            "",
+            review_verdicts(gh_, sha),
+        ]
+    )
+    return upsert_comment(gh_, str(pr), f"{REPORT_HEADER}{sha}", body)
+
+
+def _archive_line(report: dict[str, Any]) -> str:
+    if not report.get("artifact"):
+        return ""
+    # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
+    # signs its LAN address, so the link opens from the home network.
+    key = report["artifact"]
+    link = f"{host_setting('BLINKY_TESTBOX_URL')}/api/spark/artifacts/{key}"
+    return f"Full report in the Spark artifact store: `{key}` ([open]({link}), home network)\n\n"
+
+
+def finish_hw(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
+    run = state.pop("running")
+    sha = run["sha"]
     report = job.get("result") if job.get("status") == "complete" else None
     if not isinstance(report, dict) or "passed" not in report:
+        # The job itself crashed or was lost: no verdict on the firmware.
         report = {
             "sha": sha,
             "passed": False,
-            "devices": state["running"]["devices"],
-            "deploy": {"pass": False, "failed_step": "suite", "message": job.get("error")},
+            "devices": run["devices"],
+            "rig_error": f"the hardware-checks job ended {job.get('status')}: "
+            f"{job.get('error') or 'no result'}",
         }
-    text = render(report) + "\n" + review_verdicts(gh_, sha)
-    pr = staging_pr(gh_, sha)
-    url = None
-    if pr is not None:
-        url = gh_("pr", "comment", str(pr), "--repo", GH_REPO, "--body", text).strip() or None
-    passed = bool(report["passed"])
-    post_status(
-        gh_,
-        sha,
-        "success" if passed else "failure",
-        f"passed on {len(report.get('devices', []))} test device(s)"
-        if passed
-        else "FAILED: see the report",
-        url,
-    )
-    log(f"{sha[:12]}: {'passed' if passed else 'FAILED'} ({url or 'no PR to comment on'})")
-    if passed:
-        # Only the commit that was tested goes to master. Staging moved on during the suite:
-        # the new head gets its own run, and its own promotion.
-        head = staging_head(gh_)
-        if head != sha:
-            log(f"{sha[:12]}: passed, but staging is now at {head[:12]}; not promoting")
-        else:
-            number = promote(gh_, sha, url)
-            log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
+    hardware = "\n".join(hw_lines(report))
+    state["hw_md"] = {"sha": sha, "text": hardware}
+    quality = QUALITY_PENDING if report.get("passed") else QUALITY_NOT_RUN
+    url = report_comment(gh_, sha, hardware, quality)
+    st, desc = hw_status(report)
+    post_status(gh_, sha, st, desc, url)
+    if report.get("rig_error"):
+        rig = state.get("rig") if (state.get("rig") or {}).get("sha") == sha else None
+        n = int((rig or {}).get("n") or 0) + 1
+        state["rig"] = {"sha": sha, "n": n, "retry_at": time.time() + rig_backoff(n) - 60}
+        log(f"{sha[:12]}: {desc} (rig error {n} in a row)")
+        return
+    state.pop("rig", None)
     state["reported"] = sha
-    state.pop("running", None)
+    log(f"{sha[:12]}: {desc} ({url or 'no PR to comment on'})")
+    if report.get("passed"):
+        passed(gh_, state, sha, url)
+
+
+def passed(gh_: Gh, state: dict[str, Any], sha: str, url: str | None) -> None:
+    """The head passed its hardware checks: its quality suite is due, and it goes to master."""
+    state["hw_passed"] = sha
+    state["quality_since"] = time.time()
+    # Only the commit that was checked goes to master. Staging moved on meanwhile: the new
+    # head gets its own checks, and its own promotion.
+    head = staging_head(gh_)
+    if head != sha:
+        log(f"{sha[:12]}: passed, but staging is now at {head[:12]}; not promoting")
+        return
+    number = promote(gh_, sha, url)
+    log(f"{sha[:12]}: staging -> master PR #{number}, auto-merge on")
+
+
+def tree_match(gh_: Gh, sha: str) -> tuple[tuple[int, str, str | None] | None, str]:
+    """((PR number, its head, its report URL) or None, why): whether ``sha`` is the squash of a
+    PR whose head has the same tree and passed the hardware checks (PR_CONTEXT, newest status
+    a success saying so). Anything unreadable is no match: the checks run here."""
+    try:
+        pr = next(
+            (
+                p
+                for p in gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{sha}/pulls") or []
+                if p.get("merged_at") and p["base"]["ref"] == BRANCH
+            ),
+            None,
+        )
+        if pr is None:
+            return None, "no PR merged it: checking it here"
+        head = str(pr["head"]["sha"])
+        tree = gh_json(gh_, "api", f"repos/{GH_REPO}/git/commits/{sha}")["tree"]["sha"]
+        head_tree = gh_json(gh_, "api", f"repos/{GH_REPO}/git/commits/{head}")["tree"]["sha"]
+        if tree != head_tree:
+            return None, f"its tree isn't PR #{pr['number']} head {head[:8]}'s: checking it here"
+        statuses = gh_json(gh_, "api", f"repos/{GH_REPO}/commits/{head}/statuses?per_page=100")
+        newest = next((st for st in statuses or [] if st.get("context") == PR_CONTEXT), None)
+    except (RuntimeError, KeyError, ValueError, TypeError) as e:
+        return None, f"can't compare with its PR head ({str(e)[:80]}): checking it here"
+    if (
+        newest is None
+        or newest.get("state") != "success"
+        or not str(newest.get("description") or "").startswith(HW_PASSED)
+    ):
+        got = f"{newest.get('state')} {newest.get('description')!r}" if newest else "no status"
+        return None, f"PR #{pr['number']} head {head[:8]} has {got}: checking it here"
+    return (int(pr["number"]), head, newest.get("target_url")), "same tree"
+
+
+def confirm(
+    gh_: Gh, state: dict[str, Any], sha: str, number: int, head: str, url: str | None
+) -> None:
+    """A head whose tree a PR head that passed the hardware checks has: success, no rerun."""
+    desc = f"{HW_PASSED} before merge as PR #{number} head {head[:8]} (same tree)"
+    hardware = (
+        f"**PASSED before merge** as PR #{number} head `{head[:12]}`, whose tree this commit "
+        "has (a squash of an up-to-date PR): not run again."
+        + (f" [Its report]({url})." if url else "")
+    )
+    state["hw_md"] = {"sha": sha, "text": hardware}
+    link = report_comment(gh_, sha, hardware, QUALITY_PENDING)
+    post_status(gh_, sha, "success", desc, link or url)
+    state.pop("rig", None)
+    state["reported"] = sha
+    log(f"{sha[:12]}: {desc}")
+    passed(gh_, state, sha, link or url)
+
+
+def finish_quality(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
+    run = state.pop("running")
+    sha = run["sha"]
+    report = job.get("result") if job.get("status") == "complete" else None
+    if not isinstance(report, dict) or "passed" not in report:
+        report = None
+    state["quality_done"] = sha
+    if report is None:
+        quality = f"Didn't complete ({job.get('status')}: {job.get('error') or 'no result'})."
+    else:
+        quality = _archive_line(report) + "\n".join(quality_lines(report))
+    md = state.get("hw_md") or {}
+    hardware = md["text"] if md.get("sha") == sha else "Passed (see the status)."
+    url = report_comment(gh_, sha, hardware, quality)
+    desc = quality_summary(report)
+    post_status(gh_, sha, "success", desc, url, context=QUALITY_CONTEXT)
+    log(f"{sha[:12]}: quality suite done: {desc}")
 
 
 RETRY_CODES = (409, 429)  # 4xx that mean "not now"; every 5xx is retried too
@@ -669,51 +969,109 @@ def preempted(server: Callable[..., Any], job_id: str) -> dict[str, Any] | None:
     return next((p for p in mode.get("preempted") or [] if p.get("job") == job_id), None)
 
 
+def _poll(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> dict[str, Any]:
+    run = state["running"]
+    kind = run.get("kind", "quality")  # a suite from before the hardware checks: not a verdict
+    try:
+        job = server("GET", f"/api/test/jobs/{run['job']}")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            log(f"server answered {e.code}; next pass")
+            return state
+        # The work store lost it: settled loudly (a rig error for the checks), not a wait.
+        job = {"status": "error", "error": f"job {run['job']} not found"}
+    except (urllib.error.URLError, OSError) as e:
+        log(f"server not answering ({e}); next pass")
+        return state
+    if job.get("status") not in TERMINAL:
+        log(f"{run['sha'][:12]}: {kind}: {job.get('progressMessage')}")
+        return state
+    try:
+        pre = preempted(server, run["job"]) if job["status"] == "cancelled" else None
+    except (urllib.error.URLError, OSError) as e:  # HTTPError included
+        # Preempted or cancelled by hand can't be told apart now: a retry, never a verdict.
+        log(f"{run['sha'][:12]}: {kind} cancelled, box mode unreadable ({e}); next pass")
+        return state
+    if pre is not None:
+        # Dev mode took the box: not a failure. Hardware checks go back in the queue (this
+        # pass holds them while the box stays in dev mode); a quality suite is still due.
+        sha = state.pop("running")["sha"]
+        if kind == "hw":
+            state["queued"] = {"sha": sha, "since": float(pre.get("at") or time.time())}
+            state["queued"]["preempted"] = True
+        save_state(state)
+        log(f"{sha[:12]}: {kind} preempted by dev mode; queued again")
+        return _pass(gh_, server)
+    if kind == "hw":
+        finish_hw(gh_, state, job)
+    else:
+        finish_quality(gh_, state, job)
+    save_state(state)
+    return state
+
+
+def quality(gh_: Gh, server: Callable[..., Any], state: dict[str, Any], sha: str) -> None:
+    """The non-blocking quality suite on ``sha`` (its hardware checks passed): queue mode only,
+    after any ready PR head (blocking checks first), when a chip is free."""
+    try:
+        mode = box_mode(server)
+    except (urllib.error.URLError, OSError) as e:
+        log(f"{sha[:12]}: box mode unreadable ({e}); quality suite next pass")
+        return
+    if holds(mode):
+        log(f"{sha[:12]}: quality suite waits for queue mode")
+        return
+    now = time.time()
+    for w in mode.get("waiting") or []:
+        at = w.get("reported_at")
+        if w.get("runner") != RUNNER and w.get("ready") and at and now - float(at) < REPORT_STALE_S:
+            log(f"{sha[:12]}: quality suite yields to {w.get('runner')} {str(w.get('sha'))[:12]}")
+            return
+    try:
+        devices = test_devices(server("GET", "/api/devices"))
+        if not devices:
+            log(f"{sha[:12]}: no test device for the quality suite")
+            return
+        job = server(
+            "POST",
+            "/api/test/staging",
+            {"sha": sha, "device_ids": devices, "track_dir": str(LINK / CORPUS)},
+        )
+    except urllib.error.HTTPError as e:
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            log(f"{sha[:12]}: quality suite: server answered {e.code}; next pass")
+            return
+        detail = _detail(e)
+        state["quality_done"] = sha
+        post_status(
+            gh_,
+            sha,
+            "success",
+            f"non-blocking: the server refused the quality suite ({e.code}): {detail}",
+            context=QUALITY_CONTEXT,
+        )
+        log(f"{sha[:12]}: quality suite refused ({e.code}): {detail}")
+        return
+    except (urllib.error.URLError, OSError) as e:
+        log(f"server not answering ({e}); next pass")
+        return
+    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices, "kind": "quality"}
+    log(f"{sha[:12]}: quality suite {job['job_id']} on {devices} (non-blocking)")
+
+
 def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
     state = load_state()
     if "running" in state:
-        try:
-            job = server("GET", f"/api/test/jobs/{state['running']['job']}")
-        except urllib.error.HTTPError as e:
-            if e.code != 404:
-                log(f"server answered {e.code}; next pass")
-                return state
-            # The work store lost it: a failure, loudly, not a wait for good.
-            job = {"status": "error", "error": f"suite job {state['running']['job']} not found"}
-        except (urllib.error.URLError, OSError) as e:
-            log(f"server not answering ({e}); next pass")
-            return state
-        if job.get("status") not in TERMINAL:
-            log(f"{state['running']['sha'][:12]}: {job.get('progressMessage')}")
-            return state
-        try:
-            pre = (
-                preempted(server, state["running"]["job"]) if job["status"] == "cancelled" else None
-            )
-        except (urllib.error.URLError, OSError) as e:  # HTTPError included
-            # Preempted or cancelled by hand can't be told apart now: a retry, never a verdict.
-            log(
-                f"{state['running']['sha'][:12]}: suite cancelled, box mode unreadable ({e}); next pass"
-            )
-            return state
-        if pre is not None:
-            # Dev mode took the box: not a failure. The head goes back in the queue and is
-            # tested again (this pass holds it while the box stays in dev mode).
-            sha = state.pop("running")["sha"]
-            state["queued"] = {"sha": sha, "since": float(pre.get("at") or time.time())}
-            state["queued"]["preempted"] = True
-            save_state(state)
-            log(f"{sha[:12]}: suite preempted by dev mode; queued again")
-            return _pass(gh_, server)
-        finish(gh_, state, job)
-        save_state(state)
-        return state
+        return _poll(gh_, server, state)
 
     sha = staging_head(gh_)
     if state.get("queued", {}).get("sha") not in (None, sha) or state.get("reported") == sha:
         state.pop("queued", None)  # superseded or settled: nothing of this runner waits
         save_state(state)
     if state.get("reported") == sha:
+        if quality_due(state) == sha:
+            quality(gh_, server, state, sha)
+            save_state(state)
         return state
     changed, why, blind = firmware_change(gh_, sha)
     if not changed:
@@ -738,6 +1096,18 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
         if same:
             return skip(gh_, state, sha, why)
         log(f"{sha[:12]}: {why}")
+    match, why = tree_match(gh_, sha)
+    if match:
+        confirm(gh_, state, sha, *match)
+        save_state(state)
+        return state
+    log(f"{sha[:12]}: {why}")
+    rig = state.get("rig") or {}
+    if rig.get("sha") == sha and time.time() < float(rig.get("retry_at") or 0):
+        log(
+            f"{sha[:12]}: rig error {rig.get('n')} in a row; retrying after {time.ctime(rig['retry_at'])}"
+        )
+        return state
     try:
         mode = box_mode(server)
     except (urllib.error.URLError, OSError) as e:  # HTTPError included: never a verdict
@@ -766,31 +1136,33 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
             return state
         job = server(
             "POST",
-            "/api/test/staging",
-            {"sha": sha, "device_ids": devices, "track_dir": str(LINK / CORPUS)},
+            "/api/test/hardware-checks",
+            {"sha": sha, "device_ids": devices, "source": "staging", "runner": RUNNER},
         )
     except urllib.error.HTTPError as e:
         if not (400 <= e.code < 500) or e.code in RETRY_CODES:
-            # Busy (a deploy or suite runs), draining for a restart, or a server error: next pass.
+            # Busy (a deploy or test runs), draining for a restart, or a server error: next pass.
             log(f"{sha[:12]}: server answered {e.code}; next pass")
             return state
         # Refused for good (403 not --staging, 400 not a test device, 422 bad request): a
         # failure with the server's reason, loudly, not a retry every pass forever.
         detail = _detail(e)
-        post_status(gh_, sha, "failure", f"the server refused the suite ({e.code}): {detail}")
+        post_status(
+            gh_, sha, "failure", f"the server refused the hardware checks ({e.code}): {detail}"
+        )
         state["reported"] = sha
         save_state(state)
-        log(f"{sha[:12]}: suite refused ({e.code}): {detail}")
+        log(f"{sha[:12]}: hardware checks refused ({e.code}): {detail}")
         return state
     except (urllib.error.URLError, OSError) as e:
         log(f"server not answering ({e}); next pass")
         return state
-    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices}
+    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices, "kind": "hw"}
     state.pop("waiting", None)
     state.pop("queued", None)
     save_state(state)
-    post_status(gh_, sha, "pending", f"testing on {len(devices)} test device(s)")
-    log(f"{sha[:12]}: suite {job['job_id']} on {devices}")
+    post_status(gh_, sha, "pending", f"hardware checks on {len(devices)} test device(s)")
+    log(f"{sha[:12]}: hardware checks {job['job_id']} on {devices}")
     return state
 
 
@@ -811,18 +1183,82 @@ def hold(gh_: Gh, state: dict[str, Any], sha: str, mode: dict[str, Any]) -> dict
     return state
 
 
+def retest(gh_: Gh = gh) -> str:
+    """Forget the staging head's verdict (a rig flake that ended in one): the next pass checks
+    it again (or confirms it from its PR head) and runs its quality suite again."""
+    sha = staging_head(gh_)
+    state = load_state()
+    if (state.get("running") or {}).get("sha") == sha:
+        return f"{sha[:12]}: a job on it is running now; nothing to do"
+    for key in ("reported", "hw_passed", "quality_done", "waiting", "no_device"):
+        if state.get(key) == sha:
+            state.pop(key)
+    if (state.get("rig") or {}).get("sha") == sha:
+        state.pop("rig")
+    save_state(state)
+    return f"{sha[:12]}: forgotten; the next pass checks it again"
+
+
+WRITES = {"POST", "PATCH", "PUT", "DELETE"}
+
+
+def dry_gh(gh_: Gh) -> Gh:
+    """gh that reads, and logs every write instead of making it (--dry-run)."""
+
+    def call(*args: str, stdin: str | None = None) -> str:
+        method = args[args.index("-X") + 1] if "-X" in args else None
+        if method in WRITES or args[:2] in (("pr", "create"), ("pr", "merge"), ("pr", "comment")):
+            fields = [a for a in args if "=" in a and not a.startswith("repos/")]
+            log(f"DRY RUN would: gh {' '.join(args[:5])} {' '.join(fields)}".rstrip())
+            if args[:2] == ("pr", "create"):
+                return f"https://github.com/{GH_REPO}/pull/0\n"
+            return "{}" if args[0] == "api" else ""
+        return gh_(*args, stdin=stdin)
+
+    return call
+
+
+def dry_server(server: Callable[..., Any]) -> Callable[..., Any]:
+    """The server for reads only; a write is logged (--dry-run)."""
+
+    def call(method: str, path: str, body: Any = None) -> Any:
+        if method != "GET":
+            log(f"DRY RUN would: {method} {path} {json.dumps(body) if body else ''}".rstrip())
+            return {"job_id": "dry-run"}
+        return server(method, path, body)
+
+    return call
+
+
 def main(argv: list[str] | None = None) -> int:
+    global STATE
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--status", action="store_true", help="print the state and exit")
+    ap.add_argument("--retest", action="store_true", help="check the staging head again")
+    ap.add_argument(
+        "--dry-run", action="store_true", help="show what a pass would post; post nothing"
+    )
     args = ap.parse_args(argv)
     if args.status:
         print(json.dumps(load_state(), indent=2))
+        return 0
+    if args.retest:
+        log(retest())
         return 0
     try:
         host_setting("BLINKY_TESTBOX_URL")  # before any work, not after a 20-minute suite
     except RuntimeError as e:
         log(f"ERROR: {e}")
         return 2
+    if args.dry_run:
+        import tempfile
+
+        copy = Path(tempfile.mkdtemp()) / "staging.json"
+        copy.write_text(json.dumps(load_state()))
+        STATE = copy  # the real state is never touched
+        state = _pass(dry_gh(gh), dry_server(http))
+        print(json.dumps(state, indent=2))
+        return 0
     run_once()
     return 0
 

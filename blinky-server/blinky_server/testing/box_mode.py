@@ -3,7 +3,8 @@
 - ``queue`` (the default): the hardware runners (scripts/testbox/staging.py and
   scripts/testbox/pr_queue.py) submit their work, whichever item has waited longest first.
 - ``dev``: the runners submit nothing, and the dev endpoints (``/api/dev/*``) flash and test
-  build-service builds. ``POST /api/test/staging`` and ``/api/test/pr-smoke`` answer 409.
+  build-service builds. ``POST /api/test/staging`` and ``/api/test/hardware-checks`` answer
+  409.
 
 No expiry and no automatic transition (owner, 2026-11-25): leaving dev mode is a conscious
 switch. So the work waiting behind it must be obvious: each runner reports what it holds back
@@ -15,7 +16,8 @@ item carries the time its runner last reported (``reported_at``): a runner yield
 older item only while that runner is still reporting, so a stopped runner never blocks one
 that runs.
 
-Switching to dev while a hardware test runs (the staging suite, a PR smoke test) waits for it:
+Switching to dev while a hardware test runs (the staging quality suite, hardware checks) waits
+for it:
 the box is ``switching`` (still ``queue``, but the runners hold back and the test routes
 refuse), and becomes ``dev`` when the test ends. ``preempt`` cancels the test instead (it stops
 at its next step boundary; a flash in flight finishes) and puts its commit back in its runner's
@@ -40,8 +42,9 @@ MODES = ("queue", "dev")
 PREEMPTED_KEEP = 20
 MAX_WAITING = 50
 # The hardware tests a switch to dev waits for or preempts: job kind (TEST_JOBS) -> the runner
-# that submits it (its name in PUT /api/box/queue/{runner}).
-SUITES = {"staging": "staging", "pr-smoke": "pr"}
+# that submits it (its name in PUT /api/box/queue/{runner}). Hardware checks name their runner
+# in the request (``runner``: the PR queue or the staging runner).
+SUITES = {"staging": "staging", "hardware-checks": "pr"}
 
 _cache: tuple[Path, dict[str, Any]] | None = None
 # When each runner last reported (wall time). In memory: after a restart a runner counts as
@@ -167,6 +170,8 @@ async def _suite_of(job_id: str) -> tuple[str | None, str]:
         runner = SUITES.get(str(sts[0].name).removeprefix("test."), "staging") if sts else "staging"
         req = sts[0].input["args"][0] if sts and sts[0].input else {}
         sha = req.get("sha") if isinstance(req, dict) else None
+        if isinstance(req, dict) and req.get("runner"):
+            runner = str(req["runner"])
         return (str(sha) if sha else None), runner
     except Exception as e:  # the sha is for the queue's display; never fail the switch on it
         log.warning("box mode: no sha for preempted test %s: %s", job_id, e)

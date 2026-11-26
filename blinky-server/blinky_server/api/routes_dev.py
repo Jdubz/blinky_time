@@ -5,6 +5,7 @@
   PUT  /api/box/queue/{runner}  {"waiting": [{"sha", "since", ...}]}: what a runner holds back
   POST /api/dev/deploy          {"build_id", "device_ids"}: a build-service build to test chips
   POST /api/dev/run             {"device_ids", "checks": [...]}: targeted checks
+  POST /api/dev/hardware-checks {"device_ids", ...}: the blocking hardware checks, no flash
 
 The dev endpoints answer 409 unless the box is in dev mode, and only on a server started with
 --staging (the box). A dev deploy is the staging deploy pipeline (deploy_pipeline.run_deploy)
@@ -81,6 +82,18 @@ class DevRunRequest(BaseModel):
     device_ids: list[str] = Field(..., min_length=1)
     checks: list[DevCheck] = Field(..., min_length=1, max_length=20)
     track_dir: str | None = Field(None, description="default: the server's corpus/edm")
+
+
+class DevHardwareChecksRequest(BaseModel):
+    device_ids: list[str] = Field(..., min_length=1)
+    phases: list[Literal["upload", "lights", "audio", "response", "interfaces"]] | None = Field(
+        None, description="default: all, in order (each still stops the run when it fails)"
+    )
+    expected_version: str | None = Field(None, max_length=64, description="upload: the version")
+    regions: str | None = Field(None, description="a camera region map (default: the board's)")
+    lights_brightness: int | None = Field(
+        None, ge=0, le=255, description="the lights check's `leds` level (0 proves it fails)"
+    )
 
 
 def _require_box() -> None:
@@ -259,3 +272,35 @@ async def dev_run(body: DevRunRequest) -> dict[str, Any]:
         "track_dir": str(track_dir),
     }
     return await _submit(wf, req)
+
+
+@router.post("/dev/hardware-checks", dependencies=[Depends(require_api_key)])
+async def dev_hardware_checks(body: DevHardwareChecksRequest) -> dict[str, Any]:
+    """The hardware checks (testing/hardware_checks.py) on the chips as they are, dev mode only:
+    no flash (``dev.py flash`` or ``try`` did it; pass ``expected_version``). Returns a job_id;
+    poll /api/test/jobs/{id}."""
+    from ..testing.hardware_checks import hardware_checks as wf
+    from . import routes_firmware
+    from .routes_testing import _submit
+
+    _require_box()
+    _require_dev()
+    _targets(body.device_ids)
+    if body.regions:
+        resolved = Path(body.regions).expanduser().resolve()
+        if not any(resolved.is_relative_to(d) for d in (Path.home(), Path("/tmp"))):
+            raise HTTPException(400, f"regions must be under home or /tmp: {resolved}")
+    async with routes_firmware._deploy_lock:
+        _require_dev()
+        if await routes_firmware._deploy_active():
+            raise HTTPException(409, "A deploy or hardware test is already running")
+        req: dict[str, Any] = {
+            "device_ids": body.device_ids,
+            "source": {"kind": "none"},
+            "runner": "dev",
+        }
+        for key in ("phases", "expected_version", "regions", "lights_brightness"):
+            value = getattr(body, key)
+            if value is not None:
+                req[key] = value
+        return await _submit(wf, req)

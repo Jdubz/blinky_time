@@ -71,7 +71,10 @@ class GitHub:
         self.fail_fingerprints = False
         self.fail_merge = False
         self.statuses: list[tuple[str, str]] = []
-        self.comments: list[tuple[str, str]] = []
+        self.quality: list[tuple[str, str]] = []  # QUALITY_CONTEXT statuses
+        self.comments: list[list[str]] = []  # [pr, body], updated in place by a PATCH
+        # Each commit's tree: by default the head's isn't its PR head's (no confirmation).
+        self.trees: dict[str, str] = {SHA: "tree-s", PR_HEAD: "tree-h"}
         self.calls: list[tuple[str, ...]] = []
         self.open_promotion: list[dict[str, Any]] = []
         # Comments on PR #12: by default a clean review of its last commit.
@@ -94,6 +97,23 @@ class GitHub:
             return json.dumps({"content": base64.b64encode(raw).decode()})
         if args[:2] == ("api", "--paginate") and f"compare/master...{SHA}" in a:
             return SHA + "\n"
+        if args[:2] == ("api", "--paginate") and "issues/12/comments" in a and "first:" in a:
+            return "".join(
+                json.dumps({"id": i, "url": f"u{i}", "first": body.split("\n")[0]}) + "\n"
+                for i, (_, body) in enumerate(self.comments)
+            )
+        if "--input" in args and stdin is not None:
+            body = json.loads(stdin)["body"]
+            if "-X PATCH" in a:
+                i = int(a.split("/issues/comments/", 1)[1].split()[0])
+                self.comments[i][1] = body
+                return json.dumps({"html_url": f"u{i}"})
+            n = a.split("/issues/", 1)[1].split("/", 1)[0]
+            self.comments.append([n, body])
+            return json.dumps({"html_url": f"u{len(self.comments) - 1}"})
+        if "/git/commits/" in a:
+            sha = a.rsplit("/", 1)[1]
+            return json.dumps({"tree": {"sha": self.trees.get(sha, "tree-" + sha[:4])}})
         if args[:2] == ("api", "--paginate") and "issues/12/comments" in a:
             if self.fail_reviews:
                 raise subprocess.TimeoutExpired(["gh", *args], 120)
@@ -116,6 +136,10 @@ class GitHub:
             return json.dumps({"workflow_runs": self.runs})
         if f"statuses/{SHA}" in a:
             st = dict(x.split("=", 1) for x in args if "=" in x and not x.startswith("repos"))
+            if st["context"] == staging.QUALITY_CONTEXT:
+                self.quality.append((st["state"], st["description"]))
+                return "{}"
+            assert st["context"] == staging.HARDWARE_CONTEXT
             self.statuses.append((st["state"], st["description"]))
             return "{}"
         if f"commits/{SHA}/pulls" in a:
@@ -145,9 +169,18 @@ class GitHub:
 
 
 class Server:
-    def __init__(self, devices: list[dict[str, Any]], job: dict[str, Any] | Exception) -> None:
+    """blinky-server as a fake: job-1 is the hardware checks, job-2 the quality suite."""
+
+    def __init__(
+        self,
+        devices: list[dict[str, Any]],
+        job: dict[str, Any] | Exception,
+        quality: dict[str, Any] | None = None,
+    ) -> None:
         self.devices, self.job = devices, job
-        self.submitted: list[Any] = []
+        self.quality_job = quality or {"status": "running", "progressMessage": "validation"}
+        self.submitted: list[Any] = []  # hardware checks
+        self.quality: list[Any] = []  # quality suites
         # The box's mode (GET /api/box/mode) and what the runner reports as waiting.
         self.mode: dict[str, Any] = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
         self.queue: list[list[dict[str, Any]]] = []
@@ -162,13 +195,18 @@ class Server:
         if method == "PUT" and path == "/api/box/queue/staging":
             self.queue.append(body["waiting"])
             return {}
-        if method == "POST" and path == "/api/test/staging":
+        if method == "POST" and path == "/api/test/hardware-checks":
             self.submitted.append(body)
             return {"job_id": "job-1"}
+        if method == "POST" and path == "/api/test/staging":
+            self.quality.append(body)
+            return {"job_id": "job-2"}
         if path == "/api/test/jobs/job-1":
             if isinstance(self.job, Exception):
                 raise self.job
             return self.job
+        if path == "/api/test/jobs/job-2":
+            return self.quality_job
         raise AssertionError(path)
 
 
@@ -215,19 +253,50 @@ GOOD_REPORT = {
 }
 
 
+CHIP = "C04C56F9"
+HW_GOOD: dict[str, Any] = {
+    "kind": "hardware-checks",
+    "sha": SHA,
+    "passed": True,
+    "rig_error": None,
+    "version": "b216-dev-ssssssss",
+    "devices": [CHIP],
+    "plan": ["upload", "lights", "audio", "response", "interfaces"],
+    "phases": [
+        {"name": p, "result": "yes", "seconds": 10.0}
+        for p in ("upload", "lights", "audio", "response", "interfaces")
+    ],
+    "checks": [
+        {"phase": "upload", "name": "version", "device": CHIP, "result": "yes", "evidence": "b216"},
+        {"phase": "lights", "name": "walk", "device": CHIP, "result": "yes", "evidence": "64/64"},
+        {"phase": "interfaces", "name": "ble scan", "device": CHIP, "result": "not applicable",
+         "evidence": "no adapter"},
+    ],
+}  # fmt: skip
+HW_BAD = {
+    **HW_GOOD,
+    "passed": False,
+    "phases": [
+        {"name": "upload", "result": "yes", "seconds": 80.0},
+        {"name": "lights", "result": "no", "seconds": 14.0},
+    ],
+    "checks": [
+        {"phase": "lights", "name": "walk", "device": CHIP, "result": "no", "evidence": "64 dead"}
+    ],
+}
+HW_RIG = {**HW_GOOD, "passed": False, "rig_error": "lights: camera: no region map", "phases": []}
+
+
 def test_a_built_head_is_submitted_for_every_connected_configured_chip() -> None:
     unconfigured = {**HAT, "id": "Y", "device_type": None}
     disconnected = {**HAT, "id": "X", "state": "disconnected"}
     g, srv = GitHub(), Server([HAT, LAMP, disconnected, unconfigured], {})
     state = staging.run_once(g, srv)
     assert srv.submitted == [
-        {
-            "sha": SHA,
-            "device_ids": ["C04C56F9", "AAAA"],
-            "track_dir": str(staging.LINK / staging.CORPUS),
-        }
+        {"sha": SHA, "device_ids": ["C04C56F9", "AAAA"], "source": "staging", "runner": "staging"}
     ]
-    assert state["running"]["job"] == "job-1" and g.statuses[-1][0] == "pending"
+    assert state["running"]["job"] == "job-1" and state["running"]["kind"] == "hw"
+    assert g.statuses[-1] == ("pending", "hardware checks on 2 test device(s)")
 
 
 def test_a_running_suite_is_left_alone() -> None:
@@ -237,15 +306,20 @@ def test_a_running_suite_is_left_alone() -> None:
     assert len(srv.submitted) == 1 and [s[0] for s in g.statuses] == ["pending"]
 
 
-def test_a_pass_reports_and_promotes_with_a_merge_commit() -> None:
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+def test_a_pass_reports_promotes_then_runs_the_quality_suite() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     staging.run_once(g, srv)
     state = staging.run_once(g, srv)
-    assert state["reported"] == SHA and "running" not in state
-    assert g.statuses[-1][0] == "success"
-    pr, text = g.comments[0]
-    assert pr == "12" and text.startswith(staging.REPORT_HEADER + SHA) and "PASSED" in text
-    assert "onsetUs" in text and "0.8" in text
+    assert state["reported"] == SHA and state["hw_passed"] == SHA and "running" not in state
+    assert g.statuses[-1] == (
+        "success",
+        "hardware checks passed: upload, lights, audio, response, interfaces",
+    )
+    (pr, text) = g.comments[0]
+    assert pr == "12" and text.startswith(staging.REPORT_HEADER + SHA)
+    assert text.index("### Hardware checks (blocking)") < text.index("### Quality suite")
+    assert "| lights | walk | ✅ yes | 64/64 |" in text and "| n/a |" in text
+    assert "lights ✅ 10 s" in text and staging.QUALITY_PENDING in text
     merge = (
         "pr",
         "merge",
@@ -258,15 +332,77 @@ def test_a_pass_reports_and_promotes_with_a_merge_commit() -> None:
         SHA,
     )
     assert merge in g.calls
-    # Reported once: the next pass does nothing.
+    assert srv.quality == []  # the checks' pass only promotes; the suite is the next pass
+    # Waiting for the box: reported, but never "ready" (PR heads don't wait for it).
+    assert srv.queue[-1] == [
+        {
+            "sha": SHA,
+            "since": state["quality_since"],
+            "what": "staging quality suite (non-blocking)",
+        }
+    ]
+    state = staging.run_once(g, srv)
+    assert srv.quality == [
+        {"sha": SHA, "device_ids": ["C04C56F9"], "track_dir": str(staging.LINK / staging.CORPUS)}
+    ]
+    assert state["running"]["kind"] == "quality"
+    srv.quality_job = {"status": "complete", "result": {**GOOD_REPORT, "corpus": "c" * 40}}
+    state = staging.run_once(g, srv)
+    assert state["quality_done"] == SHA and "running" not in state
+    assert len(g.comments) == 1  # the same comment, updated
+    text = g.comments[0][1]
+    assert "| lights | walk | ✅ yes |" in text and "corpus `cccccccccccc`" in text
+    assert "onsetUs" in text and "0.8" in text
+    assert g.quality == [
+        (
+            "success",
+            "non-blocking: drumF None, kickR50 0.8, snareR50 None over 1/1 tracks; health ok",
+        )
+    ]
+    # Settled: the next pass does nothing.
     staging.run_once(g, srv)
-    assert len(srv.submitted) == 1 and len(g.comments) == 1
+    assert len(srv.submitted) == 1 and len(srv.quality) == 1 and len(g.comments) == 1
+
+
+def test_the_quality_suite_never_posts_a_failure() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
+    for _ in range(3):
+        staging.run_once(g, srv)
+    srv.quality_job = {"status": "complete", "result": {**GOOD_REPORT, "passed": False}}
+    staging.run_once(g, srv)
+    assert g.quality[-1][0] == "success" and "health/asserts: see report" in g.quality[-1][1]
+    assert "some don't" in g.comments[0][1] and g.statuses[-1][0] == "success"
+    # A suite that crashed: still a success saying so, never red.
+    state = json.loads(staging.STATE.read_text())
+    state.pop("quality_done")
+    staging.save_state(state)
+    srv.quality_job = {"status": "error", "error": "boom"}
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    assert g.quality[-1] == ("success", "non-blocking: the suite didn't complete (see the report)")
+    assert "Didn't complete (error: boom)" in g.comments[0][1]
+
+
+def test_the_quality_suite_yields_to_a_ready_pr_head() -> None:
+    import time
+
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    now = time.time()
+    pr = {"runner": "pr", "sha": "p" * 40, "since": now + 999, "ready": True, "reported_at": now}
+    srv.mode["waiting"] = [pr]  # newer than the staging head, and still it goes first
+    staging.run_once(g, srv)
+    assert srv.quality == []
+    srv.mode["waiting"] = []
+    staging.run_once(g, srv)
+    assert len(srv.quality) == 1
 
 
 def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     """Staging moved on while the suite ran: the tested commit gets its status, the new head
     its own run; nothing untested reaches the PR to master (#351 review)."""
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     staging.run_once(g, srv)
     newer = "n" * 40
     real = g.__call__
@@ -281,27 +417,96 @@ def test_a_pass_on_a_superseded_head_is_reported_but_not_promoted() -> None:
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
 
 
-def test_a_failed_report_fails_the_status_and_promotes_nothing() -> None:
-    bad = {**GOOD_REPORT, "passed": False}
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": bad})
+def test_a_failed_check_fails_the_status_and_promotes_nothing() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_BAD})
     staging.run_once(g, srv)
-    staging.run_once(g, srv)
-    assert g.statuses[-1][0] == "failure" and "FAILED" in g.comments[0][1]
+    state = staging.run_once(g, srv)
+    assert g.statuses[-1] == ("failure", "hardware checks FAILED at lights: walk (64 dead)")
+    assert "**FAILED** at lights: walk" in g.comments[0][1]
+    assert staging.QUALITY_NOT_RUN in g.comments[0][1]
     assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
+    staging.run_once(g, srv)
+    assert state["reported"] == SHA and srv.quality == []  # no quality suite on a failure
 
 
 @pytest.mark.parametrize(
     "job",
     [
+        {"status": "complete", "result": HW_RIG},
         {"status": "error", "error": "Traceback: boom"},
+        {"status": "cancelled", "error": None},  # cancelled by hand, not by dev mode
         urllib.error.HTTPError("u", 404, "not found", None, None),  # type: ignore[arg-type]
     ],
 )
-def test_a_crashed_or_lost_suite_is_a_failure(job: Any) -> None:
+def test_a_rig_error_or_a_lost_job_stays_pending_and_is_retried(job: Any) -> None:
     g, srv = GitHub(), Server([HAT], job)
     staging.run_once(g, srv)
     state = staging.run_once(g, srv)
-    assert g.statuses[-1][0] == "failure" and state["reported"] == SHA
+    assert g.statuses[-1][0] == "pending" and g.statuses[-1][1].startswith("rig error: ")
+    assert g.statuses[-1][1].endswith(", retrying")
+    assert "reported" not in state and state["rig"]["n"] == 1
+    assert not any(st == "failure" for st, _ in g.statuses)
+    assert "RIG ERROR, no verdict" in g.comments[0][1]
+    # Backing off: the next pass first (passes are 2 minutes apart), then longer.
+    staging.run_once(g, srv)
+    assert len(srv.submitted) == 1
+    state["rig"]["retry_at"] = 0.0
+    staging.save_state(state)
+    srv.job = {"status": "running", "progressMessage": "lights"}
+    assert staging.run_once(g, srv)["running"]["sha"] == SHA and len(srv.submitted) == 2
+
+
+def test_rig_backoff_doubles_to_its_cap() -> None:
+    assert staging.rig_backoff(1) == 120 and staging.rig_backoff(2) == 240
+    assert staging.rig_backoff(20) == staging.RIG_BACKOFF_MAX_S
+
+
+# -- the merged commit confirmed from its PR head (no red commit in the history) ---------------
+
+
+def pr_status(state: str, description: str) -> dict[str, Any]:
+    return {"context": staging.PR_CONTEXT, "state": state, "description": description,
+            "target_url": "https://x/pull/12#c1"}  # fmt: skip
+
+
+def test_a_head_with_its_pr_heads_tree_is_confirmed_without_a_run() -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    g.trees[PR_HEAD] = g.trees[SHA]
+    g.fingerprints[PR_HEAD] = [pr_status("success", "hardware checks passed: upload, lights")]
+    state = staging.run_once(g, srv)
+    assert srv.submitted == []
+    assert g.statuses == [
+        ("success", f"hardware checks passed before merge as PR #12 head {PR_HEAD[:8]} (same tree)")
+    ]
+    assert state["reported"] == state["hw_passed"] == SHA
+    assert "**PASSED before merge** as PR #12" in g.comments[0][1]
+    assert any(c[:2] == ("pr", "merge") for c in g.calls)
+    staging.run_once(g, srv)  # then the quality suite
+    assert len(srv.quality) == 1
+
+
+@pytest.mark.parametrize(
+    ("same_tree", "statuses"),
+    [
+        (False, [pr_status("success", "hardware checks passed: upload")]),  # another tree
+        (True, []),  # never checked
+        (True, [pr_status("success", "superseded by abcdef12 before its hardware test")]),
+        (True, [pr_status("success", "no firmware change: hardware test skipped")]),
+        (True, [pr_status("success", "fork PR: not hardware-tested before merge")]),
+        (True, [pr_status("failure", "hardware checks FAILED at lights")]),
+        # Only the newest counts: a pass behind a newer pending is no pass.
+        (True, [pr_status("pending", "rig error: x, retrying"), pr_status("success", "hardware checks passed")]),
+    ],
+)  # fmt: skip
+def test_anything_short_of_a_passing_pr_head_with_the_same_tree_is_checked_here(
+    same_tree: bool, statuses: list[dict[str, Any]]
+) -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    if same_tree:
+        g.trees[PR_HEAD] = g.trees[SHA]
+    g.fingerprints[PR_HEAD] = statuses
+    staging.run_once(g, srv)
+    assert len(srv.submitted) == 1
 
 
 def test_an_unbuilt_head_waits_and_a_failed_build_fails() -> None:
@@ -350,7 +555,7 @@ class Refusing(Server):
 
 
 @pytest.mark.parametrize("code", [400, 403, 422])
-def test_a_refused_suite_is_a_failure_not_a_retry(code: int) -> None:
+def test_refused_hardware_checks_are_a_failure_not_a_retry(code: int) -> None:
     g = GitHub()
     state = staging.run_once(g, Refusing(code))
     assert state["reported"] == SHA and g.statuses[-1][0] == "failure"
@@ -369,20 +574,22 @@ def test_alert_lines_are_in_the_report() -> None:
     bad["final"] = {
         "C04C56F9": {"alerts": {"pass": False, "lines": ["[FALLBACK] x"]}, "timing": None}
     }
-    text = staging.render(bad)
+    text = "\n".join(staging.quality_lines(bad))
     assert "| alerts | ❌ |" in text and "C04C56F9 [FALLBACK] x" in text
 
 
 def test_a_deploy_failure_renders_its_step() -> None:
-    text = staging.render(
-        {
-            "sha": SHA,
-            "passed": False,
-            "devices": ["C04C56F9"],
-            "deploy": {"pass": False, "failed_step": "targets", "message": "not test devices"},
-        }
+    text = "\n".join(
+        staging.quality_lines(
+            {
+                "sha": SHA,
+                "passed": False,
+                "devices": ["C04C56F9"],
+                "deploy": {"pass": False, "failed_step": "targets", "message": "not test devices"},
+            }
+        )
     )
-    assert "FAILED" in text and "`targets`" in text and "not test devices" in text
+    assert "`targets`" in text and "not test devices" in text
 
 
 # -- no firmware change, no hardware test (the owner, 2026-11-05) -----------------------------
@@ -541,7 +748,7 @@ def test_a_skipped_head_whose_promotion_fails_is_retried() -> None:
 
 
 def test_the_report_and_the_promotion_list_each_prs_review_verdict() -> None:
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     staging.run_once(g, srv)
     staging.run_once(g, srv)
     report = g.comments[0][1]
@@ -552,7 +759,7 @@ def test_the_report_and_the_promotion_list_each_prs_review_verdict() -> None:
 
 
 def test_a_flagged_review_is_shown_but_does_not_block_the_promotion() -> None:
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     g.pr_comments = [
         verdict("o" * 40, "No issues found."),  # an older commit's clean review doesn't count
         verdict(PR_HEAD, "Found 1 issue: off-by-one in the picker."),
@@ -565,7 +772,7 @@ def test_a_flagged_review_is_shown_but_does_not_block_the_promotion() -> None:
 
 
 def test_a_missing_verdict_is_shown_as_such() -> None:
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     g.pr_comments = []
     staging.run_once(g, srv)
     staging.run_once(g, srv)
@@ -574,7 +781,7 @@ def test_a_missing_verdict_is_shown_as_such() -> None:
 
 def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
     # gh's 120 s timeout raises TimeoutExpired, not RuntimeError: still only a note.
-    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": GOOD_REPORT})
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_GOOD})
     g.fail_reviews = True
     staging.run_once(g, srv)
     state = staging.run_once(g, srv)
@@ -583,10 +790,21 @@ def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
 
 
 def test_the_report_links_its_archived_copy_through_the_box() -> None:
-    text = staging.render({**GOOD_REPORT, "artifact": "inputs/abc/s.json"})
+    text = staging._archive_line({**GOOD_REPORT, "artifact": "inputs/abc/s.json"})
     assert "`inputs/abc/s.json`" in text
     assert f"{TESTBOX}/api/spark/artifacts/inputs/abc/s.json" in text
-    assert "artifact store" not in staging.render(GOOD_REPORT)
+    assert staging._archive_line(GOOD_REPORT) == ""
+
+
+def test_the_scorers_lag_evidence_is_counted_in_the_report() -> None:
+    rep = json.loads(json.dumps(GOOD_REPORT))
+    rep["validation"]["results"] = [
+        {"track": "a", "scores": {CHIP: {"drums": {"lagSource": "ESTIMATED", "lagAmbiguous": True}}}},
+        {"track": "b", "scores": {CHIP: {"drums": {"lagSource": "FALLBACK", "lagAmbiguous": False}}}},
+    ]  # fmt: skip
+    assert "Scorer lag: 1 ESTIMATED, 1 FALLBACK; 1 ambiguous" in "\n".join(
+        staging.quality_lines(rep)
+    )
 
 
 # -- the box's dev mode (docs/DEV_LOOP.md) -----------------------------------------------------
@@ -627,7 +845,8 @@ def test_back_in_queue_mode_the_held_head_is_submitted_and_the_queue_cleared() -
     srv.mode = {"mode": "queue", "since": 0.0, "waiting": [], "preempted": []}
     state = staging.run_once(g, srv)
     assert len(srv.submitted) == 1 and state["running"]["sha"] == SHA and "queued" not in state
-    assert srv.queue[-1] == [] and g.statuses[-1] == ("pending", "testing on 1 test device(s)")
+    assert srv.queue[-1] == []
+    assert g.statuses[-1] == ("pending", "hardware checks on 1 test device(s)")
 
 
 def test_it_takes_turns_with_the_pr_queue_oldest_ready_item_first() -> None:
@@ -695,13 +914,6 @@ def test_a_suite_preempted_by_dev_mode_is_queued_again_not_failed() -> None:
     assert len(srv.submitted) == 2 and state["running"]["sha"] == SHA
 
 
-def test_a_cancel_that_was_not_a_preempt_is_still_a_failure() -> None:
-    g, srv = GitHub(), Server([HAT], {"status": "cancelled", "error": None})
-    staging.run_once(g, srv)
-    state = staging.run_once(g, srv)
-    assert state["reported"] == SHA and g.statuses[-1][0] == "failure"
-
-
 def test_a_server_without_modes_is_queue_mode() -> None:
     g, srv = GitHub(), Server([HAT], {})
     srv.mode = urllib.error.HTTPError("u", 404, "not found", None, None)  # type: ignore[assignment,arg-type]
@@ -745,3 +957,30 @@ def test_a_missing_box_url_stops_the_runner_naming_file_and_key(
     assert staging.main([]) == 2
     out = capsys.readouterr().out
     assert "BLINKY_TESTBOX_URL" in out and str(hosts_env) in out
+
+
+# -- retest and dry run ------------------------------------------------------------------------
+
+
+def test_retest_forgets_the_heads_verdict() -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "complete", "result": HW_BAD})
+    staging.run_once(g, srv)
+    staging.run_once(g, srv)
+    assert staging.load_state()["reported"] == SHA
+    assert "forgotten" in staging.retest(g)
+    assert "reported" not in staging.load_state()
+    srv.job = {"status": "running", "progressMessage": "upload"}
+    assert staging.run_once(g, srv)["running"]["sha"] == SHA and len(srv.submitted) == 2
+    assert "running now" in staging.retest(g)
+
+
+def test_a_dry_run_posts_and_submits_nothing(capsys: pytest.CaptureFixture[str]) -> None:
+    g, srv = GitHub(), Server([HAT], {})
+    g.trees[PR_HEAD] = g.trees[SHA]
+    g.fingerprints[PR_HEAD] = [pr_status("success", "hardware checks passed: upload")]
+    state = staging._pass(staging.dry_gh(g), staging.dry_server(srv))
+    assert g.statuses == [] and g.comments == [] and srv.submitted == []
+    assert not any(c[:2] in (("pr", "create"), ("pr", "merge")) for c in g.calls)
+    out = capsys.readouterr().out
+    assert "DRY RUN would: gh api -X POST" in out and "same tree" in out
+    assert state["reported"] == SHA  # what the pass would have recorded

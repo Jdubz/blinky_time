@@ -660,7 +660,7 @@ async def test_the_info_check_waits_out_a_metrics_window(monkeypatch: pytest.Mon
 # -- the PR hardware queue (docs/DEV_LOOP.md, phase 2) ----------------------------------------
 
 
-async def test_preempt_queues_a_pr_smoke_test_under_the_pr_runner(
+async def test_preempt_queues_a_pr_head_under_the_pr_runner(
     suites: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dbos import DBOS
@@ -696,55 +696,44 @@ async def test_the_queue_route_keeps_the_ready_flag(box: tuple[AsyncClient, Fake
     assert w["ready"] is True and w["what"] == "PR #5" and w["runner"] == "pr"
 
 
-@pytest.fixture
-def tracks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    from blinky_server.testing import pr_smoke
-
-    monkeypatch.setattr(routes_dev, "default_track_dir", lambda: tmp_path)
-    names = [*pr_smoke.DEFAULT_TRACKS, "edm-other"]
-    monkeypatch.setattr(routes_testing, "discover_tracks", lambda d: [{"name": n} for n in names])
-    return tmp_path
-
-
-async def test_a_pr_smoke_test_in_queue_mode(
+async def test_hardware_checks_in_queue_mode(
     box: tuple[AsyncClient, FakeFleet],
     service: FakeBuildService,
     submitted: list[Any],
-    tracks: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from blinky_server.testing import pr_smoke
-
     c, fleet = box
     service.add("b1", b"")
-    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"], "pr": 5}
-    r = await c.post("/api/test/pr-smoke", json=body)
+    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"], "pr": 5, "source": "dev_build"}
+    r = await c.post("/api/test/hardware-checks", json=body)
     assert r.status_code == 200, r.text
     name, req = submitted[0]
-    assert name == "pr_smoke" and req["tracks"] == list(pr_smoke.DEFAULT_TRACKS)
-    assert req["track_dir"] == str(tracks) and req["pr"] == 5 and "limits" not in req
+    assert name == "hardware_checks" and req["runner"] == "pr" and req["pr"] == 5
+    assert req["source"] == {"kind": "dev_build", "sha": SHA, "build_id": "b1"}
+    # The staging runner's: staging's artifact, no build service involved.
     r = await c.post(
-        "/api/test/pr-smoke", json={**body, "tracks": ["edm-other"], "health_minutes": 1}
+        "/api/test/hardware-checks", json={"sha": SHA, "device_ids": ["grid"], "source": "staging"}
     )
-    assert r.status_code == 200 and submitted[1][1]["limits"] == {"stable_minutes": 1.0}
+    assert r.status_code == 200, r.text
+    assert submitted[1][1]["source"] == {"kind": "staging", "sha": SHA}
+    assert submitted[1][1]["runner"] == "staging"
     service.add("b2", b"", sha="ef" * 20)
     service.add("b3", b"", state="building")
     bad = [
-        ({"tracks": ["missing"]}, 400),
         ({"build_id": "b2"}, 400),  # a build of another commit
         ({"build_id": "b3"}, 409),  # not built yet
         ({"build_id": "nope"}, 410),  # the service doesn't know it (pruned): rebuild
         ({"device_ids": ["nope"]}, 400),
-        ({"track_dir": "/etc"}, 400),
         ({"build_id": "../x"}, 422),
-        ({"health_minutes": 0}, 422),
+        ({"build_id": None}, 422),  # a dev build names its build
+        ({"source": "release"}, 422),
     ]
     for over, code in bad:
-        r = await c.post("/api/test/pr-smoke", json={**body, **over})
+        r = await c.post("/api/test/hardware-checks", json={**body, **over})
         assert r.status_code == code, (over, r.text)
     # The 60 s rule between resets, as a dev deploy.
     fleet.devices["grid"].last_info = {"millis": 20_000}  # type: ignore[attr-defined]
-    r = await c.post("/api/test/pr-smoke", json=body)
+    r = await c.post("/api/test/hardware-checks", json=body)
     assert r.status_code == 409 and "60 s between resets" in r.json()["detail"]
     assert "Retry-After" in r.headers
     fleet.devices["grid"].last_info = {"millis": 3_600_000}  # type: ignore[attr-defined]
@@ -754,34 +743,74 @@ async def test_a_pr_smoke_test_in_queue_mode(
         return True
 
     monkeypatch.setattr(routes_firmware, "_deploy_active", active)
-    r = await c.post("/api/test/pr-smoke", json=body)
+    r = await c.post("/api/test/hardware-checks", json=body)
     assert r.status_code == 409 and "already running" in r.json()["detail"]
     assert len(submitted) == 2
 
 
-async def test_a_pr_smoke_test_is_refused_in_dev_mode_and_off_the_box(
+async def test_hardware_checks_are_refused_in_dev_mode_and_off_the_box(
     box: tuple[AsyncClient, FakeFleet],
     service: FakeBuildService,
     submitted: list[Any],
-    tracks: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     c, fleet = box
     service.add("b1", b"")
-    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"]}
+    body = {"sha": SHA, "build_id": "b1", "device_ids": ["grid"], "source": "dev_build"}
     await c.put("/api/box/mode", json={"mode": "dev"})
-    r = await c.post("/api/test/pr-smoke", json=body)
+    r = await c.post("/api/test/hardware-checks", json=body)
     assert r.status_code == 409 and "dev mode" in r.json()["detail"]
     await c.put("/api/box/mode", json={"mode": "queue"})
     monkeypatch.setattr(build_service, "ENV_FILE", tmp_path / "none.env")
-    assert (await c.post("/api/test/pr-smoke", json=body)).status_code == 503
+    assert (await c.post("/api/test/hardware-checks", json=body)).status_code == 503
     fleet.staging_enabled = False
-    assert (await c.post("/api/test/pr-smoke", json=body)).status_code == 403
+    assert (await c.post("/api/test/hardware-checks", json=body)).status_code == 403
     assert submitted == []
 
 
-async def test_only_a_pr_smoke_job_is_cancelled_by_its_route(
+async def test_dev_hardware_checks_run_the_chip_as_it_is_in_dev_mode_only(
+    box: tuple[AsyncClient, FakeFleet], submitted: list[Any]
+) -> None:
+    c, _ = box
+    body = {"device_ids": ["grid"], "expected_version": VERSION, "lights_brightness": 0}
+    assert (await c.post("/api/dev/hardware-checks", json=body)).status_code == 409  # queue mode
+    await c.put("/api/box/mode", json={"mode": "dev"})
+    r = await c.post("/api/dev/hardware-checks", json={**body, "phases": ["upload", "lights"]})
+    assert r.status_code == 200, r.text
+    name, req = submitted[0]
+    assert name == "hardware_checks" and req["source"] == {"kind": "none"}
+    assert req["runner"] == "dev" and req["phases"] == ["upload", "lights"]
+    assert req["expected_version"] == VERSION and req["lights_brightness"] == 0
+    for over, code in [
+        ({"regions": "/etc/passwd"}, 400),
+        ({"lights_brightness": 256}, 422),
+        ({"phases": ["quality"]}, 422),
+        ({"device_ids": ["nope"]}, 400),
+    ]:
+        r = await c.post("/api/dev/hardware-checks", json={**body, **over})
+        assert r.status_code == code, (over, r.text)
+    assert len(submitted) == 1
+
+
+async def test_preempting_hardware_checks_queues_them_under_their_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A staging runner's hardware checks go back in the staging queue, a PR head's in the
+    PR queue: the runner is in the request."""
+    from types import SimpleNamespace
+
+    from dbos import DBOS
+
+    async def listed(**k: Any) -> list[Any]:
+        req = {"sha": SHA, "runner": "staging"}
+        return [SimpleNamespace(name="test.hardware-checks", input={"args": [req]})]
+
+    monkeypatch.setattr(DBOS, "list_workflows_async", listed)
+    assert await box_mode._suite_of("hw-1") == (SHA, "staging")
+
+
+async def test_only_a_hardware_checks_job_is_cancelled_by_its_route(
     box: tuple[AsyncClient, FakeFleet], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dbos import DBOS
@@ -790,8 +819,8 @@ async def test_only_a_pr_smoke_job_is_cancelled_by_its_route(
 
     c, _ = box
     got: dict[str, dict[str, Any]] = {
-        "smoke-1": {"kind": "pr-smoke", "status": "running"},
-        "smoke-2": {"kind": "pr-smoke", "status": "complete"},
+        "hw-1": {"kind": "hardware-checks", "status": "running"},
+        "hw-2": {"kind": "hardware-checks", "status": "complete"},
         "suite-1": {"kind": "staging", "status": "running"},
     }
     cancelled: list[str] = []
@@ -805,30 +834,10 @@ async def test_only_a_pr_smoke_job_is_cancelled_by_its_route(
     monkeypatch.setattr(jobs, "get", get)
     monkeypatch.setattr(DBOS, "cancel_workflow_async", cancel)
     monkeypatch.setattr(routes_testing, "_require_store", lambda: None)
-    r = await c.delete("/api/test/pr-smoke/smoke-1")
+    r = await c.delete("/api/test/hardware-checks/hw-1")
     assert r.status_code == 200 and r.json()["status"] == "cancelled"
-    r = await c.delete("/api/test/pr-smoke/smoke-2")
+    r = await c.delete("/api/test/hardware-checks/hw-2")
     assert r.status_code == 200 and r.json()["status"] == "complete"
-    assert (await c.delete("/api/test/pr-smoke/suite-1")).status_code == 404
-    assert (await c.delete("/api/test/pr-smoke/none")).status_code == 404
-    assert cancelled == ["smoke-1"]
-
-
-def test_the_pr_smoke_verdict_is_deploy_health_and_asserts_only() -> None:
-    from blinky_server.testing.pr_smoke import verdict
-
-    report: dict[str, Any] = {
-        "deploy": {"pass": True},
-        "health": {"g": {"fps": {"pass": True}, "stability": {"pass": True}}},
-        "validation": {"results": [{"track": "t", "failed": True}]},  # a score: never gates
-        "final": {"g": {"no_reboot": {"pass": True}, "alerts": {"pass": True}}},
-    }
-    assert verdict(report) is True
-    for path in (("deploy",), ("health", "g", "fps"), ("final", "g", "alerts")):
-        bad = json.loads(json.dumps(report))
-        node = bad
-        for k in path:
-            node = node[k]
-        node["pass"] = False
-        assert verdict(bad) is False, path
-    assert verdict({"deploy": {"pass": True}}) is False  # nothing measured is no pass
+    assert (await c.delete("/api/test/hardware-checks/suite-1")).status_code == 404
+    assert (await c.delete("/api/test/hardware-checks/none")).status_code == 404
+    assert cancelled == ["hw-1"]

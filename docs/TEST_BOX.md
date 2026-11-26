@@ -1,6 +1,6 @@
 # Test box
 
-The test box is a Raspberry Pi 5 with one test chip, a speaker and a camera. It runs blinky-server from merged master, hardware-tests blinky-firmware's `staging` head and the firmware PRs to it, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
+The test box is a Raspberry Pi 5 with one test chip, a speaker and a camera. It runs blinky-server from merged master, runs the blocking hardware checks on every firmware PR to blinky-firmware's `staging` and confirms them for the staging head, scores the staging head with the non-blocking quality suite, and recovers its chip without anyone touching it. It is a test box, not a strict CI box (owner, 2026-11-23): every chip on it is a test chip (#382).
 
 The box routes data and captures tests. Heavy work (training, stem separation, label generation, long analysis) goes to CI or to the DGX Spark through its job API, not to the Pi.
 
@@ -65,7 +65,8 @@ Per run type:
 
 | Run | Lit | Needs light | On firmware without `leds` |
 |---|---|---|---|
-| Staging suite (health, validation, music and beat pace, final state) | from the deploy's end to the job's end | no: it reads the chip over serial; lit and dark frames cost the same (the override scales pixel values; generators, renderer and LED DMA run either way) | an ERROR in the server log; the run goes on |
+| Hardware checks (`test.hardware-checks`) | from the deploy's end (or the job's start, in dev mode) to the job's end | the lights check does: it sets `leds` itself and judges that it applies | the lights check answers no |
+| Staging quality suite (health, validation, music and beat pace, final state) | from the deploy's end to the job's end | no: it reads the chip over serial; lit and dark frames cost the same (the override scales pixel values; generators, renderer and LED DMA run either way) | an ERROR in the server log; the run goes on |
 | Validation, parameter sweep, threshold tuning | for the test session | no | an ERROR in the log; the run goes on |
 | Camera review (`camera_review.py`: validation with `needs_light`) | for the test session | yes | the job fails (so does a planned chip that isn't connected when the session starts: it would join dark) |
 | Camera calibration (`camera_calibrate.py`, `--brightness`, default 40) | for the script | yes | the script refuses |
@@ -128,57 +129,137 @@ BLINKY_BUILD_TOKEN=<the token from 1Password>
 
 The box checks every package with `blinky-server/hosttools/firmware_release.py verify-dev-package --sha SHA --dir DIR`, the same checks `download-staging` runs on a staging artifact. Unpushed work goes as a bundle against a pushed branch, from a commit, never a dirty tree: `dev.py` (see "Dev loop") makes it.
 
+## Hardware checks
+
+The box's hardware test has two tiers (owner, 2026-11-25):
+
+1. **The hardware checks: simple yes/no checks that block.** Not quality checks. A PR staging → master must pass them, and a red commit must not reach the history, so they run on each PR head before it merges (`Hardware test (PR)`) and the staging runner only confirms them for the merged commit (`Hardware test (staging)`).
+2. **The quality suite: scores, never blocking.** The staging suite (every edm/ track, music and beat pace) on the staging head after its checks pass.
+
+The checks are one durable job, `test.hardware-checks` (`blinky-server/blinky_server/testing/hardware_checks.py`): the audio lock throughout, the chips lit only while it runs and dark after. Each check has a name, a yes/no and its evidence. **The phases run in order and the job stops at the first that fails**: a later phase depends on the earlier ones (no lights, and the camera can't judge anything after).
+
+| Phase | Check | Yes when | Evidence |
+|---|---|---|---|
+| upload | flash | the build went through the deploy pipeline (`run_deploy`: verified package, single flash path, settings restore, post-deploy version assertion) | the version flashed |
+| | version | `json info` reports the build's version | the version |
+| | configured | configured as its board (device type), not safe mode | the device id |
+| | stable | up 75 s (past the firmware's markStable at 60 s), no reboot since the flash | uptime, how long it was watched, `resetReason` |
+| | info | `json info` has every field (`version`, `millis`, the audio counters, `fps`, `maxFrameMs`), `fps` ≥ 30, `mallocIsr` 0, its platform and LED count are the board's, `sn` is the chip's | fps, maxFrameMs, heap |
+| lights | leds | `leds 40` applies (the runtime override, never saved) | the `leds` reply |
+| | walk | the firmware's `testpattern` (blinky-firmware#53) lights each pixel alone while the camera watches through the saved region map (`~/.local/share/blinky-camera/regions-grid-1000us.npz`): every pixel lights exactly its own region, every region is seen, none lights for two pixels | pixels and regions seen; the dead, ambiguous, shared and unseen ones |
+| audio | mic | the mic's raw level (`a.raw`) with the box speaker playing 3 s of noise is at least 4× its level in the 3 s of silence just before (medians), and the PDM is alive throughout | the two levels |
+| | samples | no `audioOverruns` or `audioSamplesLost` growth while listening | the growth |
+| response | one per feature | the feature responds to the stimulus (the table below) | the numbers behind it |
+| interfaces | serial | 5 `json info` round trips, each answered | median round trip |
+| | stream | `stream on` sends lines within 2 s; `stream off` stops them within 1 s | lines on, lines after off |
+| | settings | `get` → `set` → `get` → set back → `get` of a runtime setting (`hueshift`); never saved | the values read back |
+| | ble stack | the chip's `ble` report: advertising, its fleet scanner active (nRF52840) | what it reports |
+| | ble scan | a host BLE scan (scan only: the server runs `--no-ble`, nothing connects or pairs) sees the chip's address | not applicable on this box: it has no Bluetooth adapter (`setup.sh`: `dtoverlay=disable-bt`) |
+| | no reboot | no reset across the checks | uptime |
+| | alerts | no firmware `[ASSERT]`/`[FALLBACK]` line since the flash | the lines |
+
+Which checks a chip gets is its board's entry (`BOARDS` in `hardware_checks.py`): `testbox_grid_v1` (nRF52840, 64 LEDs, the grid's region map, the BLE stack report). The ESP32-S3's entry comes with its device config and flash path (P3). The firmware's IMU is a stub (`IMU_ENABLED` off), so there is no IMU check; the mic's power shows as the PDM's `alive` in the audio check.
+
+**The camera here is a gate, once.** The owner made "do the LEDs work" a blocking yes/no, and only the camera can see it. The camera's timing and quality reviews stay secondary and never gate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`). The lights check drives the chip over its serial connection and the camera through a worker on the system Python (`scripts/testbox/camera/camera_lights.py`, one JSON line each way: the server's venv has no picamera2).
+
+### The response stimulus and its rules
+
+A deterministic synthetic WAV (`testing/stimulus.py`, written once per content hash under the server's data dir; the standard library only, the server's venv has no numpy), 60 s at 22.05 kHz, sections separated by 3 s of silence:
+
+| Section | Time | Content |
+|---|---|---|
+| silence | 0-2 s | |
+| kick | 2-10 s | 16 kicks at 120 BPM: a sine swept 180 → 55 Hz, decay 180 ms |
+| snare | 13-21 s | 16 snares at 120 BPM: noise band-passed at 3 kHz plus a 190 Hz body, decay 70 ms |
+| hat | 24-30 s | 24 hats, 8ths at 120 BPM: noise high-passed at 6 kHz, decay 20 ms |
+| groove | 33-57 s | 120 BPM: a kick every beat, snares on 2 and 4, hats on 8ths: long enough for the tempo and the PLP phase to lock |
+
+The stream is captured (debug + fast, and the detection events) on the host clock through the firmware clock (`_sync_clock`). The rig's lag (ffplay's start to the sound at the mic, 0.24-0.53 s) is found as the scorer finds it: the lag where the most kick and snare hits have a detection within 40 ms (the middle of the plateau). Every rule then compares a feature **at the hits** (−20 to +120 ms) with **between the hits** (half a period later), never with silence: the box's chip detects about 3.5 onsets/s in the room's silence, so silence is no baseline. The firmware has no per-drum detector; the kick, snare and hat bands show in the spectral shape.
+
+| Feature | Stream field | Rule (loose: is it alive and wired, not accuracy) | Measured 2026-11-25 (b211-dev), at hits vs between |
+|---|---|---|---|
+| onsets | TRANSIENT events | a detection at ≥ 60% of kick hits and of snare hits, and 20 points more at the hits than between them, pooled over both (a kick's tail still sounds half a beat on, and the chip detects in it: 56% and 94% between kicks in two runs) | kick 94% vs 56%, snare 100% vs 12%; pooled 97% vs 34% |
+| activation | `m.nn` | ×1.3 at kick and snare hits | 0.15 vs 0.09, 0.16 vs 0.05 |
+| pulse | `m.p` | +0.1 at kick and snare hits | 0.47 vs 0.31, 0.54 vs 0.15 |
+| level | `a.l` | +0.1 at kick and snare hits | 0.68 vs 0.02, 0.43 vs 0.01 |
+| energy | `m.e` | +0.05 at kick and snare hits | 0.58 vs 0.30, 0.49 vs 0.30 |
+| flux | `m.rflux` | ×3 at kick and snare hits | 0.71 vs 0.02, 0.17 vs 0.002 |
+| hfc | `m.hfc` | ×3 at snare and hat hits | 125 vs 0.09, 2.6 vs 0.04 |
+| centroid | `m.cent` | at snares and at hats ≥ 2× at kicks | kicks 5, snares 31, hats 45 |
+| rolloff | `m.roll` | at hats ≥ 2× at kicks, +1 | kicks 1.3, hats 37 |
+| tempo | `m.bpm` | median over the groove's last 12 s within 6% of 120 BPM, or of 60 or 240 | 119.9 |
+| period | `m.per` | the ACF period (62.5 Hz frames) within 8% of 120 BPM, or of 60 or 240 | 31 frames (121 BPM) |
+| rhythm | `m.str`, `m.a` | strength ≥ 0.5 and active half the groove's last 12 s | 0.89, 100% |
+| periodicity | `m.conf` | ≥ 0.5 over the groove's last 12 s | 0.89 |
+| phase | `m.ph` | at the groove's late kicks the PLP phase sits at one value (circular concentration ≥ 0.6), and it wraps once per beat of the reported tempo (±25%) | 1.00; 2.00 wraps/s for 2.00 beats/s |
+| beats | `m.q` | beat events at the reported tempo's rate (±25%) | 24 in 12 s |
+| plp pulse | `m.pp` | +0.05 at the groove's late kicks | 0.26 vs 0.002 |
+| density | `m.od` | within 0.5-2× the groove's detection rate | 4.2/s for 4.1/s |
+| render | `v.act` | the rendered frame changes ×1.1 more at kick and snare hits (the LEDs follow) | 0.067 vs 0.047 |
+
+The capture is kept (`hardware-checks/<job>/response.json` in the server's data dir) for a look at a failure.
+
+### A rig error is not a firmware failure
+
+The camera unavailable, the region map missing or not fitting (the frame brightens with every LED on but the regions don't), the speaker or ffplay failing, the build service or a package download failing (anything before the flash), a flash that never took (the chip still on its old version), the job itself crashing: the job ends with `rig_error` set and no verdict. A preflight checks the camera and the speaker before anything is flashed. The runners keep the commit `pending` "rig error: …, retrying" (never red) and try again: the next pass first, then backing off, doubling up to 30 min (`staging.rig_backoff`), so a broken rig isn't flashed every pass. A chip that stops answering or disconnects in any phase is judged a firmware failure, a "chip answers" no for that phase (a crash is the likely cause), never a rig error: the runners would otherwise retry a crashing build for good. `pr_queue.py --retest PR` and `staging.py --retest` re-queue a head, for a flake that ended in a verdict.
+
+### Reports
+
+One comment per head, updated in place: the hardware checks first (the verdict, each phase with its time, the table), then the quality section labelled non-blocking. On a PR head the quality section says the staging suite scores it after merge; on a staging head it fills in when the quality suite ends.
+
 ## Staging runner
 
-`blinky-staging.timer` runs `scripts/testbox/staging.py` every 2 minutes from the deploy worktree. It hardware-tests the newest commit on blinky-firmware's `staging` branch: it submits the staging suite (`POST /api/test/staging`, `blinky_server/testing/staging.py`) for every connected, configured chip on the box, then posts the "Hardware test (staging)" commit status and the report on the PR. On a pass it opens the staging → master PR and turns on its auto-merge. A commit whose firmware image is unchanged (same fingerprint, no change under the firmware's paths) is skipped and promoted. State: `staging.py --status`; log: `journalctl -u blinky-staging`. The release flow around it is in blinky-firmware's [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).
+`blinky-staging.timer` runs `scripts/testbox/staging.py` every 2 minutes from the deploy worktree. For the newest commit on blinky-firmware's `staging`:
 
-The suite deploys the staging build through the deploy pipeline, checks health (fps floor, longest frame, no reboot, overrun growth: release_gate's checks), plays every edm/ track once for validation and the music/beat-pace checks, then checks the version is unchanged, no reboot, and no firmware `[ASSERT]`/`[FALLBACK]`. The validation numbers are reported, not gated, because the box's numbers aren't trusted as a floor yet (see "Trusting the box's numbers" below).
+- **No change under the firmware's paths, or the same firmware image** (fingerprint) as master's: `success` "hardware test skipped", promoted.
+- **Its tree is a PR head's that passed the hardware checks** (the PR that merged it, squash-merged and up to date, so the trees are identical): `Hardware test (staging)` `success` "hardware checks passed before merge as PR #N head <sha8> (same tree)", without a run.
+- **Otherwise** (a fork PR's merge, a head nobody checked): the hardware checks on it (`POST /api/test/hardware-checks`, source `staging`). A failure posts `failure`, a rig error stays `pending`.
+- **On a pass** (either way) it opens the staging → master PR and turns on its auto-merge, pinned to that commit. `Hardware test (staging)` is what blinky-firmware's master ruleset requires: every staging commit gets it, and with the checks run before merge nothing red lands from a post-merge run.
+- **Then the quality suite** (`POST /api/test/staging`, `blinky_server/testing/staging.py`), non-blocking: it deploys the staging build, checks health (fps floor, longest frame, no reboot, overrun growth: release_gate's checks), plays every edm/ track once for validation and the music/beat-pace checks, then checks the version, no reboot and no firmware `[ASSERT]`/`[FALLBACK]`. It reports in the head's comment and in the score record (`staging-scores.jsonl` in the server's data dir: per commit, the version, the corpus pin, the setup, and each track's drum scores with the scorer's `lagSource`/`lagAmbiguous`), and posts `Quality suite (staging)`, **always `success`**, with a short score summary. It waits for queue mode and yields to any ready PR head (blocking checks first).
 
-blinky-firmware's `tools/deploy_local.py` and `tools/release_gate.py` (and `devices/test_devices.json`) live in blinky-firmware and run against a chip on the machine's own USB. On the box blinky-server owns the chip's port, so the staging suite is how the box tests firmware.
+`staging.py --status` prints the state, `--retest` checks the head again, `--dry-run` prints what a pass would post without posting or submitting anything. Log: `journalctl -u blinky-staging`. The release flow around it is in blinky-firmware's [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).
+
+blinky-firmware's `tools/deploy_local.py` and `tools/release_gate.py` (and `devices/test_devices.json`) live in blinky-firmware and run against a chip on the machine's own USB. On the box blinky-server owns the chip's port, so the hardware checks and the quality suite are how the box tests firmware.
 
 ## PR hardware queue
 
-`blinky-pr-queue.timer` runs `scripts/testbox/pr_queue.py` every 2 minutes from the deploy worktree, next to the staging runner and sharing its helpers. It smoke-tests each firmware PR to blinky-firmware's `staging` on the box's test chips before it merges, and posts the commit status `Hardware test (PR)` on the PR's head (design: [DEV_LOOP.md](DEV_LOOP.md), "PR hardware queue"). Each pass takes the open PRs to `staging`:
+`blinky-pr-queue.timer` runs `scripts/testbox/pr_queue.py` every 2 minutes from the deploy worktree, next to the staging runner and sharing its helpers. It runs the hardware checks on each firmware PR to blinky-firmware's `staging` before it merges, and posts the commit status `Hardware test (PR)` on the PR's head (design: [DEV_LOOP.md](DEV_LOOP.md), "PR hardware queue"). Each pass takes the open PRs to `staging`:
 
 - **Drafts** are ignored.
-- **Fork PRs** (the head repo isn't `Jdubz/blinky-firmware`) are never built or tested on the box (DEV_LOOP.md, "Trust"). They get `success`, "fork PR: not hardware-tested before merge; the staging suite tests it after merge", so a required status can't block them forever.
+- **Fork PRs** (the head repo isn't `Jdubz/blinky-firmware`) are never built or tested on the box (DEV_LOOP.md, "Trust"). They get `success`, "fork PR: not hardware-tested before merge; the staging suite tests it after merge", so a required status can't block them forever. The staging runner checks their merged commit.
 - **PRs with no change under the firmware's paths** (`tools/firmware_paths.json` at the head, against the merge-base with `staging`) get `success`, "no firmware change: hardware test skipped".
 - **Everything else is queued:** the newest head of each PR, oldest PR first. A head superseded while it waits or runs drops out (a running test is cancelled), is marked `success` "superseded by <sha8> before its hardware test", and its successor keeps its place in the queue.
 
-In queue mode each queued head is built on the build service by sha (a branch of the repo, so the service's trust check passes; a failed build posts `failure` and the log's tail in the PR comment), then the oldest PR's built head goes to the box as a smoke test (`POST /api/test/pr-smoke`, `blinky_server/testing/pr_smoke.py`), a durable job holding the audio lock:
+In queue mode each queued head is built on the build service by sha (a branch of the repo, so the service's trust check passes; a failed build posts `failure` and the log's tail in the PR comment), then the oldest PR's built head goes to the box (`POST /api/test/hardware-checks`, source `dev_build`): the hardware checks above, the deploy being the build's dev package through the same verified `run_deploy` path as `/api/dev/deploy` (test chips only, stored non-stable, the API key, never `X-Deploy-Tool`), refused until each chip has run 60 s since its last reset.
 
-1. deploy: the build's dev package through the same verified `run_deploy` path as `/api/dev/deploy` (test chips only, stored non-stable, the API key, never `X-Deploy-Tool`), refused until each chip has run 60 s since its last reset;
-2. health: 2 min of the suite's health checks;
-3. the `json info` timers;
-4. three tracks, scored: techno-machine-drum, dnb-energetic-breakbeat and garage-uk-2step by default (`tracks` in the request);
-5. asserts: the version unchanged, no reboot and no `[ASSERT]`/`[FALLBACK]` since the flash.
+The result on the head: `success` "hardware checks passed: …" if every check passes, `failure` naming the first failing check, or on a rig error `pending` "rig error: …, retrying" (never red for a rig fault: retried, backing off). One comment per tested head, headed `## Hardware test (PR) — <sha>` and updated in place. Scores are not in the blocking status any more: the staging quality suite scores the merged commit.
 
-The LEDs are lit for the run and dark afterwards. **Pass = deploy + health + asserts**; the scores are reported with the corpus pin, never gating (owner, 2026-11-25). The result is `success`/`failure` on the head and one comment per tested head, headed `## Hardware test (PR) — <sha>` so a re-run of that head updates it instead of adding another.
-
-- **Dev mode:** nothing is submitted, builds included. Each queued head gets the pending status `queued: box in dev mode since HH:MM (N waiting)`, posted only when the text changes, and the queue shows in `dev.py status`, `GET /api/box/mode` and the metrics. `dev.py mode dev --preempt` cancels a running smoke test too; its head goes back in the queue and is tested again in queue mode.
-- **Sharing the box with the staging runner:** the server runs one hardware test at a time (a busy box answers 409, and the runner tries again next pass). Each runner reports its own waiting items, ready ones marked `ready`, and yields to the other's ready item that has waited longer, while the other is still reporting (a stopped runner never blocks one that runs).
-- **Closed or merged PRs:** dropped from the queue; a running smoke test is cancelled (`DELETE /api/test/pr-smoke/{id}`); nothing more is posted.
-- State: `pr_queue.py --status` (`~/.local/share/blinky-server/pr-queue.json`); log: `journalctl -u blinky-pr-queue`. Config: `build.env` ("Build service client" above); without it nothing is built and the pass says so in the log.
-- **Not yet required.** `Hardware test (PR)` is informational until the owner makes it a required status on blinky-firmware's `staging` ruleset, once it has proven reliable.
+- **Dev mode:** nothing is submitted, builds included. Each queued head gets the pending status `queued: box in dev mode since HH:MM (N waiting)`, posted only when the text changes, and the queue shows in `dev.py status`, `GET /api/box/mode` and the metrics. `dev.py mode dev --preempt` cancels running hardware checks too; their head goes back in the queue and is checked again in queue mode.
+- **Sharing the box with the staging runner:** the server runs one hardware test at a time (a busy box answers 409, and the runner tries again next pass). Each runner reports its own waiting items, ready ones marked `ready`, and yields to the other's ready item that has waited longer, while the other is still reporting (a stopped runner never blocks one that runs). A head backing off after a rig error isn't reported ready.
+- **Closed or merged PRs:** dropped from the queue; running checks are cancelled (`DELETE /api/test/hardware-checks/{id}`); nothing more is posted.
+- `pr_queue.py --retest PR` queues the PR's head again (a flake that ended in a verdict). State: `pr_queue.py --status` (`~/.local/share/blinky-server/pr-queue.json`); log: `journalctl -u blinky-pr-queue`. Config: `build.env` ("Build service client" above); without it nothing is built and the pass says so in the log.
+- **Required or not:** the owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
 
 ## Dev loop
 
 A firmware change can be built, flashed to the box's test chip and checked in a few minutes, before any push or CI (design: [DEV_LOOP.md](DEV_LOOP.md)). From a blinky-firmware checkout on the box (or `--repo PATH`):
 
 ```
-python3 ~/blinky-deploy/scripts/testbox/dev.py try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
+python3 ~/blinky-deploy/scripts/testbox/dev.py try [REF] [--hw] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
 python3 ~/blinky-deploy/scripts/testbox/dev.py status          # mode, what waits behind it, the chips
 python3 ~/blinky-deploy/scripts/testbox/dev.py mode queue      # leave dev mode: the hardware runners carry on
 python3 ~/blinky-deploy/scripts/testbox/dev.py mode dev [--note TEXT] [--preempt]
 python3 ~/blinky-deploy/scripts/testbox/dev.py build [REF] [--wip]
 python3 ~/blinky-deploy/scripts/testbox/dev.py flash BUILD_ID
 python3 ~/blinky-deploy/scripts/testbox/dev.py test info health=2 validate=techno-machine-drum pace "cmd=set odfgate 0.3"
+python3 ~/blinky-deploy/scripts/testbox/dev.py test --hw [--phases upload,lights] [--expect VERSION] [--regions MAP] [--lights-brightness N]
 ```
 
-- **`try` is the one command.** It switches the box to dev mode if it isn't (and says so), builds the commit on the build service, flashes it, runs the info check plus the ones asked for, and prints the version, the flash result, each check and the `json info` timers. Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) pass or fail; scores are reported, never gating. `--camera` then runs `camera_review.py` on the tracks.
+- **`try` is the one command.** It switches the box to dev mode if it isn't (and says so), builds the commit on the build service, flashes it, runs the info check plus the ones asked for, and prints the version, the flash result, each check and the `json info` timers. `--hw` runs the hardware checks (above) after the flash, against the flashed version: what the PR queue will run on the head.
+- **`test --hw`** runs the hardware checks on the chip as it is (no flash; `--expect` names the version it must run). `--phases` runs a prefix of them; `--regions` names another region map (a missing one shows a rig error); `--lights-brightness 0` shows the lights check failing (runtime only, `leds config` after). Health and the end-of-run asserts (no reboot, no `[ASSERT]`/`[FALLBACK]`) pass or fail; scores are reported, never gating. `--camera` then runs `camera_review.py` on the tracks.
 - **No push needed.** An unpushed commit goes to the build service as a git bundle on its merge-base with `origin/staging` (then `origin/master`). A dirty tree is refused unless `--wip`, which builds the working tree as a throwaway commit at `refs/dev/wip` without touching your branch, index or stash.
-- **Dev mode has no expiry.** While the box is in it, the hardware runners (staging and the PR queue) hold their heads with a pending status (`queued: box in dev mode since HH:MM (N waiting)`), and the wait shows in `dev.py status`, `GET /api/box/mode` and the metrics `blinky_box_mode`, `blinky_hw_queue_depth` and `blinky_hw_queue_oldest_seconds`. Switching to dev while a hardware test (a staging suite or a PR smoke test) runs waits for it; `--preempt` cancels it, and its runner tests that head again in queue mode. Switch back with `dev.py mode queue` when done.
-- **Server side:** `GET`/`PUT /api/box/mode`; `POST /api/dev/deploy {build_id, device_ids}` (the staging deploy pipeline with the build service's package, verified like a staging artifact: test chips only, stored non-stable) and `POST /api/dev/run {device_ids, checks}` (`info`, `health`, `validate`, `pace`, `commands`, in order, in one test session), both 409 outside dev mode. Each chip keeps the firmware's 60 s between resets: a dev deploy is refused (with Retry-After) until the chip has run 60 s.
+- **Dev mode has no expiry.** While the box is in it, the hardware runners (staging and the PR queue) hold their heads with a pending status (`queued: box in dev mode since HH:MM (N waiting)`), and the wait shows in `dev.py status`, `GET /api/box/mode` and the metrics `blinky_box_mode`, `blinky_hw_queue_depth` and `blinky_hw_queue_oldest_seconds`. Switching to dev while a hardware test (hardware checks or the staging quality suite) runs waits for it; `--preempt` cancels it, and its runner tests that head again in queue mode. Switch back with `dev.py mode queue` when done.
+- **Server side:** `GET`/`PUT /api/box/mode`; `POST /api/dev/hardware-checks {device_ids, phases?, expected_version?, regions?, lights_brightness?}`; `POST /api/dev/deploy {build_id, device_ids}` (the staging deploy pipeline with the build service's package, verified like a staging artifact: test chips only, stored non-stable) and `POST /api/dev/run {device_ids, checks}` (`info`, `health`, `validate`, `pace`, `commands`, in order, in one test session), both 409 outside dev mode. Each chip keeps the firmware's 60 s between resets: a dev deploy is refused (with Retry-After) until the chip has run 60 s.
 - **Config:** `~/.config/blinky/build.env` ("Build service client" above); the server and `dev.py` both read it, the environment overriding it. Without it, dev deploys answer 503.
 
 ## Needed: per-server device ownership
@@ -195,7 +276,7 @@ BLE testing in the box waits on this.
 
 ## Open questions
 
-- Should the box test BLE (fleet commands, BLE DFU)? It first needs per-server device ownership.
+- Should the box test BLE (fleet commands, BLE DFU)? It first needs per-server device ownership. Today the hardware checks read the chip's own BLE report and would scan for it (scan only) if the box had a Bluetooth adapter; it has none.
 - Should the server trigger SWD recovery itself when USB recovery fails (blinky-firmware's `BOOTLOADER_WORKFLOW.md`)?
 
 ## Ideas (not decided)

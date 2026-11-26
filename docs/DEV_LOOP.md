@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`) and phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py` and the server's `test.pr-smoke` job; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue"). `Hardware test (PR)` is not a required status yet: the owner makes it one once it has proven reliable.
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`), phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py`; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue") and phase 2.1 (the blocking hardware checks, the server's `test.hardware-checks` job, in place of phase 2's smoke test; [TEST_BOX.md](TEST_BOX.md), "Hardware checks"). The owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
 
 ## Why
 
@@ -19,7 +19,7 @@ First attempts often have mistakes, and every one of them pays the whole loop. T
 
 1. **Builds run on the build host, through a build service.** That keeps the box light and builds faster. The repos are public: they name no host, address, port or secret. Where the service runs comes only from private config (see "Where it runs").
 2. **Draft PRs run no heavy CI jobs** until they're marked ready for review.
-3. **On-box smoke tests must finish healthy** (blocking). Their scores are reported and never block.
+3. **On-box tests have two tiers** (refined the same day). First, simple yes/no hardware checks that block: upload (does the firmware run), lights (do the LEDs work), audio (does the mic work), response (does each analysis feature respond to audio), then serial, BLE and the rest. They are not quality checks. Then the full suite, which scores the algorithm and never blocks. A PR staging → master must pass the hardware checks, and a red commit must not reach the history.
 4. **The top-scoring builds are proposed as stable candidates.** The owner decides; promotion stays `release_promote.py`.
 5. **Dev mode has no expiry.** Work waiting behind it must be obvious, and leaving dev mode is a conscious switch. Automating that comes later, once real use shows what the signals are.
 6. **No untrusted code runs on the owner's machines.** Anyone can open a PR on a public repo. See "Trust".
@@ -73,7 +73,7 @@ Code reads the location from config and never has a default address.
   - the mode is a JSON file in the server's data dir, so it survives restarts;
   - while a switch waits for its suite the box is "switching": still `queue`, but the runners hold back and `POST /api/test/staging` answers 409 (closing the race of a runner that read the mode just before the switch);
   - each runner reports what it holds back (`PUT /api/box/queue/{runner}`), which is what `GET /api/box/mode`, `dev.py status` and the metrics show. In queue mode it reports what waits for the box too, ready items marked `ready`; the server stamps each runner's last report (`reported_at`), and a runner yields to another's older ready item only while that runner still reports;
-  - a preempted hardware test (a staging suite or a PR smoke test) is cancelled at its next step boundary (a flash in flight finishes) and listed in the mode's `preempted`; its runner sees its job there, records no failure, and tests that head again.
+  - a preempted hardware test (hardware checks or the staging quality suite) is cancelled at its next step boundary (a flash in flight finishes) and listed in the mode's `preempted`; its runner sees its job there, records no failure, and tests that head again.
 
 ### 3. Dev flash and targeted tests (dev mode only)
 
@@ -92,8 +92,8 @@ Code reads the location from config and never has a default address.
   - `status`: the mode, what waits behind it, the chips;
   - `build [REF] [--wip]`;
   - `flash BUILD_ID`;
-  - `test <checks>`: `info`, `health[=MIN]`, `validate=a,b`, `pace`, `cmd=c1;c2`;
-  - `try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]`: the one command. It enters dev mode itself if needed and says so, builds, flashes, runs the info check plus the ones asked for, and prints a short report (version, flash result, each check, the info timers). The box stays in dev mode afterwards.
+  - `test <checks>`: `info`, `health[=MIN]`, `validate=a,b`, `pace`, `cmd=c1;c2`; `test --hw`: the hardware checks on the chip as it is (`POST /api/dev/hardware-checks`);
+  - `try [REF] [--hw] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]`: the one command (`--hw`: the hardware checks after the flash). It enters dev mode itself if needed and says so, builds, flashes, runs the info check plus the ones asked for, and prints a short report (version, flash result, each check, the info timers). The box stays in dev mode afterwards.
 - **No push needed.** `dev.py` sends an unpushed commit as a git bundle of `<base>..<sha>`, where base is the merge-base with a fetched `origin/staging` (or `origin/master`). If the service answers 409 (it lacks the base), it tries the merge-base with the other branch, then says what to push. A commit already on a branch goes by sha.
 - **`--wip`.** A dirty tree is refused, unless `--wip`: the working tree, untracked files that git doesn't ignore included, becomes a throwaway commit on HEAD, through a temporary index and `git commit-tree -p HEAD`, kept at `refs/dev/wip`. The branch, index and stash are never touched, and the build is still of a commit (see "Trust").
 - **The 60 s rule.** A dev deploy is refused, with Retry-After, until each target chip has run 60 s since its last reset; `dev.py` waits that out once.
@@ -112,14 +112,15 @@ Code reads the location from config and never has a default address.
 - **What it takes:** ready PRs to `staging` whose head is a branch of the repo and that change firmware paths (`tools/firmware_paths.json`, against the merge-base with `staging`). Drafts are ignored. A fork PR is never built or tested on the box; it gets `success` saying so ("fork PR: not hardware-tested before merge; the staging suite tests it after merge"), so a required status can't block it forever. A PR with no firmware change gets `success`, "no firmware change: hardware test skipped".
 - **Order:** the newest head of each PR, oldest PR first. A superseded head drops out (a running test is cancelled) and is marked superseded; its successor keeps its place.
 - **Build:** on the build service by sha, queue mode only. A failed build posts `failure` with the log's tail in the PR comment.
-- **Smoke test** (`POST /api/test/pr-smoke`, `blinky_server/testing/pr_smoke.py`, a durable job, queue mode only): the dev package through the `/api/dev/deploy` path, 2 min of health, the `json info` timers, three tracks (techno-machine-drum, dnb-energetic-breakbeat, garage-uk-2step by default), then no reboot and no `[ASSERT]`/`[FALLBACK]` since the flash. The staging suite's and the dev run's own functions, the audio lock end to end, the LEDs lit for the run. It posts `Hardware test (PR)` on the head and one report comment per tested head (`## Hardware test (PR) — <sha>`, updated on a re-run). **Deploy, health and the asserts must pass.** Scores are in the report with the corpus pin and never block. The status becomes required once it has proven reliable (the owner's call).
+- **Hardware checks** (phase 2.1: `POST /api/test/hardware-checks`, `blinky_server/testing/hardware_checks.py`, a durable job, queue mode only; [TEST_BOX.md](TEST_BOX.md), "Hardware checks"): the dev package through the `/api/dev/deploy` path, then the phases in order, stopping at the first that fails: upload, lights (the camera watching `testpattern` walk the pixels), audio, response (one yes/no per streamed analysis feature, against a synthetic stimulus), interfaces. The audio lock end to end, the LEDs lit for the run. It posts `Hardware test (PR)` on the head (`success`, `failure`, or `pending` "rig error: …, retrying": a rig fault is never red) and one report comment per tested head (`## Hardware test (PR) — <sha>`, updated in place: the checks table first, then the quality note). Scores are not in the blocking status: they are the staging quality suite's.
+- **Staging confirms, it doesn't re-judge.** Squash merges of up-to-date PRs make the staging commit's tree the PR head's, so the staging runner posts `Hardware test (staging)` `success` "hardware checks passed before merge as PR #N head <sha8> (same tree)" for it without a run, and checks only a commit that matches no passing PR head. Then the quality suite (every track, beat pace, scores with the corpus pin and the scorer's lag evidence) runs on the staging head, non-blocking: its status, `Quality suite (staging)`, is always `success` with a score summary.
 - **Dev mode:** nothing submitted; each queued head pending with `queued: box in dev mode since HH:MM (N waiting)`. A PR closed or merged while queued or running is dropped (its test cancelled) with nothing more posted; a preempted test goes back in the queue.
 - **The box is shared** with the staging runner: one hardware test at a time (409: next pass), whichever ready item has waited longest first.
-- **Staging** keeps the full suite with the same rule (health blocks, scores don't), and keeps skipping images whose firmware fingerprint is unchanged.
+- **Staging** keeps skipping images whose firmware fingerprint is unchanged.
 
 ### 6. Stable candidates from scores
 
-- **Recording:** each staging suite records its scores with the corpus pin and the test setup. Scores are compared only within the same pin.
+- **Recording:** each staging quality suite records its scores with the corpus pin and the test setup (built in phase 2.1: `staging-scores.jsonl` in the server's data dir, one line per commit, each track's drum scores with `lagSource`/`lagAmbiguous`). Scores are compared only within the same pin.
 - **Lag:** a box run's drum scores depend on removing its lag (ffplay's start to detection: 0.24-0.53 s, varying run to run). The scorer searches for it over the rig's window and reports where it came from (`lagSource`, `lagAmbiguous`, `lagNote`: blinky-corpus `blinky_scoring/lag.py`). An ambiguous lag (periodic drums) or a fallback is flagged in the score, not hidden. Box drum scores from before corpus `a20aa2f` were scored at an aliased lag and aren't comparable with later ones.
 - **Proposing:** when a candidate leads the current stable without health regressions (drum F, kick/snare recall, on-drum, repS, tempo, each beyond its noise), the box opens a "Propose bN for stable" issue with the comparison. The owner decides.
 - **No composite score yet:** the proposal shows each metric. How to weigh them gets decided from real proposals.
@@ -132,7 +133,8 @@ Code reads the location from config and never has a default address.
    - box modes;
    - dev flash and targeted tests, and `dev.py`;
    - drafts run no heavy jobs.
-2. **The PR hardware queue:** health-gated `Hardware test (PR)` (built; required once proven, by the owner).
+2. **The PR hardware queue:** `Hardware test (PR)` on each firmware PR head (built).
+   - **2.1, the blocking hardware checks:** upload, lights, audio, response, interfaces, yes/no, on the PR head; staging confirms them by tree; the quality suite non-blocking after (built). `Hardware test (PR)` becomes required on blinky-firmware's `staging` ruleset by the owner.
 3. **The build service takes the heavy CI jobs for owner commits; score-ranked stable proposals.**
 
 Leaving dev mode stays manual until phase 1 has been used enough to show what should trigger it.
