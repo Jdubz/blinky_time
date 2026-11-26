@@ -323,8 +323,10 @@ def test_a_run_is_scored_at_the_measured_lag_or_says_why_not(
 
     seen: list[Any] = []
 
-    def fake_score(data: Any, start: float, gt: Any, latency_ms: float | None = None) -> Any:
-        seen.append((start, latency_ms))
+    def fake_score(
+        data: Any, start: float, gt: Any, latency_ms: float | None = None, *, lag_search: Any
+    ) -> Any:
+        seen.append((start, latency_ms, lag_search.prior_ms))
         return {}
 
     monkeypatch.setattr(workflows, "score_device_run", fake_score)
@@ -334,8 +336,9 @@ def test_a_run_is_scored_at_the_measured_lag_or_says_why_not(
     pb = PlaybackResult(success=True, audio_start_time_ms=1000.0, duration_ms=1.0)
     pb.dac_start_ms, pb.start_measure = 1180.0, {"method": "alsa", "spread_ms": 0.5}
     out = workflows._score("data", pb, None)
-    assert seen[-1] == (1000.0, 250.0)
+    assert seen[-1] == (1000.0, 250.0, 220.0)
     assert out["audioStart"] == {
+        "player": "alsa",
         "measured": True,
         "lagMs": 250.0,
         "dacOffsetMs": 180.0,
@@ -345,9 +348,19 @@ def test_a_run_is_scored_at_the_measured_lag_or_says_why_not(
     pb = PlaybackResult(success=True, audio_start_time_ms=1000.0, duration_ms=1.0)
     pb.start_measure = {"method": "ffplay", "error": "alsa player: busy"}
     out = workflows._score("data", pb, None)
-    assert seen[-1] == (1000.0, None)  # the scorer searches, as before
-    assert out["audioStart"]["measured"] is False
+    # The scorer searches, its tie-break prior ffplay's typical lag: ffplay played.
+    assert seen[-1] == (1000.0, None, 270.0)
+    assert out["audioStart"]["measured"] is False and out["audioStart"]["player"] == "ffplay"
     assert out["audioStart"]["error"] == "alsa player: busy"
+    # The ALSA player played but its timestamps weren't trusted: its own prior, not ffplay's.
+    pb = PlaybackResult(success=True, audio_start_time_ms=1000.0, duration_ms=1.0)
+    pb.start_measure = {"method": "alsa", "spread_ms": 14.2, "error": "timestamp spread"}
+    out = workflows._score("data", pb, None)
+    assert seen[-1] == (1000.0, None, 220.0)
+    assert out["audioStart"]["measured"] is False and out["audioStart"]["player"] == "alsa"
+    # A playback that doesn't say which player ran can't pick a prior: it raises, never guesses.
+    with pytest.raises(ValueError, match="unknown audio player"):
+        workflows._score("data", PlaybackResult(True, 1000.0, 1.0), None)
 
 
 def test_the_raw_capture_carries_the_measured_start() -> None:
