@@ -341,7 +341,10 @@ def _apply_settle_filter(test_data: TestData, settle_ms: float) -> TestData:
 
 
 def _serialize_raw_capture(
-    test_data: TestData, audio_start_time_ms: float, clock: dict[str, Any] | None
+    test_data: TestData,
+    audio_start_time_ms: float,
+    clock: dict[str, Any] | None,
+    audio_start: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Serialize the raw signal_frames + transients for gate-(b) analysis.
 
@@ -352,9 +355,12 @@ def _serialize_raw_capture(
     Only called when the caller opted into `persist_raw` — this can be
     ~0.5-2 MB per device per 35 s clip, so we don't serialize it by default.
 
-    ``audio_start_epoch_ms`` (when ffplay was spawned, host wall clock) and ``clock`` (the
-    device's syncs before and after the run: offset, RTT, drift; None if it failed) let other
-    measurements line up with this one: the box camera puts detections on its own clock.
+    ``audio_start_epoch_ms`` (when the player was spawned, host wall clock: every ``t`` is
+    from it) and ``clock`` (the device's syncs before and after the run: offset, RTT, drift;
+    None if it failed) let other measurements line up with this one: the box camera puts
+    detections on its own clock. ``audio_dac_start_epoch_ms`` is when the first sample reached
+    the DAC (measured, audio_player.py; None when it wasn't), and ``audio_start`` the whole
+    measurement (``PlaybackResult.audio_start``: the lag the run was scored at, or why not).
     """
     frames_out = []
     for f in test_data.signal_frames:
@@ -382,6 +388,8 @@ def _serialize_raw_capture(
         transients_out.append(entry)
     return {
         "audio_start_epoch_ms": audio_start_time_ms,
+        "audio_dac_start_epoch_ms": (audio_start or {}).get("dac_start_epoch_ms"),
+        "audio_start": audio_start,
         "clock": clock,
         "signal_frames": frames_out,
         "transients": transients_out,
