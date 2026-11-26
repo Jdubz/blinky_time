@@ -29,6 +29,11 @@ shows in GET /api/box/mode, dev.py status and /metrics. Back in queue mode it is
 before. A suite that dev mode preempted (its job among the mode's "preempted") is not a
 failure: its head goes back in the queue and is tested again.
 
+The box is shared with the PR hardware queue (pr_queue.py), and the server serialises them (one
+hardware test at a time; a busy box answers 409 and the head is tried again next pass). A head
+ready to submit is reported as waiting in queue mode too, and the runner yields to another
+runner's ready item that has waited longer, so neither starves the other (older_elsewhere).
+
 Only the newest staging commit is tested; a commit superseded while it waits is skipped (its
 successor carries its changes). State is in ~/.local/share/blinky-server/staging.json; the log
 goes to the journal (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
@@ -82,6 +87,9 @@ REPORT_HEADER = "## Hardware test (staging) — "
 REVIEWS_HEADER = "Claude reviews since master (informational, not gated):"
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
 RUNNER = "staging"  # this runner's name in the box's hardware queue (PUT /api/box/queue/staging)
+# Another runner's waiting item counts (we yield to it) only while that runner still reports:
+# both run every 2 minutes, so a report older than this is a runner that stopped.
+REPORT_STALE_S = 10 * 60
 
 Gh = Callable[..., str]
 
@@ -169,22 +177,48 @@ def queued_description(mode: dict[str, Any], waiting: int) -> str:
     return f"queued: box switching to dev mode ({waiting} waiting)"
 
 
+def put_queue(server: Callable[..., Any], runner: str, waiting: list[dict[str, Any]]) -> None:
+    """PUT /api/box/queue/{runner}. Display (and the other runner's turn-taking) only: a server
+    that can't take it is logged, never a reason to stop."""
+    try:
+        server("PUT", f"/api/box/queue/{runner}", {"waiting": waiting})
+    except urllib.error.HTTPError as e:
+        if e.code != 404 or waiting:  # an older server has no queue: fine while nothing waits
+            log(f"box queue not reported: server answered {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        log(f"box queue not reported: {e}")
+
+
 def report_queue(server: Callable[..., Any], state: dict[str, Any]) -> None:
-    """Tell the server what this runner holds back (nothing, outside dev mode). Display only:
-    a server that can't take it is logged, never a reason to stop."""
+    """Tell the server what this runner holds back: behind dev mode, or ready and waiting for
+    the box (``ready``: built, so the other runner yields to it if it is older)."""
     q = state.get("queued")
     if q and q["sha"] == state.get("reported"):
         q = None  # settled this pass (skipped, or its build failed): nothing waits
     waiting = [{"sha": q["sha"], "since": q["since"], "what": "staging head"}] if q else []
     if q and q.get("preempted"):
         waiting[0]["preempted"] = True
-    try:
-        server("PUT", f"/api/box/queue/{RUNNER}", {"waiting": waiting})
-    except urllib.error.HTTPError as e:
-        if e.code != 404 or waiting:  # an older server has no queue: fine while nothing waits
-            log(f"box queue not reported: server answered {e.code}")
-    except (urllib.error.URLError, OSError) as e:
-        log(f"box queue not reported: {e}")
+    if q and q.get("ready"):
+        waiting[0]["ready"] = True
+    put_queue(server, RUNNER, waiting)
+
+
+def older_elsewhere(
+    mode: dict[str, Any], runner: str, since: float, now: float | None = None
+) -> dict[str, Any] | None:
+    """Another runner's item, ready to submit, that has waited longer than ``since``: this
+    runner yields to it. Only while that runner still reports (REPORT_STALE_S), so a stopped
+    runner never blocks this one."""
+    now = time.time() if now is None else now
+    for w in mode.get("waiting") or []:  # oldest first
+        if w.get("runner") == runner or not w.get("ready"):
+            continue
+        at = w.get("reported_at")
+        if at is None or now - float(at) > REPORT_STALE_S:
+            continue
+        if float(w.get("since") or 0.0) < since:
+            return dict(w)
+    return None
 
 
 def test_devices(devices: list[dict[str, Any]]) -> list[str]:
@@ -228,10 +262,11 @@ def build_state(gh_: Gh, sha: str) -> str:
     return "pending"
 
 
-def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str, bool]:
+def firmware_change(gh_: Gh, sha: str, base: str = "master") -> tuple[bool, str, bool]:
     """(changed, why, blind): whether sha changes anything under the firmware's paths since
-    master, and whether one of those changes is where the Firmware fingerprint can't see it
-    (the list's "unfingerprinted" paths: the bootloader, the OTA signing tools).
+    ``base`` (its merge-base with that branch), and whether one of those changes is where the
+    Firmware fingerprint can't see it (the list's "unfingerprinted" paths: the bootloader, the
+    OTA signing tools).
 
     Anything that can't be judged counts as a change the fingerprint can't vouch for, so it
     gets the hardware test: no path list at that commit, a GitHub error, or a compare GitHub
@@ -242,14 +277,14 @@ def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str, bool]:
         spec = json.loads(base64.b64decode(meta["content"]))
         paths = [str(p) for p in spec["paths"]]
         unseen = [str(p) for p in spec.get("unfingerprinted", [])]
-        cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/master...{sha}")
+        cmp = gh_json(gh_, "api", f"repos/{GH_REPO}/compare/{base}...{sha}")
     except (RuntimeError, KeyError, ValueError, TypeError) as e:
-        return True, f"can't compare with master ({str(e)[:80]}): testing", True
+        return True, f"can't compare with {base} ({str(e)[:80]}): testing", True
     if not paths:
         return True, f"{FIRMWARE_PATHS} lists no paths: testing", True
     files = cmp.get("files")
     if not isinstance(files, list) or len(files) >= COMPARE_FILE_LIMIT:
-        return True, "the compare with master is truncated: testing", True
+        return True, f"the compare with {base} is truncated: testing", True
 
     def under(name: str, prefixes: list[str]) -> bool:
         return any(name.startswith(p) if p.endswith("/") else name == p for p in prefixes)
@@ -260,11 +295,11 @@ def firmware_change(gh_: Gh, sha: str) -> tuple[bool, str, bool]:
         for n in (f.get("filename"), f.get("previous_filename"))
         if n and under(n, paths)
     ]
-    base = str(cmp.get("merge_base_commit", {}).get("sha", "master"))[:12]
+    mb = str(cmp.get("merge_base_commit", {}).get("sha", base))[:12]
     if hits:
         blind = any(under(n, unseen) for n in hits)
-        return True, f"{len(hits)} firmware file(s) changed since master {base}", blind
-    return False, f"no firmware change since master {base}: hardware test skipped", False
+        return True, f"{len(hits)} firmware file(s) changed since {base} {mb}", blind
+    return False, f"no firmware change since {base} {mb}: hardware test skipped", False
 
 
 def fingerprint(gh_: Gh, sha: str) -> str | None:
@@ -322,7 +357,14 @@ def skip(gh_: Gh, state: dict[str, Any], sha: str, why: str) -> dict[str, Any]:
     return state
 
 
-def post_status(gh_: Gh, sha: str, state: str, description: str, url: str | None = None) -> None:
+def post_status(
+    gh_: Gh,
+    sha: str,
+    state: str,
+    description: str,
+    url: str | None = None,
+    context: str = HARDWARE_CONTEXT,
+) -> None:
     args = [
         "api",
         "-X",
@@ -331,7 +373,7 @@ def post_status(gh_: Gh, sha: str, state: str, description: str, url: str | None
         "-f",
         f"state={state}",
         "-f",
-        f"context={HARDWARE_CONTEXT}",
+        f"context={context}",
         "-f",
         f"description={description[:140]}",
     ]
@@ -459,18 +501,48 @@ def _mean(xs: list[float | None]) -> float | None:
     return round(sum(got) / len(got), 3) if got else None
 
 
+DRUMS = ("kickR50", "snareR50", "onDrum", "drumF", "loneHat")
+DRUM_HEAD = "kick R@50 | snare R@50 | on-drum | drum F | lone hat"
+
+
+def verdict_line(report: dict[str, Any]) -> str:
+    return (
+        f"**{'PASSED' if report.get('passed') else 'FAILED'}** — "
+        f"`{report.get('version', '?')}` on "
+        f"{', '.join(d[:12] for d in report.get('devices', []))}"
+    )
+
+
+def check_rows(report: dict[str, Any], sections: tuple[str, ...]) -> list[str]:
+    """A table of every pass/fail check in ``sections``, per device."""
+    rows = ["| device | check | | detail |", "|---|---|---|---|"]
+    for section in sections:
+        for dev, checks in (report.get(section) or {}).items():
+            for name, c in checks.items():
+                if not isinstance(c, dict) or "pass" not in c:
+                    continue
+                detail = ", ".join(
+                    f"{k}={v}" for k, v in c.items() if k not in ("pass", "lines", "series_ms")
+                )
+                rows.append(f"| {dev[:12]} | {name} | {'✅' if c['pass'] else '❌'} | {detail} |")
+    return [*rows, ""]
+
+
+def alert_lines(report: dict[str, Any]) -> list[str]:
+    """The firmware's [ASSERT]/[FALLBACK] lines since the flash, if any."""
+    alerts = [
+        (dev, a)
+        for dev, f in (report.get("final") or {}).items()
+        for a in (f.get("alerts") or {}).get("lines", [])
+    ]
+    if not alerts:
+        return []
+    return ["", "Firmware alerts:", "```", *[f"{d[:12]} {a}" for d, a in alerts[:30]], "```"]
+
+
 def render(report: dict[str, Any]) -> str:
     """The report as markdown: verdict, every check per device, drum means, timing, alerts."""
-    lines = [
-        f"{REPORT_HEADER}{report.get('sha', '?')}",
-        "",
-        (
-            f"**{'PASSED' if report.get('passed') else 'FAILED'}** — "
-            f"`{report.get('version', '?')}` on "
-            f"{', '.join(d[:12] for d in report.get('devices', []))}"
-        ),
-        "",
-    ]
+    lines = [f"{REPORT_HEADER}{report.get('sha', '?')}", "", verdict_line(report), ""]
     if report.get("artifact"):
         # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
         # signs its LAN address, so the link opens from the home network.
@@ -484,24 +556,14 @@ def render(report: dict[str, Any]) -> str:
     if not dep.get("pass"):
         lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]
         return "\n".join(lines) + "\n"
-    rows = ["| device | check | | detail |", "|---|---|---|---|"]
-    for section in ("health", "music", "final"):
-        for dev, checks in (report.get(section) or {}).items():
-            for name, c in checks.items():
-                if not isinstance(c, dict) or "pass" not in c:
-                    continue
-                detail = ", ".join(
-                    f"{k}={v}" for k, v in c.items() if k not in ("pass", "lines", "series_ms")
-                )
-                rows.append(f"| {dev[:12]} | {name} | {'✅' if c['pass'] else '❌'} | {detail} |")
-    lines += [*rows, ""]
+    lines += check_rows(report, ("health", "music", "final"))
     val = report.get("validation") or {}
     if val.get("results"):
         by_dev: dict[str, dict[str, list[float | None]]] = {}
         for r in val["results"]:
             for dev, s in (r.get("scores") or {}).items():
                 drums = s.get("drums") or {}
-                for k in ("kickR50", "snareR50", "onDrum", "drumF", "loneHat"):
+                for k in DRUMS:
                     by_dev.setdefault(dev, {}).setdefault(k, []).append(drums.get(k))
         lines += [
             (
@@ -509,25 +571,18 @@ def render(report: dict[str, Any]) -> str:
                 "(reported, not gated). Means over tracks:"
             ),
             "",
-            "| device | kick R@50 | snare R@50 | on-drum | drum F | lone hat |",
+            f"| device | {DRUM_HEAD} |",
             "|---|---|---|---|---|---|",
         ]
         for dev, m in by_dev.items():
-            vals = [_mean(m[k]) for k in ("kickR50", "snareR50", "onDrum", "drumF", "loneHat")]
+            vals = [_mean(m[k]) for k in DRUMS]
             lines.append(f"| {dev[:12]} | " + " | ".join(str(v) for v in vals) + " |")
         lines.append("")
     elif val:
         lines += [f"Validation: ❌ {val.get('detail')}", ""]
     for dev, f in (report.get("final") or {}).items():
         lines.append(f"Onset-path timing ({dev[:12]}): {f.get('timing') or 'not reported'}")
-    alerts = [
-        (dev, a)
-        for dev, f in (report.get("final") or {}).items()
-        for a in (f.get("alerts") or {}).get("lines", [])
-    ]
-    if alerts:
-        lines += ["", "Firmware alerts:", "```"] + [f"{d[:12]} {a}" for d, a in alerts[:30]]
-        lines.append("```")
+    lines += alert_lines(report)
     return "\n".join(lines) + "\n"
 
 
@@ -690,6 +745,16 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
         return state
     if holds(mode):
         return hold(gh_, state, sha, mode)
+    # Ready for the box: it waits (reported, so the PR runner can yield to it) until submitted.
+    q = state.get("queued") if (state.get("queued") or {}).get("sha") == sha else None
+    q = q or {"sha": sha, "since": time.time()}
+    q["ready"] = True
+    state["queued"] = q
+    save_state(state)
+    ahead = older_elsewhere(mode, RUNNER, float(q["since"]))
+    if ahead:
+        log(f"{sha[:12]}: {ahead.get('runner')} {str(ahead.get('sha'))[:12]} has waited longer")
+        return state
     try:
         devices = test_devices(server("GET", "/api/devices"))
         if not devices:

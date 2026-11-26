@@ -336,7 +336,13 @@ def test_a_unit_added_by_a_commit_is_installed_on_the_next_pass(
         (slot / "scripts" / "testbox" / f"{u}.in").write_text(f"[Unit]\n# {u} new\n")
     units = tmp_path / "units"
     units.mkdir()
-    for u in ("blinky-server.service", "blinky-deploy.service", "blinky-deploy.timer"):
+    for u in (
+        "blinky-server.service",
+        "blinky-deploy.service",
+        "blinky-deploy.timer",
+        "blinky-staging.service",
+        "blinky-staging.timer",
+    ):
         (units / u).write_text("old\n")  # installed, different: not touched here
     monkeypatch.setattr(deploy, "UNIT_DIR", units)
     events: list[str] = []
@@ -350,12 +356,15 @@ def test_a_unit_added_by_a_commit_is_installed_on_the_next_pass(
         return ""
 
     monkeypatch.setattr(deploy, "run", fake_run)
-    assert deploy.install_missing_units(slot) == ["blinky-staging.service", "blinky-staging.timer"]
+    assert deploy.install_missing_units(slot) == [
+        "blinky-pr-queue.service",
+        "blinky-pr-queue.timer",
+    ]
     assert events == [
-        "unit blinky-staging.service",
-        "unit blinky-staging.timer",
+        "unit blinky-pr-queue.service",
+        "unit blinky-pr-queue.timer",
         "systemctl daemon-reload",
-        "systemctl enable --now blinky-staging.timer",
+        "systemctl enable --now blinky-pr-queue.timer",
     ]
     assert (units / "blinky-server.service").read_text() == "old\n"
     events.clear()

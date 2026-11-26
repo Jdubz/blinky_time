@@ -630,6 +630,42 @@ def test_back_in_queue_mode_the_held_head_is_submitted_and_the_queue_cleared() -
     assert srv.queue[-1] == [] and g.statuses[-1] == ("pending", "testing on 1 test device(s)")
 
 
+def test_it_takes_turns_with_the_pr_queue_oldest_ready_item_first() -> None:
+    """Queue mode: a ready head is reported as waiting; a PR head that is ready and has waited
+    longer goes first (while the PR runner still reports), then this one."""
+    import time
+
+    g, srv = GitHub(), Server([HAT], {})
+    now = time.time()
+    pr = {"runner": "pr", "sha": "p" * 40, "since": now - 600, "ready": True, "reported_at": now}
+    srv.mode["waiting"] = [pr]
+    state = staging.run_once(g, srv)
+    assert not srv.submitted and state["queued"]["ready"] and "reported" not in state
+    assert srv.queue[-1] == [
+        {"sha": SHA, "since": state["queued"]["since"], "what": "staging head", "ready": True}
+    ]
+    assert g.statuses == []  # waiting for a turn says nothing on GitHub
+    srv.mode["waiting"] = [{**pr, "since": now + 600}]  # a newer one: this head goes first
+    state = staging.run_once(g, srv)
+    assert len(srv.submitted) == 1 and state["running"]["sha"] == SHA and srv.queue[-1] == []
+
+
+def test_a_stopped_pr_runner_never_blocks_staging() -> None:
+    import time
+
+    g, srv = GitHub(), Server([HAT], {})
+    old = {"runner": "pr", "sha": "p" * 40, "since": 1.0, "ready": True}
+    srv.mode["waiting"] = [{**old, "reported_at": time.time() - 3600}]
+    assert staging.run_once(g, srv)["running"]["sha"] == SHA
+
+
+def test_a_busy_box_keeps_the_head_waiting_with_its_first_time() -> None:
+    g, srv = GitHub(), Refusing(409)
+    first = staging.run_once(g, srv)["queued"]["since"]
+    assert staging.run_once(g, srv)["queued"]["since"] == first
+    assert srv.queue[-1][0]["since"] == first
+
+
 def test_a_head_settled_while_held_leaves_the_queue() -> None:
     """Held in dev mode, then superseded by a head with no firmware change: skipped and
     promoted (no hardware), and nothing of this runner waits any more."""

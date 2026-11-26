@@ -42,7 +42,7 @@ RESET_GAP_S = 60.0
 class BoxModeRequest(BaseModel):
     mode: Literal["dev", "queue"]
     note: str | None = Field(None, max_length=200)
-    preempt: bool = Field(False, description="dev: cancel a running staging suite and requeue")
+    preempt: bool = Field(False, description="dev: cancel a running hardware test and requeue")
 
 
 class QueueItem(BaseModel):
@@ -50,6 +50,7 @@ class QueueItem(BaseModel):
     since: float = Field(..., description="when it started waiting (epoch seconds)")
     what: str | None = Field(None, max_length=200)
     preempted: bool = False
+    ready: bool = Field(False, description="queue mode: built, waiting only for the box")
 
 
 class QueueRequest(BaseModel):
@@ -96,7 +97,7 @@ def _require_dev() -> None:
     if st["switching"]:
         raise HTTPException(
             409,
-            "the box is switching to dev mode, waiting for staging suite "
+            "the box is switching to dev mode, waiting for hardware test "
             f"{', '.join(st['switching']['waiting_for'])} to end (or PUT /api/box/mode with "
             "preempt)",
         )
@@ -147,7 +148,7 @@ def default_track_dir() -> Path:
 @router.get("/box/mode")
 async def get_mode() -> dict[str, Any]:
     """The box's mode (``dev`` or ``queue``), since when, its note, a pending switch, the work
-    waiting behind dev mode (oldest first) and the staging suites dev mode preempted."""
+    waiting (oldest first) and the hardware tests dev mode preempted."""
     st = await box_mode.current()
     return {**st, "summary": box_mode.describe(st)}
 
@@ -155,7 +156,7 @@ async def get_mode() -> dict[str, Any]:
 @router.put("/box/mode", dependencies=[Depends(require_api_key)])
 async def put_mode(body: BoxModeRequest) -> dict[str, Any]:
     """Switch the box. No expiry: it stays in dev mode until switched back. To dev while a
-    staging suite runs: waits for it (``switching``), or ``preempt`` cancels it and queues its
+    hardware test runs: waits for it (``switching``), or ``preempt`` cancels it and queues its
     commit again."""
     from . import routes_firmware
 
@@ -172,7 +173,8 @@ async def put_mode(body: BoxModeRequest) -> dict[str, Any]:
 
 @router.put("/box/queue/{runner}", dependencies=[Depends(require_api_key)])
 async def put_queue(runner: str, body: QueueRequest) -> dict[str, Any]:
-    """What a hardware runner holds back while the box is in dev mode (replaces its list)."""
+    """What a hardware runner holds back: behind dev mode, or waiting for the box in queue mode
+    (replaces its list)."""
     if not RUNNER_RE.fullmatch(runner):
         raise HTTPException(422, f"runner must be a short lowercase name, not {runner!r}")
     st = box_mode.set_waiting(runner, [i.model_dump(exclude_none=True) for i in body.waiting])
@@ -197,7 +199,7 @@ async def dev_deploy(body: DevDeployRequest) -> dict[str, Any]:
     async with routes_firmware._deploy_lock:
         _require_dev()  # again under the lock: a switch to queue may have won it meanwhile
         if await routes_firmware._deploy_active():
-            raise HTTPException(409, "A deploy or staging suite is already running")
+            raise HTTPException(409, "A deploy or hardware test is already running")
         devices = _targets(body.device_ids)
         wait = max(reset_wait(d) for d in devices)
         if wait > 0:

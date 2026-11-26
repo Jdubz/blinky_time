@@ -24,8 +24,8 @@ ignore included, becomes a throwaway commit on top of HEAD, made through a tempo
 ``git commit-tree`` and kept at refs/dev/wip. Your branch, index and stash are never touched.
 
 The box stays in dev mode until you switch it back (``dev.py mode queue``): no expiry, by the
-owner's decision. While it is in dev mode the staging runner holds its work, which `status`
-shows.
+owner's decision. While it is in dev mode the hardware runners (staging, PR queue) hold their
+work, which `status` shows.
 
 Config: the build service from ~/.config/blinky/build.env (BLINKY_BUILD_URL,
 BLINKY_BUILD_TOKEN; the environment overrides it). There is no default address: the repo is
@@ -159,6 +159,18 @@ class BaseMissing(DevError):
     """The build service lacks the bundle's prerequisite commits (409)."""
 
 
+class Untrusted(DevError):
+    """The build service refused the commit as not an owner commit (403)."""
+
+
+class ServiceError(DevError):
+    """Any other HTTP error from the build service, with its status code."""
+
+    def __init__(self, msg: str, code: int) -> None:
+        super().__init__(msg)
+        self.code = code
+
+
 class BuildService:
     """The build service's contract (docs/DEV_LOOP.md), bearer-token auth:
     POST /v1/builds (JSON {repo, sha} or multipart bundle + sha) -> 202 {id, state, sha};
@@ -182,11 +194,11 @@ class BuildService:
             if e.code == 409:
                 raise BaseMissing(f"the build service lacks the bundle's base: {detail}") from e
             if e.code == 403:
-                raise DevError(
+                raise Untrusted(
                     f"the build service refused the commit (403: {detail}). It builds only owner "
                     "commits: a branch of the repo, or a bundle from the box (docs/DEV_LOOP.md)"
                 ) from e
-            raise DevError(f"the build service answered {e.code}: {detail}") from e
+            raise ServiceError(f"the build service answered {e.code}: {detail}", e.code) from e
         except (urllib.error.URLError, OSError) as e:
             raise DevError(f"the build service isn't answering: {e}") from e
 
@@ -450,17 +462,17 @@ def set_mode(
 
 
 def wait_dev(server: Server, st: dict[str, Any], wait_s: float = MODE_WAIT_S) -> dict[str, Any]:
-    """Until a switch to dev that waits for a staging suite has happened."""
+    """Until a switch to dev that waits for a hardware test has happened."""
     if st.get("mode") == "dev":
         return st
     suites = ", ".join((st.get("switching") or {}).get("waiting_for") or [])
-    say(f"switching to dev mode once staging suite {suites} ends (--preempt cancels it instead)")
+    say(f"switching to dev mode once hardware test {suites} ends (--preempt cancels it instead)")
     deadline = time.monotonic() + wait_s
     while st.get("mode") != "dev":
         if not st.get("switching"):
             raise DevError("the switch to dev mode was called off (someone set queue mode)")
         if time.monotonic() > deadline:
-            raise DevError(f"still waiting for staging suite {suites} after {wait_s / 60:.0f} min")
+            raise DevError(f"still waiting for hardware test {suites} after {wait_s / 60:.0f} min")
         time.sleep(10 * POLL_S)
         st = server("GET", "/api/box/mode")
     say("box in dev mode")
@@ -642,15 +654,17 @@ def report_mode(st: dict[str, Any]) -> list[str]:
         head = f"box: DEV mode since {_hhmm(st.get('since'))} ({_age(st.get('since'))})"
     elif st.get("switching"):
         sw = st["switching"]
-        head = f"box: switching to dev, waiting for staging suite {', '.join(sw['waiting_for'])}"
+        head = f"box: switching to dev, waiting for hardware test {', '.join(sw['waiting_for'])}"
     else:
         head = "box: queue mode"
     lines = [head + (f": {st['note']}" if st.get("note") else "")]
-    lines.append(f"waiting behind dev mode: {len(waiting)}")
+    held = st.get("mode") == "dev" or st.get("switching")
+    lines.append(f"waiting {'behind dev mode' if held else 'for the box'}: {len(waiting)}")
     for w in waiting:
         extra = ", preempted" if w.get("preempted") else ""
+        what = f" ({w['what']})" if w.get("what") else ""
         lines.append(
-            f"  {w.get('runner')}: {str(w.get('sha'))[:12]} for {_age(w.get('since'))}{extra}"
+            f"  {w.get('runner')}: {str(w.get('sha'))[:12]}{what} for {_age(w.get('since'))}{extra}"
         )
     if st.get("mode") == "dev" or st.get("switching"):
         lines.append("leave dev mode: dev.py mode queue")
@@ -731,7 +745,11 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
     m = sub.add_parser("mode", help="switch the box: dev | queue")
     m.add_argument("mode", choices=("dev", "queue"))
     m.add_argument("--note")
-    m.add_argument("--preempt", action="store_true", help="cancel a running staging suite")
+    m.add_argument(
+        "--preempt",
+        action="store_true",
+        help="cancel a running hardware test (staging suite or PR smoke test)",
+    )
     sub.add_parser("status", help="the box's mode, what waits behind it, the chips")
     b = sub.add_parser("build", help="build a commit on the build service")
     b.add_argument("ref", nargs="?")
@@ -753,7 +771,11 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
     y.add_argument("--camera", action="store_true", help="then camera_review.py on the tracks")
     y.add_argument("--wip", action="store_true", help="build the dirty working tree")
     y.add_argument("--note")
-    y.add_argument("--preempt", action="store_true", help="cancel a running staging suite")
+    y.add_argument(
+        "--preempt",
+        action="store_true",
+        help="cancel a running hardware test (staging suite or PR smoke test)",
+    )
     y.add_argument("--device", action="append")
     args = ap.parse_args(argv)
     try:
