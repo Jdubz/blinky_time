@@ -554,8 +554,22 @@ class App:
                 self.checkout.refresh()
             except Exception as e:  # GitHub down: keep serving what we have, say so
                 self.log.emit("refresh_failed", error=str(e)[:400])
+        self._refresh_unedited()
         if self.publisher is not None:
             self.publisher.tick(self._edited(), self._adopt)
+
+    def _refresh_unedited(self) -> None:
+        """A track someone opened but nobody has edited follows main: when its human file there
+        changed, its state starts over from it (open pages reload)."""
+        for stem in self.store.stems():
+            if self.store.edited_since_base(stem):
+                continue
+            with self.rw.read():
+                hp = self.c.human_path(stem)
+                now = hosted.git_blob_sha(hp.read_bytes()) if hp.is_file() else None
+                if now != self.store.base_blob(stem):
+                    self.store.reset(stem, initial_state(self.c, stem))
+                    self.log.emit("refreshed_from_main", stem=stem)
 
     def start(self) -> None:
         def loop() -> None:

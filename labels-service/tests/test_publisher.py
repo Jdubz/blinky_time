@@ -175,6 +175,34 @@ def test_reverting_a_published_batch_sticks(env):
     assert len(env.events("adopted_main")) == 2 and len(env.app.store.view("a")["onsets"]) == 18
 
 
+def test_reverting_a_later_batch_sticks(env):
+    """A revert of the second batch goes back to the first batch's version, which we exported too:
+    that's a revert (adopted), not our older version landing late."""
+    env.edit("a", {"op": "del", "id": "h1"})
+    env.publish()
+    env.app.tick()
+    env.edit("a", {"op": "del", "id": "h2"})
+    env.publish()
+    env.app.tick()
+    head = git(env.work, "rev-parse", "HEAD").strip()
+    git(env.work, "revert", "--no-edit", head)
+    git(env.work, "push", "-q", "origin", "HEAD:main")
+    env.app.tick()
+    assert len(env.events("adopted_main")) == 1 and len(env.app.store.view("a")["onsets"]) == 18
+    assert env.app.export()["tracks"] == {}, "the reverted batch must not be offered again"
+
+
+def test_an_opened_track_follows_main_until_someone_edits_it(env):
+    env.app.store.view("a")  # opened: its state starts from the seed
+    env.push_to_main({A: human(env.edm, "a", KICKS[:9])}, "a human file lands from elsewhere")
+    env.app.tick()
+    v = env.app.store.view("a")
+    assert v["seed"] == "human" and len(v["onsets"]) == 18 and env.events("refreshed_from_main")
+    env.edit("a", {"op": "del", "id": "h1"})
+    env.app.tick()
+    assert not env.events("adopted_main") and len(env.app.store.view("a")["onsets"]) == 17
+
+
 def test_vandalism_is_held_back(env):
     ids = [o["id"] for o in env.app.store.view("a")["onsets"]]
     env.edit("a", *({"op": "del", "id": i} for i in ids[:15]))  # deletes 15 of 19

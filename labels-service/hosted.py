@@ -299,6 +299,14 @@ class Publication:
             self._save()
             return {"ready": ready, "tracks": out, "held": held}
 
+    def _landed(self, path: str, blob: str) -> None:
+        """`blob` reached main: it and every version exported before it are history now. Only
+        versions exported after it can still be on their way, so main going back to an older one
+        later is a revert (adopted), not ours landing late."""
+        ex = self.st["exported"].get(path, [])
+        if blob in ex:
+            del ex[: ex.index(blob) + 1]
+
     def tick(self, tracks: dict[str, tuple[str, str | None]], adopt: Callable[[str, str | None], None]) -> None:
         """`tracks`: {path: (current file text, blob of main's file the state started from)} of every
         edited track. `adopt(path, main_text)`: the track takes main's version (None: main has no file
@@ -312,10 +320,13 @@ class Publication:
                 if mb == mine:
                     if not pub or pub[0] != mb:
                         self.st["published"][p] = [mb, now_iso()]
+                        self._landed(p, mb)
                         self.log.emit("published", path=p)
                     continue
                 if mb in exported:  # an earlier version of ours landed; the newer one follows
-                    self.st["published"][p] = [mb, now_iso()]
+                    if not pub or pub[0] != mb:
+                        self.st["published"][p] = [mb, now_iso()]
+                        self._landed(p, mb)
                     continue
                 ours_before_landing = base_blob if pub is None else None
                 if mb is None:
