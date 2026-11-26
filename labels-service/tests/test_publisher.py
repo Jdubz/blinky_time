@@ -110,6 +110,23 @@ def test_published_once_it_lands(env):
     assert list(env.app.export()["tracks"]) == [A]
 
 
+def test_edits_after_a_publish_survive(env):
+    """Main still holding what we last published is ours: new edits on top of it stay and follow."""
+    env.edit("a", {"op": "del", "id": "h1"})
+    env.publish()
+    env.app.tick()
+    env.edit("a", {"op": "del", "id": "h2"})
+    env.app.tick()
+    env.app.tick()
+    assert not env.events("adopted_main") and len(env.app.store.view("a")["onsets"]) == 17
+    assert list(env.app.export()["tracks"]) == [A]
+    env.publish()
+    env.app.tick()
+    env.edit("a", {"op": "del", "id": "h3"})  # and again after a second publish
+    env.app.tick()
+    assert not env.events("adopted_main") and len(env.app.store.view("a")["onsets"]) == 16
+
+
 def test_an_older_version_landing_is_not_an_outside_change(env):
     env.edit("a", {"op": "del", "id": "h1"})
     out = env.app.export()

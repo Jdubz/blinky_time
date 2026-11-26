@@ -315,20 +315,22 @@ class Publication:
             for p, (text, base_blob) in tracks.items():
                 mb = self._main_blob(p)
                 mine = git_blob_sha(text.encode())
-                exported = set(self.st["exported"].get(p, []))
                 pub = self.st["published"].get(p)
-                if mb == mine:
+                exported = self.st["exported"].get(p, [])
+                if mb == mine:  # main has exactly our labels: published
                     if not pub or pub[0] != mb:
                         self.st["published"][p] = [mb, now_iso()]
                         self._landed(p, mb)
                         self.log.emit("published", path=p)
                     continue
-                if mb in exported:  # an earlier version of ours landed; the newer one follows
-                    if not pub or pub[0] != mb:
-                        self.st["published"][p] = [mb, now_iso()]
-                        self._landed(p, mb)
+                if pub and mb == pub[0]:
+                    continue  # main still holds what we last published; our newer edits follow
+                if mb in exported:  # an export of ours newer than the last published one landed
+                    self.st["published"][p] = [mb, now_iso()]
+                    self._landed(p, mb)
                     continue
-                ours_before_landing = base_blob if pub is None else None
+                if pub is None and mb == base_blob:
+                    continue  # main hasn't changed since the state started from it
                 if mb is None:
                     if pub is not None:  # a file of ours was deleted on main: back to the seed
                         adopt(p, None)
@@ -336,9 +338,10 @@ class Publication:
                         self.st["exported"].pop(p, None)
                         self.log.emit("adopted_main", path=p, deleted=True)
                     continue
-                if mb != ours_before_landing:  # changed on main from outside: it wins
-                    adopt(p, self.co.git("cat-file", "blob", mb))
-                    self.st["published"][p] = [mb, now_iso()]
-                    self.st["exported"][p] = [mb]  # the state now starts from it: later edits build on it
-                    self.log.emit("adopted_main", path=p)
+                # Changed on main from outside (an owner's edit, or a revert to an older version):
+                # it wins.
+                adopt(p, self.co.git("cat-file", "blob", mb))
+                self.st["published"][p] = [mb, now_iso()]
+                self.st["exported"].pop(p, None)
+                self.log.emit("adopted_main", path=p)
             self._save()
