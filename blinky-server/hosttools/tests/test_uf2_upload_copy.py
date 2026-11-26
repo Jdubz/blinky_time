@@ -84,3 +84,30 @@ def test_drive_presence_follows_the_block_device(tool: ModuleType, tmp_path: Pat
     (sys_block / "sdf" / "size").write_text("0\n")  # capacity dropped on disconnect
     assert tool._drive_present("/mnt/uf2", "/dev/sdf", str(sys_block)) is False
     assert tool._drive_present("/mnt/uf2", "/dev/sdg", str(sys_block)) is False
+
+
+def test_stale_mounts_are_released_down_to_a_live_drive(
+    tool: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every flash used to leave its gone drive mounted, stacked on /mnt/uf2-upload."""
+    mounts = tmp_path / "mounts"
+    stack = ["/dev/sda", "/dev/sdb", "/dev/sdc"]  # sda is live, sdb and sdc are gone
+
+    def write_mounts() -> None:
+        mounts.write_text("".join(f"{d} /mnt/uf2-upload vfat rw 0 0\n" for d in stack))
+
+    write_mounts()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: Any) -> Any:
+        calls.append(cmd)
+        stack.pop()
+        write_mounts()
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(tool.subprocess, "run", fake_run)
+    monkeypatch.setattr(tool, "_drive_present", lambda _mp, dev=None: dev == "/dev/sda")
+    assert tool.release_stale_mounts("/mnt/uf2-upload", str(mounts)) == 2
+    assert calls == [["sudo", "-n", "umount", "-l", "/mnt/uf2-upload"]] * 2
+    assert stack == ["/dev/sda"]
+    assert tool.release_stale_mounts("/mnt/elsewhere", str(mounts)) == 0

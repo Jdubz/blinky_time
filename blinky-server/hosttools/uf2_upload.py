@@ -1812,18 +1812,50 @@ def copy_firmware(uf2_path, mount_point):
 SYNC_FAIL_GRACE_S = 5.0
 
 
-def _mount_source(mount_point, mounts="/proc/mounts"):
-    """[blinky_time] The block device mounted at ``mount_point`` (``/dev/sdX``), or None."""
+def _mount_sources(mount_point, mounts="/proc/mounts"):
+    """[blinky_time] The block devices mounted at ``mount_point``, oldest first (the last is
+    the one in use: mounts stack)."""
     target = str(mount_point)
+    out = []
     try:
         with open(mounts) as f:
             for line in f:
                 fields = line.split()
                 if len(fields) >= 2 and fields[1].replace("\\040", " ") == target:
-                    return fields[0]
+                    out.append(fields[0])
     except OSError:
-        return None
-    return None
+        return []
+    return out
+
+
+def _mount_source(mount_point, mounts="/proc/mounts"):
+    """[blinky_time] The block device mounted at ``mount_point`` (``/dev/sdX``), or None."""
+    sources = _mount_sources(mount_point, mounts)
+    return sources[-1] if sources else None
+
+
+def release_stale_mounts(mount_point, mounts="/proc/mounts", max_layers=64):
+    """[blinky_time] Lazily unmount the mounts at ``mount_point`` whose drive has gone.
+
+    The bootloader reboots under the mount, and nothing unmounted it, so every flash left
+    one more stale vfat mount stacked on /mnt/uf2-upload (ten on the test box by
+    2026-11-25). Only the top mount can be unmounted, so this works down the stack and
+    stops at the first live drive. Returns how many it unmounted.
+    """
+    done = 0
+    for _ in range(max_layers):
+        top = _mount_source(mount_point, mounts)
+        if top is None or _drive_present(mount_point, top):
+            break
+        try:
+            r = subprocess.run(["sudo", "-n", "umount", "-l", str(mount_point)],
+                               capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            break
+        if r.returncode != 0:
+            break
+        done += 1
+    return done
 
 
 def _drive_present(mount_point, block_dev=None, sys_class_block="/sys/class/block"):
@@ -2234,6 +2266,7 @@ def upload_to_device(port, uf2_path, verbose=False):
         # Phase 6: Verify reboot + post-flash verification
         reboot_ok, new_port = verify_reboot(mount_point, port, device_serial, verbose=verbose)
         if reboot_ok:
+            release_stale_mounts(mount_point)  # [blinky_time: the drive has gone]
             # Ask blinky-server to reconnect (best-effort)
             reconnect_port = new_port or port
             _request_server_reconnect(reconnect_port, verbose=verbose)
@@ -2687,6 +2720,7 @@ def main():
             port = ports[0] if ports else None
             reboot_ok, new_port = verify_reboot(mount_point, port, None, verbose=args.verbose)
             if reboot_ok:
+                release_stale_mounts(mount_point)  # [blinky_time: the drive has gone]
                 print_success(f"UPLOAD SUCCESSFUL ({_elapsed(start_time)})")
                 return 0
             else:
