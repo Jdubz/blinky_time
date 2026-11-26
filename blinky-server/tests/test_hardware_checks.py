@@ -134,18 +134,58 @@ def test_a_deploy_failure_before_the_flash_is_a_rig_error() -> None:
     for step in ("targets", "release", "store"):
         dep = {"status": "error", "failed_step": step, "message": "build service down"}
         assert hc.judge_deploy(dep, before)[0] == "rig", step
-    # The write never took: still the old version.
-    stuck = {
-        "status": "error",
-        "failed_step": "flash",
-        "message": "0/1 devices flashed",
-        "steps": {"flash": {"per_device": {"grid": {"flash": "error", "version": "b220"}}}},
-    }
-    assert hc.judge_deploy(stuck, before)[0] == "rig"
+    # The write never took: still the old version. The shape is run_deploy's own failed step
+    # (the flash result under "detail"), not a hand-made one.
+    from blinky_server.firmware import deploy_pipeline
+
+    def flash_failed(version: str | None) -> dict[str, Any]:
+        result = {
+            "status": "error",
+            "message": "0/1 devices flashed",
+            "per_device": {"grid": {"flash": "error", "version": version}},
+        }
+
+        class Job:
+            progress, progress_message = 0, ""
+
+        async def flash(*a: Any) -> dict[str, Any]:
+            return result
+
+        async def targets(fleet: Any, ids: list[str]) -> list[str]:
+            return ids
+
+        async def release(build_id: str, d: Any) -> dict[str, Any]:
+            return {"tag": "dev", "hex": "x.hex", "version": "b221-dev-x", "sha": "a"}
+
+        async def store(fn: Any, rel: dict[str, Any]) -> str:
+            return "x.hex"
+
+        async def flash_t() -> float:
+            return 0.0
+
+        import asyncio
+
+        mp = pytest.MonkeyPatch()
+        mp.setattr(deploy_pipeline, "_staging_targets", targets)
+        mp.setattr(deploy_pipeline, "_dev_build", release)
+        mp.setattr(deploy_pipeline, "_store_only", store)
+        mp.setattr(deploy_pipeline, "_flash_time", flash_t)
+        try:
+            dep = asyncio.run(
+                deploy_pipeline.run_deploy(
+                    None, Job(), release_tag=None, device_ids=["grid"], download_dir=Path("."),
+                    store_firmware=lambda p, v: p, flash=flash, dev_build="b1",
+                )
+            )  # fmt: skip
+        finally:
+            mp.undo()
+        assert dep["failed_step"] == "flash" and "detail" in dep["steps"]["flash"]
+        return dep
+
+    assert hc.judge_deploy(flash_failed("b220"), before)[0] == "rig"
     # It took and doesn't come back, or comes back wrong: the firmware's.
-    gone = json.loads(json.dumps(stuck))
-    gone["steps"]["flash"]["per_device"]["grid"]["version"] = None
-    assert hc.judge_deploy(gone, before)[0] == hc.NO
+    assert hc.judge_deploy(flash_failed(None), before)[0] == hc.NO
+    assert hc.judge_deploy(flash_failed("b221-dev-x"), before)[0] == hc.NO
     bad = {"status": "error", "failed_step": "verify", "message": "version=b220"}
     assert hc.judge_deploy(bad, before)[0] == hc.NO
     assert hc.judge_deploy({**bad, "failed_step": "settings"}, before)[0] == hc.NO

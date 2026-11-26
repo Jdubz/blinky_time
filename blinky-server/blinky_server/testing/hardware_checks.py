@@ -279,7 +279,9 @@ def judge_deploy(deploy: dict[str, Any], before: dict[str, str | None]) -> tuple
         # Nothing was written: the build service, a download or a package check, the chips.
         return "rig", f"deploy failed before the flash ({step}): {msg}"
     if step == "flash":
-        per = ((deploy.get("steps") or {}).get("flash") or {}).get("per_device") or {}
+        # run_deploy's failed step keeps the flash result under "detail".
+        flash = (deploy.get("steps") or {}).get("flash") or {}
+        per = (flash.get("detail") or flash).get("per_device") or {}
         unchanged = [
             d
             for d, r in per.items()
