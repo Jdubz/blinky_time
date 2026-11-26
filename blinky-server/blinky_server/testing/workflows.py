@@ -32,7 +32,7 @@ from dbos import DBOS
 
 from ..paths import data_dir
 from ..work import durable, jobs
-from . import leds
+from . import detection_latency, leds
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import audio_seconds, kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
@@ -363,7 +363,14 @@ async def validate(req: dict[str, Any]) -> dict[str, Any]:
                 )
                 if r is not None:
                     results.append(r)
-    return {"status": "ok", "tracks": len(tracks), "runs": num_runs, "results": results}
+    return {
+        "status": "ok",
+        "tracks": len(tracks),
+        "runs": num_runs,
+        "results": results,
+        # The chip's detection latency vs the rig's calibration, per device (lagCheckMs - lagMs).
+        "detection_latency": detection_latency.summarize(results, p["devices"]),
+    }
 
 
 # -- parameter sweep -------------------------------------------------------------------------

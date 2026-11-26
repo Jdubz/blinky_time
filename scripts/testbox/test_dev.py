@@ -402,6 +402,13 @@ RUN_REPORT = {
         },
     ],
     "final": {DEV: {"no_reboot": {"pass": True}, "alerts": {"pass": True, "lines": []}}},
+    "detection_latency": {
+        DEV: {  # the full id (the scores carry its first 12 characters)
+            "median_ms": 1.2,
+            "counted": 1,
+            "runs": [{"track": "techno", "offset_ms": 1.2, "counted": True, "why": None}],
+        }
+    },
     "strict": {
         "rules": [
             {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 15.0,
@@ -480,6 +487,9 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
     assert "b220-dev-abcdef01" in report and "flash: ok" in report
     assert "acfUs=7185, plpUs=589, heapPeak=9" in report  # the named timers first
     assert "drumF=0.71" in report and "verdict (health + asserts): PASSED" in report
+    # Each validated track's detection latency, and the run's median (detection_latency).
+    assert "techno 87DE9B58C90A: drumF=0.71, kickR50=0.9, latency +1.2 ms" in report
+    assert "detection latency 87DE9B58C90A: median +1.2 ms over 1 of 1 tracks" in report
     assert "box: DEV mode since" in report
     # The strict rules: a warning is shown, never a failure (the verdict above passed).
     assert "⚠ strict rules (non-blocking):" in report
