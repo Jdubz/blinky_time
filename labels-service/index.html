@@ -82,6 +82,8 @@
   #tracks tbody tr:hover td { background: var(--panel2); }
   .bar { display: inline-block; width: 80px; height: 8px; background: var(--unrev); border-radius: 4px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
   .bar > i { display: block; height: 100%; background: var(--rev); }
+  .sus-high { color: var(--err); } .sus-med { color: var(--warn); }
+  .swatch { display: inline-block; width: 18px; height: 8px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #000d; padding: 6px 14px; border-radius: 6px; display: none; z-index: 20; }
 </style>
 </head>
@@ -111,7 +113,8 @@
     <button id="btn-zout" title="Zoom out (-)">−</button>
     <button id="btn-zin" title="Zoom in (+)">+</button>
     <button id="btn-review" title="Mark region / visible range reviewed (R)">Mark reviewed</button>
-    <button id="btn-next" title="Mark visible reviewed and go to the next screen (Enter)">Reviewed → next</button>
+    <button id="btn-next" title="Mark visible reviewed and go on: the next screen, or the next suspect bar if Settings → Review order is &quot;suspect first&quot; (Enter)">Reviewed → next</button>
+    <button id="btn-suspect" title="Jump to the next suspect bar nobody has marked reviewed yet: red and amber in the suspect strip (J)">Next suspect</button>
   </div>
 </div>
 <div id="view">
@@ -135,6 +138,9 @@
     <div class="setting"><div class="ctl"><label><input type="checkbox" id="loop"> loop</label></div><div class="desc"><strong style="color:var(--text)">Loop.</strong> Repeat the selected region, or what's on screen if nothing is selected. Shortcut <kbd>L</kbd>.</div></div>
     <div class="setting"><div class="ctl"><label><input type="checkbox" id="follow" checked> follow the playhead</label></div><div class="desc"><strong style="color:var(--text)">Follow.</strong> Scroll the view along with playback.</div></div>
     <div class="setting"><div class="ctl"><select id="band"><option value="full">full mix</option><option value="low">low band (kick, 30–150 Hz)</option><option value="mid">mid band (snare, 150 Hz–5 kHz)</option></select></div><div class="desc"><strong style="color:var(--text)">Band solo.</strong> Play only the kick or snare frequency band, to hear one drum under its clicks. Shortcut <kbd>B</kbd> cycles.</div></div>
+  <h3>Reviewing</h3>
+    <div class="setting"><div class="ctl"><select id="review-order"><option value="order">in order</option><option value="suspect">suspect first</option></select></div><div class="desc"><strong style="color:var(--text)">Review order.</strong> What <em>Reviewed → next</em> (<kbd>Enter</kbd>) goes to after marking the screen reviewed. "in order": the next screen. "suspect first": the next suspect bar (red or amber in the suspect strip) that isn't reviewed yet; when none are left it goes on in order and says so. <em>Next suspect</em> (<kbd>J</kbd>) jumps there either way.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="show-expected" checked> show expected hits</label></div><div class="desc"><strong style="color:var(--text)">Expected-hit markers.</strong> Hollow markers in the kick and snare lanes where the track's repeating pattern says a hit should be, the audio has an attack, and there's no label. One click on a marker adds it as a label. They're hints: they're never saved. They hide once there's a label within ±30 ms, and in reviewed parts.</div></div>
   <h3>Editing</h3>
     <div class="setting"><div class="ctl"><label><input type="checkbox" id="snap-add" checked> snap new hits</label></div><div class="desc"><strong style="color:var(--text)">Snap on add.</strong> A hit you add moves to the nearest strong attack within ±25 ms. <kbd>N</kbd> snaps selected hits.</div></div>
     <div class="setting"><div class="ctl"><select id="snap-ref"><option value="attack">attack (150 Hz–5 kHz)</option><option value="lane">own lane band</option></select></div><div class="desc"><strong style="color:var(--text)">Snap target.</strong> What snapping aligns to. "attack" is the transient both drums share; a kick's low-frequency energy builds up a few ms after it.</div></div>
@@ -147,11 +153,13 @@
   <p>You're checking the <span class="k">kick</span> and <span class="s">snare</span> labels of one track at a time. Each track starts with the best automatic labels available (from a drum transcriber such as ADTOF). Fix what's wrong, mark each screen reviewed, and save. The scorer uses your labels once a track is 100% reviewed and saved.</p>
   <h3>Reviewing a track</h3>
   <ol>
-    <li><strong>Pick a track</strong> with <em>Tracks</em> (or <kbd>T</kbd>). The tracks most likely to be wrong are listed first.</li>
+    <li><strong>Pick a track</strong> with <em>Tracks</em> (or <kbd>T</kbd>). Tracks with the most suspect bars left to check are listed first.</li>
+    <li><strong>Start with the suspect bars.</strong> The thin strip above <em>reviewed</em> marks the bars where the automatic labels are most likely wrong: <span class="sus-high">red</span> = check first, <span class="sus-med">amber</span> = check next. Hover it to see why (for example "2 snares missing where the pattern expects them"). <em>Next suspect</em> (<kbd>J</kbd>) jumps to the next one nobody has reviewed; reviewed ones fade. To have <em>Reviewed → next</em> jump there too, set <em>⚙ Settings → Review order</em> to "suspect first".</li>
     <li><strong>Play</strong> (<kbd>Space</kbd>). To hear where the labels are, turn on <em>label clicks</em> in <em>⚙ Settings</em>: a low click at each kick label, a high click at each snare label. A click that doesn't sit on its drum is a bad label. Slowing down (<kbd>2</kbd>, <kbd>3</kbd>) makes small offsets easier to hear.</li>
     <li><strong>Fix</strong> what's wrong:
       <ul>
         <li><em>add:</em> double-click in the kick or snare lane, or press <kbd>K</kbd> / <kbd>S</kbd> at the mouse;</li>
+        <li><em>add an expected hit:</em> hollow markers show where the track's pattern expects a kick or snare that has no label. Listen; if it's really there, click the marker and it becomes a label (or select a region and press <kbd>A</kbd> to add every expected hit in it). Markers you leave alone are never saved;</li>
         <li><em>move:</em> hover a marker until the pointer turns into a hand and the marker lights up, then drag. In the kick lane you grab kicks, in the snare lane snares, in the waveform either. Dragging empty space selects a region instead;</li>
         <li><em>delete:</em> select it and press <kbd>X</kbd>;</li>
         <li><em>swap kick ↔ snare:</em> select it and press <kbd>C</kbd>;</li>
@@ -162,11 +170,13 @@
   </ol>
   <h3>What you're looking at</h3>
   <table class="lanes">
-    <tr><td>overview</td><td>The whole track. Green is reviewed; the box is the current view. Click to jump.</td></tr>
+    <tr><td>overview</td><td>The whole track. Green is reviewed, red and amber are suspect bars; the box is the current view. Click to jump.</td></tr>
     <tr><td>spectrogram</td><td>Frequency over time, 30 Hz–12 kHz. Drums show as vertical streaks.</td></tr>
     <tr><td>waveform</td><td>The full mix. Every label is drawn through it as a line.</td></tr>
     <tr><td class="k">kick lane</td><td>The 30–150 Hz band: the fill is its loudness, the line its onset strength. Peaks in the line are likely kicks. Kick labels are the markers.</td></tr>
     <tr><td class="s">snare lane</td><td>The 150 Hz–5 kHz band, drawn the same way, with the snare labels.</td></tr>
+    <tr><td>expected hits</td><td>Hollow markers in the kick or snare lane: the pattern expects a hit there and the audio has an attack, but there's no label. Click to add. Only a hint.</td></tr>
+    <tr><td>suspect</td><td>Bars to check first: <span class="sus-high">red</span> high priority, <span class="sus-med">amber</span> medium; faded once reviewed. Hover for the reason. The overview shows the same colours.</td></tr>
     <tr><td>reviewed</td><td>Green where you've marked reviewed, red where you haven't.</td></tr>
   </table>
   <p class="dim">The panels under the lanes show the selection, an <em>offset check</em> (labels consistently early or late against the attack), and <em>checks</em> (two same-drum hits closer than 20 ms; <kbd>I</kbd> jumps to the next).</p>
@@ -178,6 +188,7 @@
     <tr><td><kbd>Shift+K</kbd> / <kbd>Shift+S</kbd> kick / snare clicks</td><td><kbd>X</kbd> / <kbd>Del</kbd> delete selected</td><td><kbd>U</kbd> next unreviewed gap, <kbd>I</kbd> next check issue</td></tr>
     <tr><td><kbd>B</kbd> band solo full → low → mid</td><td><kbd>←</kbd> <kbd>→</kbd> nudge 1 ms, <kbd>Shift</kbd> 5 ms (no selection: pan)</td><td><kbd>+</kbd> / <kbd>−</kbd> zoom, <kbd>0</kbd> whole track, <kbd>Z</kbd> 1 s zoom ↔ back</td></tr>
     <tr><td><kbd>T</kbd> track list, <kbd>?</kbd> this help, <kbd>Esc</kbd> close</td><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> select next / previous hit</td><td><kbd>Home</kbd> / <kbd>End</kbd> start / end</td></tr>
+    <tr><td><kbd>J</kbd> next suspect bar</td><td><kbd>A</kbd> add the expected hits in the region (or the one at the mouse)</td><td></td></tr>
     <tr><td><kbd>Ctrl+S</kbd> save</td><td><kbd>Ctrl+A</kbd> select hits in region (or view), <kbd>Esc</kbd> clear</td><td><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Shift+Z</kbd> / <kbd>Ctrl+Y</kbd> redo</td></tr>
     <tr><td colspan="3">Mouse: click = cursor / select a hit (<kbd>Shift</kbd> adds) · drag a hit = move · drag empty space = region (selects its hits; in a lane, that lane's class) · double-click in the kick or snare lane = add · wheel = zoom · <kbd>Shift</kbd>+wheel or sideways scroll = pan · overview = jump.</td></tr>
   </table>
@@ -187,10 +198,10 @@
     <strong>Tracks</strong><span class="dim" id="tracks-sum"></span><span class="spacer"></span><button id="btn-tracks-close">Close (Esc)</button>
   </div>
   <table>
-    <thead><tr><th>#</th><th>track</th><th>reviewed</th><th>labels</th><th class="k">kicks</th><th class="s">snares</th><th title="1 − mean per-class F-measure (±50 ms) between the two best automatic label sets: higher = they disagree more, review first">seed disagreement</th><th>published</th><th>updated</th></tr></thead>
+    <thead><tr><th>#</th><th>track</th><th>reviewed</th><th title="The share of the track's suspect bars (red and amber) not yet marked reviewed">suspect left</th><th>labels</th><th class="k">kicks</th><th class="s">snares</th><th title="1 − mean per-class F-measure (±50 ms) between the two best automatic label sets: higher = they disagree more, review first">seed disagreement</th><th>published</th><th>updated</th></tr></thead>
     <tbody id="tracks-body"></tbody>
   </table>
-  <p class="dim">Sorted worst first: unfinished tracks by disagreement, then finished ones. A track is done when 100% of it is marked reviewed and saved.</p>
+  <p class="dim">Sorted by work left: tracks with suspect bars to check, most left first; then the other unfinished tracks by seed disagreement; finished ones last. A track is done when 100% of it is marked reviewed.</p>
 </div>
 <div id="toast"></div>
 
@@ -324,14 +335,15 @@ const SNAP_WIN = 0.025;        // snap search: +-25 ms
 const HIT_PX = 10;             // marker hit radius (CSS px): forgiving, with a grab cursor and highlight on hover
 const MIN_VIEW = 0.2, DEFAULT_VIEW = 6;
 const DUP_WIN = 0.020;         // same-class hits closer than this are flagged
+const EXP_WIN = 0.030;         // an expected-hit marker hides when a label of its class is this close
 const LANES = [
   { id: "ruler", h: 18 }, { id: "spec", h: 72 }, { id: "wave", h: 90 },
-  { id: "kick", h: 84 }, { id: "snare", h: 84 }, { id: "rev", h: 12 },
+  { id: "kick", h: 84 }, { id: "snare", h: 84 }, { id: "sus", h: 12 }, { id: "rev", h: 12 },
 ];
 let y0 = 0; for (const l of LANES) { l.y = y0; y0 += l.h; }
 const STACK_H = y0;
 const LANE = Object.fromEntries(LANES.map(l => [l.id, l]));
-const COL = { kick: "#ff9f1c", snare: "#3ec5ff", hihat: "#9aa0ad", sel: "#ffffff", rev: "#2bb673", unrev: "#5a2a2a", play: "#ff4d6d", cursor: "#ffd75e" };
+const COL = { kick: "#ff9f1c", snare: "#3ec5ff", hihat: "#9aa0ad", sel: "#ffffff", rev: "#2bb673", unrev: "#5a2a2a", play: "#ff4d6d", cursor: "#ffd75e", high: "#e5484d", medium: "#e0a800" };
 
 const $ = (id) => document.getElementById(id);
 const S = {
@@ -340,7 +352,7 @@ const S = {
   onsets: [], reviewed: [], sel: new Set(),
   undo: [], redo: [],
   view: { start: 0, dur: DEFAULT_VIEW }, prevZoom: null,
-  cursor: 0, region: null, hover: null, hoverHit: null, drag: null, flash: null,
+  cursor: 0, region: null, hover: null, hoverHit: null, hoverExp: null, drag: null, flash: null,
   lastSnap: null, issueIdx: -1,
 };
 // Where the API lives (see the meta tag), and what kind of server it is (/api/config).
@@ -383,6 +395,87 @@ function subRange(a, b) {
 }
 function reviewedSeconds() { return S.reviewed.reduce((s, r) => s + (r[1] - r[0]), 0); }
 function isComplete() { const m = mergeRanges(S.reviewed); return m.length === 1 && m[0][0] <= 0.1 && m[0][1] >= S.duration - 0.1; }
+
+// ---------------------------------------------------------------- suspect bars & expected hits (hints, never saved)
+// From the track's suspect map (blinky-corpus edm/drums_suspect/, via /api/track's "suspect"). An API
+// that doesn't send it yet just means no strip, no markers and no suspect-first order.
+function susBars() { return (S.meta && S.meta.suspect && S.meta.suspect.bars) || []; }
+function expHits() { return (S.meta && S.meta.suspect && S.meta.suspect.expected) || []; }
+function plural(n, w) { return `${n} ${w}${n === 1 ? "" : "s"}`; }
+function suspectWhy(b) {
+  const parts = [], miss = b.missing_kick + b.missing_snare, extra = b.unexpected_kick + b.unexpected_snare;
+  const two = (k, sn) => [k ? plural(k, "kick") : "", sn ? plural(sn, "snare") : ""].filter(Boolean).join(" and ");
+  if (miss) parts.push(`${two(b.missing_kick, b.missing_snare)} missing where the pattern expects ${miss === 1 ? "one" : "them"}`);
+  if (b.disagree) parts.push(`mix and stem labels disagree on ${plural(b.disagree, "slot")}`);
+  if (extra) parts.push(`${two(b.unexpected_kick, b.unexpected_snare)} where the pattern has none`);
+  if (b.filter) parts.push("filter sweep");
+  return `${b.tier === "high" ? "Check first" : "Check next"}: ${parts.join(" · ") || "unusual bar"}`;
+}
+function barLeft(b) { return rangeMinus([[b.start, b.end]], S.reviewed).reduce((s, r) => s + r[1] - r[0], 0); }
+function barReviewed(b) { return barLeft(b) <= 0.05 * (b.end - b.start); }
+function susAt(t) { return susBars().find(b => b.start <= t && t < b.end) || null; }
+function inReviewed(t) { return S.reviewed.some(([a, b]) => a <= t && t <= b); }
+function hasLabelNear(t, type) {
+  for (let i = lowerBound(t - EXP_WIN); i < S.onsets.length && S.onsets[i].time <= t + EXP_WIN; i++) if (S.onsets[i].type === type) return true;
+  return false;
+}
+function expShown(e) { return $("show-expected").checked && !inReviewed(e.time) && !hasLabelNear(e.time, e.type); }
+function nextSuspectBar() {
+  const open = susBars().filter(b => !barReviewed(b));
+  return open.find(b => b.start > S.cursor + 1e-3) || open[0] || null;
+}
+function gotoSuspect(b) {
+  const left = susBars().filter(x => !barReviewed(x)).length;
+  S.cursor = b.start;
+  setView(b.start - 0.1, Math.max(S.view.dur, b.end - b.start + 0.3));
+  restartIfPlaying(S.cursor); updateInfo();
+  toast(`${fmtTime(b.start)} · ${suspectWhy(b)} · ${plural(left, "suspect bar")} left`, 4500);
+}
+function nextSuspect() {
+  if (!S.duration) return;
+  if (!susBars().length) return toast("this track has no suspect map: review it in order");
+  const b = nextSuspectBar();
+  if (!b) return toast("no suspect bars left: every red and amber bar is reviewed");
+  gotoSuspect(b);
+}
+function reviewedNext() {  // the Enter key and the "Reviewed → next" button
+  const [a, b] = visibleRange();
+  edit(() => addRange(a, b));
+  let why = "";
+  if ($("review-order").value === "suspect") {
+    const nb = susBars().length ? nextSuspectBar() : null;
+    if (nb) return gotoSuspect(nb);
+    why = susBars().length ? "no suspect bars left: going on in order" : "no suspect map for this track: going on in order";
+  }
+  if (b >= S.duration - 0.01) toast((why ? why + " · " : "") + (isComplete() ? "end of track · 100% reviewed" : "end of track · U finds unreviewed gaps"), 4000);
+  else { pageBy(1); if (why) toast(why, 3500); }
+}
+function hitExpected(x, lane) {
+  if (lane !== "kick" && lane !== "snare") return null;
+  let best = null, bd = HIT_PX + 1;
+  for (const e of expHits()) {
+    if (e.type !== lane) continue;
+    const d = Math.abs(t2x(e.time) - x);
+    if (d < bd && expShown(e)) { bd = d; best = e; }
+  }
+  return best;
+}
+function acceptExpected(list) {  // markers → real labels, through the normal edit (an "add" op)
+  if (!list.length) return;
+  if (list.length === 1) { addOnset(list[0].time, list[0].type); return; }
+  const snap = $("snap-add").checked, ids = [];
+  edit(() => { for (const e of list) { const s = snap ? snapTime(e.time, e.type) : null, id = newId(); ids.push(id); S.onsets.push({ id, time: s === null ? e.time : s, type: e.type }); } S.sel = new Set(ids); });
+  toast(`added ${plural(list.length, "expected hit")} as labels`);
+}
+function acceptKey() {
+  if (S.region) {
+    const [a, b] = S.region, list = expHits().filter(e => e.time >= a && e.time <= b && expShown(e));
+    return list.length ? acceptExpected(list) : toast("no expected-hit markers in the region");
+  }
+  const e = S.hover ? hitExpected(S.hover.x, S.hover.lane) : null;
+  if (e) return acceptExpected([e]);
+  toast("point at a hollow expected-hit marker, or select a region, then press A");
+}
 
 // ---------------------------------------------------------------- canvases & view
 const cvMain = $("main"), cvOv = $("overlay"), cvOver = $("overview");
@@ -437,9 +530,11 @@ function drawMain() {
   if (S.ana) { drawSpec(g); drawLaneEnv(g, "kick", S.ana.low, COL.kick); drawLaneEnv(g, "snare", S.ana.mid, COL.snare); }
   else { g.fillStyle = "#8a90a0"; g.fillText(S.analyzing || "analysing…", 12, LANE.spec.y + 20); }
   drawWave(g);
+  drawSuspect(g);
   drawReviewed(g);
   if (S.region) { const x0 = t2x(S.region[0]), x1 = t2x(S.region[1]); g.fillStyle = "rgba(120,160,255,0.16)"; g.fillRect(x0, LANE.spec.y, x1 - x0, STACK_H - LANE.spec.y); g.fillStyle = "rgba(120,160,255,0.8)"; g.fillRect(x0, 0, 1, STACK_H); g.fillRect(x1, 0, 1, STACK_H); }
   drawRefs(g);
+  drawExpected(g);
   drawMarkers(g);
   // lane captions
   g.font = "10px system-ui, sans-serif"; g.fillStyle = "#8a90a0";
@@ -450,6 +545,7 @@ function drawMain() {
     g.fillStyle = COL.snare; g.fillText(`SNARE  ${b.mid[0]}–${b.mid[1] / 1000} kHz${$("show-hats").checked ? "   · hihat ticks (read-only) on top" : ""}`, 4, LANE.snare.y + 10);
   }
   g.fillStyle = "#8a90a0"; g.fillText("reviewed", W - 50, LANE.rev.y + 10);
+  if (susBars().length) g.fillText("suspect", W - 50, LANE.sus.y + 10);
 }
 
 function niceStep(minSec) { const steps = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60]; for (const s of steps) if (s >= minSec) return s; return 120; }
@@ -521,6 +617,29 @@ function drawReviewed(g) {
   g.fillStyle = COL.rev;
   for (const [a, b] of S.reviewed) { if (b < S.view.start || a > S.view.start + S.view.dur) continue; const x0 = t2x(a), x1 = t2x(b); g.fillRect(x0, L.y + 2, Math.max(1, x1 - x0), L.h - 4); g.globalAlpha = 0.07; g.fillRect(x0, LANE.ruler.y, x1 - x0, LANE.rev.y); g.globalAlpha = 1; }
 }
+function drawSuspect(g) {
+  const L = LANE.sus, v0 = S.view.start, v1 = S.view.start + S.view.dur;
+  for (const b of susBars()) {
+    if (b.end < v0 || b.start > v1) continue;
+    g.fillStyle = COL[b.tier];
+    g.globalAlpha = 0.22; g.fillRect(t2x(b.start), L.y + 2, Math.max(1, t2x(b.end) - t2x(b.start) - 1), L.h - 4);  // reviewed: faded
+    g.globalAlpha = 0.95;
+    for (const [a, z] of rangeMinus([[b.start, b.end]], S.reviewed)) g.fillRect(t2x(a), L.y + 2, Math.max(1, t2x(z) - t2x(a) - 1), L.h - 4);
+  }
+  g.globalAlpha = 1;
+}
+function drawExpected(g) {
+  const t0 = S.view.start - 0.05, t1 = S.view.start + S.view.dur + 0.05;
+  for (const e of expHits()) {
+    if (e.time < t0 || e.time > t1 || !expShown(e)) continue;
+    const L = LANE[e.type], x = Math.round(t2x(e.time)) + 0.5;
+    g.strokeStyle = COL[e.type]; g.globalAlpha = 0.8; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x - 5, L.y + 12); g.lineTo(x + 5, L.y + 12); g.lineTo(x, L.y + 20); g.closePath(); g.stroke();
+    g.setLineDash([2, 3]); g.lineWidth = 1; g.globalAlpha = 0.6;
+    g.beginPath(); g.moveTo(x, L.y + 21); g.lineTo(x, L.y + L.h - 10); g.stroke(); g.setLineDash([]);
+  }
+  g.globalAlpha = 1; g.lineWidth = 1;
+}
 function drawRefs(g) {
   const refs = S.meta && S.meta.references || {}, which = $("ref").value;
   const t0 = S.view.start - 0.01, t1 = S.view.start + S.view.dur + 0.01;
@@ -554,7 +673,8 @@ function drawOverlay() {
   // The grabbable marker under the mouse, recomputed on every redraw (not only on mousemove), so a
   // delete, class swap, undo/redo or zoom never leaves a stale highlight or grab cursor behind.
   S.hoverHit = S.duration && S.hover && !S.drag ? hitMarker(S.hover.x, S.hover.lane) : null;
-  if (!S.drag) cvOv.style.cursor = S.hoverHit ? "grab" : "crosshair";
+  S.hoverExp = S.duration && S.hover && !S.drag && !S.hoverHit ? hitExpected(S.hover.x, S.hover.lane) : null;
+  if (!S.drag) cvOv.style.cursor = S.hoverHit ? "grab" : S.hoverExp ? "pointer" : "crosshair";
   if (!S.duration) return;
   if (S.hoverHit && !S.drag) {
     const o = S.hoverHit, L = LANE[o.type], x = Math.round(t2x(o.time)) + 0.5;
@@ -564,7 +684,22 @@ function drawOverlay() {
     g.globalAlpha = 1; g.lineWidth = 1;
     g.font = "10px system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.fillText(`drag to move this ${o.type}`, x + 9, L.y + L.h - 14);
   }
-  if (S.hover && !S.drag && !S.hoverHit) { g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(Math.round(S.hover.x), LANE.spec.y, 1, STACK_H - LANE.spec.y); g.font = "10px ui-monospace, monospace"; g.fillStyle = "#cfd3dc"; g.fillText(fmtTime(S.hover.t), S.hover.x + 4, LANE.wave.y + 10); }
+  if (S.hoverExp) {
+    const e = S.hoverExp, L = LANE[e.type], x = Math.round(t2x(e.time)) + 0.5;
+    g.strokeStyle = "#ffffff"; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x - 7, L.y + 10); g.lineTo(x + 7, L.y + 10); g.lineTo(x, L.y + 22); g.closePath(); g.stroke(); g.lineWidth = 1;
+    g.font = "10px system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.fillText(`expected ${e.type}: click to add it as a label`, x + 9, L.y + L.h - 14);
+  }
+  if (S.hover && S.hover.lane === "sus" && !S.drag) {
+    const b = susAt(S.hover.t);
+    if (b) {
+      const text = suspectWhy(b) + (barReviewed(b) ? " (reviewed)" : "");
+      g.font = "11px system-ui, sans-serif"; const w = g.measureText(text).width + 12, x = clamp(S.hover.x - w / 2, 2, W - w - 2), y = LANE.sus.y - 22;
+      g.fillStyle = "#000d"; g.fillRect(x, y, w, 18); g.strokeStyle = COL[b.tier]; g.strokeRect(x + 0.5, y + 0.5, w - 1, 17);
+      g.fillStyle = "#ffffff"; g.fillText(text, x + 6, y + 13);
+    }
+  }
+  if (S.hover && !S.drag && !S.hoverHit && !S.hoverExp && S.hover.lane !== "sus") { g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(Math.round(S.hover.x), LANE.spec.y, 1, STACK_H - LANE.spec.y); g.font = "10px ui-monospace, monospace"; g.fillStyle = "#cfd3dc"; g.fillText(fmtTime(S.hover.t), S.hover.x + 4, LANE.wave.y + 10); }
   { const x = Math.round(t2x(S.cursor)) + 0.5; g.strokeStyle = COL.cursor; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.setLineDash([]); }
   if (P.playing) { const x = Math.round(t2x(playPos())) + 0.5; g.strokeStyle = COL.play; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.lineWidth = 1; }
   if (S.flash && performance.now() < S.flash.until) { const x = t2x(S.flash.t); g.font = "bold 11px ui-monospace, monospace"; g.fillStyle = "#000c"; const w = g.measureText(S.flash.text).width; g.fillRect(x + 6, S.flash.y - 11, w + 6, 15); g.fillStyle = "#fff"; g.fillText(S.flash.text, x + 9, S.flash.y); }
@@ -580,6 +715,11 @@ function drawOverview() {
   }
   if (overviewCache) g.drawImage(overviewCache, 0, 0, W, 36);
   const ox = (t) => t / S.duration * W;
+  for (const b of susBars()) {
+    g.fillStyle = COL[b.tier]; g.globalAlpha = barReviewed(b) ? 0.25 : 0.95;
+    g.fillRect(ox(b.start), 26, Math.max(1, ox(b.end) - ox(b.start)), 4);
+  }
+  g.globalAlpha = 1;
   g.fillStyle = COL.unrev; g.fillRect(0, 31, W, 4); g.fillStyle = COL.rev;
   for (const [a, b] of S.reviewed) g.fillRect(ox(a), 31, Math.max(1, ox(b) - ox(a)), 4);
   g.strokeStyle = "#ffd75e"; g.lineWidth = 1; g.strokeRect(ox(S.view.start) + 0.5, 0.5, Math.max(2, ox(S.view.dur) - 1), 35);
@@ -760,7 +900,10 @@ async function loadTracks() {
   const j = await api("/api/tracks"); S.tracks = j.tracks; renderTracks();
 }
 function renderTracks() {
-  const rows = [...S.tracks].sort((a, b) => (a.complete - b.complete) || ((b.disagreement ?? -1) - (a.disagreement ?? -1)) || ((a.reviewed_share ?? 0) - (b.reviewed_share ?? 0)) || a.stem.localeCompare(b.stem));
+  // Work left first: unfinished tracks with suspect bars to check (most left first), then by seed
+  // disagreement. An API without suspect_left sorts as before.
+  const work = (t) => (!t.complete && t.suspect_left > 0 ? t.suspect_left : 0);
+  const rows = [...S.tracks].sort((a, b) => (a.complete - b.complete) || ((work(b) > 0) - (work(a) > 0)) || (work(b) - work(a)) || ((b.disagreement ?? -1) - (a.disagreement ?? -1)) || ((a.reviewed_share ?? 0) - (b.reviewed_share ?? 0)) || a.stem.localeCompare(b.stem));
   const done = S.tracks.filter(t => t.complete).length;
   $("tracks-sum").textContent = `${done} / ${S.tracks.length} complete`;
   $("tracks-body").innerHTML = "";
@@ -769,6 +912,8 @@ function renderTracks() {
     const cells = [
       String(i + 1), t.stem,
       `<span class="bar"><i style="width:${(100 * share).toFixed(1)}%"></i></span>${t.complete ? '<span class="ok">done</span>' : (100 * share).toFixed(0) + "%"}`,
+      t.suspect_left === undefined || t.suspect_left === null ? '<span class="dim">—</span>'
+        : `<span class="${t.suspect_left > 0 ? "sus-high" : "ok"}" title="${Math.round(t.suspect_s || 0)} s of suspect bars">${t.suspect_left > 0 ? (100 * t.suspect_left).toFixed(0) + "%" : "none"}</span>`,
       t.label_source === "human" ? '<span class="badge human">human</span>' : t.label_source === "none" ? '<span class="badge empty">none</span>'
         : `<span class="badge ${seedBad(t.label_source) ? "bad" : "seed"}">${escapeHtml(seedLabel(t.label_source))}</span>`,
       String(t.counts.kick), String(t.counts.snare),
@@ -967,7 +1112,7 @@ function updateInfo() {
   $("counts").innerHTML = `<span class="k">${nk} kicks</span> · <span class="s">${ns} snares</span>`;
   const rs = reviewedSeconds(), share = S.duration ? 100 * rs / S.duration : 0;
   const sf = S.meta.started_from || {};
-  $("info-track").innerHTML = `${S.duration ? fmtTime(S.duration) : "…"} · reviewed <b class="${isComplete() ? "ok" : ""}">${share.toFixed(1)}%</b>${isComplete() ? " (complete)" : ""}<br>started from: ${escapeHtml(String(sf.source || "?"))} ${sf.file ? `<span class="dim">${escapeHtml(sf.file)}</span>` : ""}<br><span class="dim">sha ${S.meta.audio_sha256.slice(0, 12)}…</span>`;
+  $("info-track").innerHTML = `${S.duration ? fmtTime(S.duration) : "…"} · reviewed <b class="${isComplete() ? "ok" : ""}">${share.toFixed(1)}%</b>${isComplete() ? " (complete)" : ""}<br>started from: ${escapeHtml(String(sf.source || "?"))} ${sf.file ? `<span class="dim">${escapeHtml(sf.file)}</span>` : ""}<br><span class="dim">sha ${S.meta.audio_sha256.slice(0, 12)}…</span>${susInfo()}`;
   const sel = selected();
   let si = sel.length ? `${sel.length} selected` : "none · Tab selects the next hit";
   if (sel.length === 1) { const o = sel[0], s = snapTime(o.time, o.type); si = `<span class="${o.type[0]}">${o.type}</span> @ ${o.time.toFixed(4)} s<br>onset peak: ${s === null ? "none within ±25 ms" : fmtMs(s - o.time) + " (N snaps)"}`; }
@@ -979,6 +1124,12 @@ function updateInfo() {
   const iss = findIssues();
   $("info-checks").innerHTML = iss.length ? `<span class="bad">${iss.length} same-class pairs &lt; ${DUP_WIN * 1000} ms</span> · <a class="link" id="next-issue">next (I)</a>` : `<span class="ok">no same-class pairs &lt; ${DUP_WIN * 1000} ms</span>`;
   const ni = $("next-issue"); if (ni) ni.onclick = nextIssue;
+  const nsl = $("next-suspect"); if (nsl) nsl.onclick = nextSuspect;
+}
+function susInfo() {
+  const bars = susBars(); if (!bars.length) return "";
+  const left = bars.filter(b => !barReviewed(b)).length, ex = expHits().filter(e => expShown(e)).length;
+  return `<br>suspect bars: <b class="${left ? "" : "ok"}">${left}</b> of ${bars.length} left · <a class="link" id="next-suspect">next (J)</a>${ex ? ` · ${plural(ex, "expected hit")} to check` : ""}`;
 }
 function nextIssue() {
   const iss = findIssues(); if (!iss.length) return toast("no issues");
@@ -1008,6 +1159,8 @@ cvOv.addEventListener("mousedown", (e) => {
   if (!S.duration || e.button !== 0) return;
   cvOv.focus();
   const { x, y } = evPos(e), lane = laneAt(y), t = x2t(x), hit = hitMarker(x, lane);
+  const ex = hit || e.shiftKey ? null : hitExpected(x, lane);
+  if (ex) { acceptExpected([ex]); drawAll(); e.preventDefault(); return; }
   if (hit) {
     if (e.shiftKey) { S.sel.has(hit.id) ? S.sel.delete(hit.id) : S.sel.add(hit.id); }
     else if (!S.sel.has(hit.id)) S.sel = new Set([hit.id]);
@@ -1053,6 +1206,11 @@ cvOv.addEventListener("wheel", (e) => {
   if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) setView(S.view.start + (e.deltaX || e.deltaY) * S.view.dur / W);
   else zoomAt(Math.exp(e.deltaY * 0.0015), x2t(x));
 }, { passive: false });
+cvOver.addEventListener("mousemove", (e) => {
+  if (!S.duration) return;
+  const b = susAt((e.clientX - cvOver.getBoundingClientRect().left) / W * S.duration);
+  cvOver.title = b ? suspectWhy(b) + (barReviewed(b) ? " (reviewed)" : "") : "The whole track: click to jump";
+});
 function overviewSeek(e) { const r = cvOver.getBoundingClientRect(), t = (e.clientX - r.left) / W * S.duration; setView(t - S.view.dur / 2); }
 cvOver.addEventListener("mousedown", (e) => { if (!S.duration) return; overviewSeek(e); const mv = (ev) => overviewSeek(ev), up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); }; window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up); });
 
@@ -1100,7 +1258,9 @@ document.addEventListener("keydown", (e) => {
     case "Tab": stepSelect(e.shiftKey ? -1 : 1); break;
     case "Escape": S.sel.clear(); S.region = null; drawAll(); updateInfo(); break;
     case "r": markReviewed(!e.shiftKey); break;
-    case "Enter": { const [a, b] = visibleRange(); edit(() => addRange(a, b)); if (b >= S.duration - 0.01) toast(isComplete() ? "end of track · 100% reviewed: Save (Ctrl+S)" : "end of track · U finds unreviewed gaps"); else pageBy(1); break; }
+    case "Enter": reviewedNext(); break;
+    case "j": nextSuspect(); break;
+    case "a": acceptKey(); break;
     case "PageDown": pageBy(1); break;
     case "PageUp": pageBy(-1); break;
     case "u": nextUnreviewed(); break;
@@ -1131,12 +1291,15 @@ $("btn-play").onclick = togglePlay; $("btn-undo").onclick = undo; $("btn-redo").
 $("btn-zin").onclick = () => zoomAt(0.5, S.view.start + S.view.dur / 2); $("btn-zout").onclick = () => zoomAt(2, S.view.start + S.view.dur / 2);
 $("btn-review").onclick = () => S.duration && markReviewed(true);
 $("btn-next").onclick = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+$("btn-suspect").onclick = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
 for (const id of ["rate", "loop", "band"]) $(id).addEventListener("change", (e) => { e.target.blur(); restartIfPlaying(); });
 $("ref").addEventListener("change", (e) => { e.target.blur(); drawMain(); });
 $("snap-ref").addEventListener("change", (e) => { e.target.blur(); updateInfo(); });
 $("show-hats").addEventListener("change", () => drawMain());
+$("show-expected").addEventListener("change", () => drawAll());
+$("review-order").addEventListener("change", (e) => { e.target.blur(); toast(e.target.value === "suspect" ? "Reviewed → next now goes to the next suspect bar" : "Reviewed → next now goes to the next screen"); });
 // ---------------------------------------------------------------- settings, help, remembered prefs
-const PREF_IDS = ["rate", "follow", "click-kick", "click-snare", "click-vol", "music-vol", "band", "snap-add", "snap-ref", "ref", "show-hats"];
+const PREF_IDS = ["rate", "follow", "click-kick", "click-snare", "click-vol", "music-vol", "band", "snap-add", "snap-ref", "ref", "show-hats", "review-order", "show-expected"];
 const PREF_KEY = "drumReviewer.prefs.v1", HELP_KEY = "drumReviewer.helpSeen.v1";
 function loadPrefs() {
   let p = {};
