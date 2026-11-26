@@ -91,9 +91,20 @@ The steps in the second part are ffplay: its SDL callback hands out silence, a c
 
 **What the measurement can't see:** the speaker's own processing, the air, and the chip's mic buffering and detection. All of these are fixed for a rig and a firmware. The server adds them as one calibrated constant, `audio_player.AUDIO_PATH_MS` (override: `BLINKY_AUDIO_PATH_MS`). The run is then scored at `lag = (DAC start - spawn) + AUDIO_PATH_MS`, its drum score says `lagSource: measured`, and the scorer's search over the music becomes the cross-check (`lagCheckMs`, `lagNote`). A chip whose detection latency differs from the calibrated one shows up as `lagCheckMs - lagMs`. This follows the evaluation convention of removing a known delay as a fixed, calibrated constant (madmom's `delay`; Böck et al., ISMIR 2012).
 
+**Calibration (2026-11-25, firmware `b211-dev-c5f4d51a`, 28 runs: techno-machine-drum ×5, techno-minimal-01 ×5, edm/ ×1):**
+
+| | measured |
+|---|---|
+| the player's spawn to the first sample at the DAC (`dac_offset_ms`) | 155-198 ms, median 174, sd 11: Python and ffmpeg start-up, measured each run |
+| the estimates' spread within a run | 0.86-0.99 ms (one run 4.0 ms); no underruns, no fallbacks |
+| `AUDIO_PATH_MS` = the scorer's lag minus the DAC offset, on the 14 runs it resolves | 42.0-49.7 ms, median 45.2, sd 2.5 (the 14 ambiguous runs: 41-50) |
+| the music's check against the measured lag (`lagCheckMs - lagMs`), all 28 runs at 45 ms | -4.2 to +4.9 ms, sd 2.7 |
+
+To recalibrate after a change of speaker, placement or detection latency: run validation with `persist_raw`. On the runs the scorer resolves, take the median of `drums.lagCheckMs` minus `audio_start.dac_offset_ms` (or of `lagMs` minus it, with `BLINKY_AUDIO_PATH_MS` empty so the lag is searched).
+
 **Recorded:** every raw capture keeps `audio_start_epoch_ms` (the spawn: every `t` is measured from it) and adds `audio_dac_start_epoch_ms` and `audio_start` (offset, spread, the lag used, or why there was none). Every validation result carries `audio_start`, and every score carries `audioStart`.
 
-**Failures are explicit.** If the player can't play anything (no libasound, the device won't open), ffplay plays the file as before. The same applies to a timestamp spread over 10 ms, an underrun (the audio after it is late by the gap) or a missing calibration. In all these cases the run isn't measured: `audioStart.measured` is false with the reason, the scorer searches as before, and the server logs a `[FALLBACK]` line.
+**Failures are explicit.** If the player can't play anything (no libasound, the device won't open), ffplay plays the file as before. A timestamp spread over 10 ms, an underrun (the audio after it is late by the gap) or a missing calibration leaves the audio playing but the start untrusted. In all these cases the run isn't measured: `audioStart.measured` is false with the reason, the scorer searches as before, and the server logs a `[FALLBACK]` line.
 
 ## Recovery chain (hands-off)
 
@@ -132,7 +143,7 @@ Two behaviours to expect: the server doesn't auto-recover a device within 30 min
    - State: `python3 ~/blinky-deploy/scripts/testbox/deploy.py --status` (`--dry-run` gates the latest master and changes nothing).
    - Log: `journalctl -u blinky-deploy`.
    - Never restart the server against the dev clone. To try a branch, run it on another port from `~/blinky_time`.
-4. **USB speaker as the default ALSA card.** The server's player (`testing/alsa_play.py`, run by `audio_player.py`) writes to `plughw` on the default card and measures when the first sample reached the DAC (see "Audio start" below). Its ffplay fallback uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`. Pi OS Lite has no PipeWire, so without this both play to HDMI. Put the card's name (from `aplay -l`, the word after `card N:`) in `/etc/asound.conf` or the server user's `~/.asoundrc`, by name and with the `!` override (USB card numbers can change between boots, and a plain `defaults.pcm.card <name>` is rejected as "card is not a string"):
+4. **USB speaker as the default ALSA card.** The server's player (`testing/alsa_play.py`, run by `audio_player.py`) writes to `plughw` on the default card and measures when the first sample reached the DAC (see "Audio start" above). Its ffplay fallback uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`. Pi OS Lite has no PipeWire, so without this both play to HDMI. Put the card's name (from `aplay -l`, the word after `card N:`) in `/etc/asound.conf` or the server user's `~/.asoundrc`, by name and with the `!` override (USB card numbers can change between boots, and a plain `defaults.pcm.card <name>` is rejected as "card is not a string"):
    ```
    defaults.pcm.!card Pebbles
    defaults.ctl.!card Pebbles
