@@ -98,6 +98,24 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 
 - **Record mode (#243):** wanted, but only after a pass at audio, smoothness and ESP32-S3 support (owner, 2026-11-23). Start with the #243 re-scope; its phone checks are listed there.
 
+## Product: two UIs and the hosted tools (owner, 2026-11-25; on the roadmap, not top priority)
+
+Today one app, blinky-console ("Blinky Fleet"), is both the fleet UI (blinky-server mounts the build) and the public site blinky-time.joshwentworth.com (the same build on Firebase, with `VITE_FIRMWARE_UPDATES=on`). They become two UIs:
+
+- **Fleet UI** (served by blinky-server on the fleet server and the test box): fleet operations over many devices, deploys, and the test box's state (mode, queue, hardware checks).
+- **Public site** (blinky-time.joshwentworth.com): single-device management for wearables at shows and events.
+  - Connect to one device: Web Serial now, Bluetooth once that path passes on hardware (`BLE_UPDATES_ENABLED`).
+  - Change its settings.
+  - Turn on record mode (#243). The feature itself still waits for P1–P3 (see "Later"); its controls live here.
+  - Update its firmware with the signed OTA flow that is live today (blinky-firmware `docs/WEB_FLASHER.md`).
+  - Link to further resources and pages, such as the label reviewer and docs.
+- **Shared code:** the device protocol, schemas and firmware services stay one shared package, so the two UIs can't drift apart.
+- **The label reviewer becomes a page of the public site, backed by a long-lived production service on the build host.** Today it's blinky-corpus's `tools/drum-reviewer`, a stdlib server started by hand on the test box from a corpus clone.
+  - **The service:** deployed like the build service, as a stack in the platform's private infrastructure repo. It serves the corpus audio and labels, and takes saves.
+  - **Saves:** a saved track becomes a blinky-corpus PR. Only the owner can write.
+  - **Access:** the site is on the internet, so reads and writes go through authentication (e.g. an access proxy in front of the service). The owner decides the method.
+  - **Topology:** the browser reaches the service only through a public product URL; nothing else in the repos names where it runs.
+
 ## Parked
 
 - On-device NN training for the nRF52840 (see `ML_IMPROVEMENT_PLAN.md`).
