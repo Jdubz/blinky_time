@@ -3,14 +3,17 @@
 flash it to the box's test chips and run only the checks the change needs, in minutes, before
 CI. Run it on the box from inside a blinky-firmware checkout (or with --repo PATH).
 
-  dev.py try [REF] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
+  dev.py try [REF] [--hw] [--tracks a,b] [--health MIN] [--pace] [--camera] [--wip]
       everything in one command: enters dev mode if the box isn't in it (and says so), builds,
-      flashes, runs the info check plus the ones asked for, and prints a short report
+      flashes, runs the info check plus the ones asked for (--hw: the blocking hardware
+      checks, as a PR head gets them), and prints a short report
   dev.py mode dev|queue [--note TEXT] [--preempt]
   dev.py status
   dev.py build [REF] [--wip]          prints the build id
   dev.py flash BUILD_ID
   dev.py test CHECK...                info | health[=MIN] | validate=a,b | pace[=a,b] | cmd=c1;c2
+  dev.py test --hw [--phases P,..] [--expect VERSION] [--regions MAP] [--lights-brightness N]
+      the hardware checks (upload, lights, audio, response, interfaces) on the chip as it is
 
 No push needed: a commit that isn't on any of the remote's branches goes to the build service
 as a git bundle of <base>..<sha>, where base is its merge-base with a fetched origin/staging
@@ -564,6 +567,40 @@ def run_checks(server: Server, devices: list[str], checks: list[dict[str, Any]])
     return res
 
 
+HW_WAIT_S = 20 * 60  # the hardware checks: ~4 min, plus the 75 s stability wait after a flash
+HW_MARK = {"yes": "yes", "no": "NO", "not applicable": "n/a"}
+
+
+def run_hw(server: Server, devices: list[str], **opts: Any) -> dict[str, Any]:
+    """The hardware checks on the chips as they are (POST /api/dev/hardware-checks)."""
+    body: dict[str, Any] = {"device_ids": devices}
+    body.update({k: v for k, v in opts.items() if v is not None})
+    sub = server("POST", "/api/dev/hardware-checks", body)
+    say(f"hardware checks (job {sub['job_id']})")
+    job = poll_job(server, f"/api/test/jobs/{sub['job_id']}", HW_WAIT_S, "hardware checks")
+    res = job.get("result") if job.get("status") == "complete" else None
+    if not isinstance(res, dict):
+        return {"passed": False, "checks": [], "rig_error": job.get("error") or job.get("status")}
+    return res
+
+
+def report_hw(res: dict[str, Any]) -> list[str]:
+    lines = []
+    for p in res.get("phases") or []:
+        secs = f" {p['seconds']:.0f} s" if isinstance(p.get("seconds"), (int, float)) else ""
+        lines.append(f"phase {p['name']}: {p['result']}{secs}")
+    for c in res.get("checks") or []:
+        mark = HW_MARK.get(c["result"], c["result"])
+        lines.append(f"  {c['phase']}/{c['name']} {c['device'][:8]}: {mark}: {c['evidence']}")
+    if res.get("rig_error"):
+        lines.append(f"hardware checks: RIG ERROR (no verdict on the firmware): {res['rig_error']}")
+    else:
+        lines.append(f"hardware checks: {'PASSED' if res.get('passed') else 'FAILED'}")
+    if res.get("path"):
+        lines.append(f"report: {res['path']}")
+    return lines
+
+
 # -- the report --------------------------------------------------------------------------------
 
 
@@ -721,7 +758,11 @@ def cmd_try(args: argparse.Namespace, server: Server, svc: BuildService, repo: R
     report = [f"== dev.py try {sha[:12]}: {done.get('version')} (build {done['id']})"]
     report += report_flash(res)
     ok = res.get("status") == "ok"
-    if ok:
+    if ok and args.hw:
+        hw = run_hw(server, devices, expected_version=res.get("version"))
+        report += report_hw(hw)
+        ok = bool(hw.get("passed"))
+    if ok and (not args.hw or len(checks) > 1):
         run = run_checks(server, devices, checks)
         report += report_run(run)
         ok = bool(run.get("passed"))
@@ -748,7 +789,7 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
     m.add_argument(
         "--preempt",
         action="store_true",
-        help="cancel a running hardware test (staging suite or PR smoke test)",
+        help="cancel a running hardware test (hardware checks or the staging quality suite)",
     )
     sub.add_parser("status", help="the box's mode, what waits behind it, the chips")
     b = sub.add_parser("build", help="build a commit on the build service")
@@ -759,11 +800,22 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
     f.add_argument("--device", action="append")
     t = sub.add_parser("test", help="run checks on the test chips (dev mode)")
     t.add_argument(
-        "checks", nargs="+", help="info | health[=MIN] | validate=a,b | pace | cmd=c1;c2"
+        "checks", nargs="*", help="info | health[=MIN] | validate=a,b | pace | cmd=c1;c2"
     )
     t.add_argument("--device", action="append")
+    t.add_argument("--hw", action="store_true", help="the blocking hardware checks")
+    t.add_argument("--phases", help="--hw: these phases only (upload,lights,audio,...)")
+    t.add_argument("--expect", metavar="VERSION", help="--hw: the version the chip must run")
+    t.add_argument("--regions", help="--hw: a camera region map (default: the board's)")
+    t.add_argument(
+        "--lights-brightness",
+        type=int,
+        metavar="N",
+        help="--hw: the lights check's `leds` level (0 shows the check failing)",
+    )
     y = sub.add_parser("try", help="dev mode, build, flash, test, report: one command")
     y.add_argument("ref", nargs="?")
+    y.add_argument("--hw", action="store_true", help="the blocking hardware checks after the flash")
     y.add_argument("--tracks", help="validate these edm/ tracks (comma-separated)")
     y.add_argument("--health", type=float, metavar="MIN", help="a health check this long")
     y.add_argument("--info", action="store_true", help="the info timers (always run)")
@@ -774,7 +826,7 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
     y.add_argument(
         "--preempt",
         action="store_true",
-        help="cancel a running hardware test (staging suite or PR smoke test)",
+        help="cancel a running hardware test (hardware checks or the staging quality suite)",
     )
     y.add_argument("--device", action="append")
     args = ap.parse_args(argv)
@@ -792,10 +844,29 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
                 say(line)
             return 0 if res.get("status") == "ok" else 1
         if args.cmd == "test":
-            res = run_checks(server, chips(server, args.device), parse_checks(args.checks))
-            for line in report_run(res):
-                say(line)
-            return 0 if res.get("passed") else 1
+            if not args.hw and not args.checks:
+                raise DevError("name the checks to run, or --hw for the hardware checks")
+            devices = chips(server, args.device)
+            ok = True
+            if args.hw:
+                phases = [p for p in (args.phases or "").split(",") if p] or None
+                hw = run_hw(
+                    server,
+                    devices,
+                    phases=phases,
+                    expected_version=args.expect,
+                    regions=args.regions,
+                    lights_brightness=args.lights_brightness,
+                )
+                for line in report_hw(hw):
+                    say(line)
+                ok = bool(hw.get("passed"))
+            if args.checks:
+                res = run_checks(server, devices, parse_checks(args.checks))
+                for line in report_run(res):
+                    say(line)
+                ok = ok and bool(res.get("passed"))
+            return 0 if ok else 1
         repo = Repo(args.repo)
         repo.check_origin()
         svc = BuildService(*build_config())

@@ -129,14 +129,14 @@ class Server:
         if method == "PUT" and path == "/api/box/queue/pr":
             self.queue.append(body["waiting"])
             return {}
-        if method == "POST" and path == "/api/test/pr-smoke":
+        if method == "POST" and path == "/api/test/hardware-checks":
             if self.refuse:
                 raise self.refuse
             self.submitted.append(body)
             job = f"job-{len(self.submitted)}"
             self.jobs[job] = {"status": "running", "progressMessage": "health"}
             return {"job_id": job}
-        if method == "DELETE" and path.startswith("/api/test/pr-smoke/"):
+        if method == "DELETE" and path.startswith("/api/test/hardware-checks/"):
             if self.cancel_error:
                 raise self.cancel_error
             job = path.rsplit("/", 1)[1]
@@ -179,38 +179,41 @@ def run(g: GitHub, srv: Server, b: Builds) -> dict[str, Any]:
     return prq.run_once(g, srv, lambda: b)
 
 
-GOOD = {
+GOOD: dict[str, Any] = {
+    "kind": "hardware-checks",
     "sha": A1,
     "passed": True,
+    "rig_error": None,
     "version": "b230-dev-aaaaaaaa",
-    "build_id": "build-aaaa",
     "devices": [GRID["id"]],
-    "limits": {"stable_minutes": 2.0},
-    "corpus": "f" * 40,
-    "deploy": {"pass": True},
-    "health": {GRID["id"]: {"fps": {"pass": True, "min": 120.0}}},
-    "info": {GRID["id"]: {"version": "b230-dev-aaaaaaaa", "timers": {"heapPeak": 9, "acfUs": 700}}},
-    "validation": {
-        "kind": "validate",
-        "tracks": 3,
-        "played": 2,
-        "results": [
-            {
-                "track": "techno-machine-drum",
-                "scores": {GRID["id"]: {"drums": {"drumF": 0.71, "kickR50": 0.9}}},
-            },
-            {"track": "dnb-energetic-breakbeat", "scores": {GRID["id"]: {"drums": {"drumF": 0.1}}}},
-            {"track": "garage-uk-2step", "failed": True},
-        ],
-    },
-    "final": {
-        GRID["id"]: {
-            "version": {"pass": True},
-            "no_reboot": {"pass": True, "uptime_s": 300},
-            "alerts": {"pass": True, "lines": []},
-        }
-    },
-}
+    "plan": ["upload", "lights", "audio", "response", "interfaces"],
+    "phases": [
+        {"name": p, "result": "yes", "seconds": s}
+        for p, s in (("upload", 82.0), ("lights", 14.0), ("audio", 9.0), ("response", 63.0),
+                     ("interfaces", 12.0))
+    ],
+    "checks": [
+        {"phase": "upload", "name": "flash", "device": GRID["id"], "result": "yes",
+         "evidence": "b230-dev-aaaaaaaa flashed and verified"},
+        {"phase": "lights", "name": "walk", "device": GRID["id"], "result": "yes",
+         "evidence": "64/64 pixels each lit one region"},
+        {"phase": "response", "name": "tempo", "device": GRID["id"], "result": "yes",
+         "evidence": "median 119.9 BPM | x"},
+        {"phase": "interfaces", "name": "ble scan", "device": GRID["id"],
+         "result": "not applicable", "evidence": "the box has no Bluetooth adapter"},
+    ],
+    "response": {"meta": {GRID["id"]: {"lag_ms": 290.0, "lag_source": "detections",
+                                       "lag_matched": "79/80", "rows": 4448, "detections": 282}}},
+}  # fmt: skip
+BAD = {
+    **GOOD,
+    "passed": False,
+    "phases": [{"name": "upload", "result": "yes", "seconds": 80.0},
+               {"name": "lights", "result": "no", "seconds": 14.0}],
+    "checks": [{"phase": "lights", "name": "walk", "device": GRID["id"], "result": "no",
+                "evidence": "64 dead (all-on: 0/64 regions lit)"}],
+}  # fmt: skip
+RIG = {**GOOD, "passed": False, "rig_error": "preflight: camera: no region map", "phases": []}
 
 
 # -- by kind -----------------------------------------------------------------------------------
@@ -241,17 +244,23 @@ def test_no_firmware_change_skips_the_hardware_test() -> None:
     assert b.submitted == [] and srv.submitted == []
 
 
-def test_a_firmware_change_is_built_by_sha_and_smoke_tested() -> None:
+def test_a_firmware_change_is_built_by_sha_and_gets_the_hardware_checks() -> None:
     g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
     state = run(g, srv, b)
     assert b.submitted == [A1]
     assert srv.submitted == [
-        {"sha": A1, "build_id": "build-aaaa", "device_ids": [GRID["id"]], "pr": 5}
+        {
+            "sha": A1,
+            "build_id": "build-aaaa",
+            "device_ids": [GRID["id"]],
+            "pr": 5,
+            "source": "dev_build",
+        }
     ]
     assert state["running"]["job"] == "job-1" and state["queue"] == {}
     assert g.on(A1) == [
         ("pending", "built; queued for the box"),
-        ("pending", "testing on 1 test device(s)"),
+        ("pending", "hardware checks on 1 test device(s)"),
     ]
     assert srv.queue[-1] == []  # running is not waiting
     run(g, srv, b)  # still running: nothing new
@@ -301,15 +310,20 @@ def test_a_pass_posts_success_and_one_comment_per_head() -> None:
     run(g, srv, b)
     srv.jobs["job-1"] = {"status": "complete", "result": GOOD}
     state = run(g, srv, b)
-    assert g.on(A1)[-1][0] == "success" and "deploy, health, asserts" in g.on(A1)[-1][1]
+    assert g.on(A1)[-1] == (
+        "success",
+        "hardware checks passed: upload, lights, audio, response, interfaces",
+    )
     (c,) = g.comments["5"]
     body = c["body"]
     assert body.startswith(f"## Hardware test (PR) — {A1}\n") and "**PASSED**" in body
-    assert "reported, not gated (corpus `ffffffffffff`)" in body
-    assert "| techno-machine-drum | 87DE9B58 | 0.9 | - | - | 0.71 | - |" in body
-    assert "| garage-uk-2step | | not played |" in body
-    assert "Info timers (87DE9B58): acfUs=700, heapPeak=9" in body
-    assert "| 87DE9B58 | no_reboot | ✅ |" in body
+    assert "upload ✅ 82 s · lights ✅ 14 s · audio ✅ 9 s · response ✅ 63 s" in body
+    assert "| lights | walk | ✅ yes | 64/64 pixels each lit one region |" in body
+    assert "| interfaces | ble scan | n/a |" in body
+    assert "median 119.9 BPM \\| x" in body  # a | in the evidence can't break the table
+    assert "rig lag 290 ms from the detections (79/80 hits)" in body
+    # The table first, then the quality note: non-blocking, not run on PR heads.
+    assert body.index("| phase | check |") < body.index("**Quality (non-blocking):**")
     assert state["reported"] == {"5": A1} and "running" not in state
     run(g, srv, b)  # settled: nothing more
     assert len(g.comments["5"]) == 1 and srv.submitted == srv.submitted[:1]
@@ -325,64 +339,80 @@ def test_a_rerun_of_the_same_head_updates_its_comment() -> None:
     assert [c["body"].split("\n")[-1] for c in g.comments["5"]] == ["fine", "new"]
 
 
-def test_a_health_or_assert_failure_fails_the_head_and_scores_never_do() -> None:
-    bad = {
-        **GOOD,
-        "passed": False,
-        "final": {GRID["id"]: {"alerts": {"pass": False, "lines": ["[ASSERT] x"]}}},
-    }
+def test_a_failed_check_fails_the_head_naming_it() -> None:
     g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
     run(g, srv, b)
-    srv.jobs["job-1"] = {"status": "complete", "result": bad}
+    srv.jobs["job-1"] = {"status": "complete", "result": BAD}
     run(g, srv, b)
-    assert g.on(A1)[-1] == ("failure", "FAILED: see the report")
-    assert "[ASSERT] x" in g.comments["5"][0]["body"]
+    assert g.on(A1)[-1] == (
+        "failure",
+        "hardware checks FAILED at lights: walk (64 dead (all-on: 0/64 regions lit))",
+    )
+    body = g.comments["5"][0]["body"]
+    assert "**FAILED** at lights: walk" in body and "lights ❌ 14 s" in body
 
 
 @pytest.mark.parametrize(
-    "job", [{"status": "error", "error": "boom"}, {"status": "cancelled", "error": None}]
+    "job",
+    [
+        {"status": "complete", "result": RIG},
+        {"status": "error", "error": "boom"},
+        {"status": "cancelled", "error": None},
+    ],
 )
-def test_a_crashed_or_cancelled_job_is_a_failure(job: dict[str, Any]) -> None:
+def test_a_rig_error_stays_pending_and_the_head_is_retried(job: dict[str, Any]) -> None:
     g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
     run(g, srv, b)
     srv.jobs["job-1"] = job
+    state = run(g, srv, b)
+    st, desc = g.on(A1)[-1]
+    assert st == "pending" and desc.startswith("rig error: ") and desc.endswith(", retrying")
+    assert not any(s == "failure" for s, _ in g.on(A1))
+    assert "RIG ERROR, no verdict" in g.comments["5"][0]["body"]
+    item = state["queue"]["5"]
+    assert item["rig_errors"] == 1 and item["ready"] and item["build"] == "build-aaaa"
+    assert "5" not in state["reported"]
+    # Backing off: not resubmitted, and not reported ready (staging needn't wait for it).
+    item["retry_at"] = time.time() + 600
+    prq.save_state(state)
     run(g, srv, b)
-    assert (
-        g.on(A1)[-1][0] == "failure"
-        and "Deploy failed at `smoke test`" in g.comments["5"][0]["body"]
-    )
+    assert len(srv.submitted) == 1 and "ready" not in srv.queue[-1][0]
+    state = json.loads(prq.STATE.read_text())
+    state["queue"]["5"]["retry_at"] = 0.0
+    prq.save_state(state)
+    state = run(g, srv, b)
+    assert state["running"]["sha"] == A1 and len(srv.submitted) == 2 and b.submitted == [A1]
+    assert state["running"]["rig_errors"] == 1  # counted on, until a verdict
+    srv.jobs["job-2"] = {"status": "complete", "result": RIG}
+    assert run(g, srv, b)["queue"]["5"]["rig_errors"] == 2
 
 
-def test_a_flash_failure_names_each_devices_reason() -> None:
-    flash = {"per_device": {"87DE9B58C90A": {"flash": "error", "message": "verify timed out"}}}
-    dep = {
-        "pass": False,
-        "failed_step": "flash",
-        "message": "flash: 0/1",
-        "steps": {"flash": {"status": "error", "detail": flash}},
-    }
-    text = prq.render(
-        {
-            "sha": A1,
-            "passed": False,
-            "version": "b211-dev-aaaaaaaa",
-            "devices": ["X"],
-            "deploy": dep,
-        }
-    )
-    assert "- 87DE9B58C90A: verify timed out" in text and "`b211-dev-aaaaaaaa`" in text
+def test_a_job_lost_by_the_server_is_a_rig_error() -> None:
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    run(g, srv, b)
+    del srv.jobs["job-1"]
+    real = srv.__call__
+
+    def lost(method: str, path: str, body: Any = None) -> Any:
+        if path == "/api/test/jobs/job-1":
+            raise http_error(404)
+        return real(method, path, body)
+
+    state = prq.run_once(g, lost, lambda: b)
+    assert g.on(A1)[-1][0] == "pending" and "not found" in g.on(A1)[-1][1]
+    assert "5" in state["queue"]
 
 
-def test_a_deploy_failure_renders_its_step() -> None:
-    text = prq.render(
-        {
-            "sha": A1,
-            "passed": False,
-            "devices": ["X"],
-            "deploy": {"pass": False, "failed_step": "verify", "message": "version"},
-        }
-    )
-    assert "Deploy failed at `verify`: version" in text and "**FAILED**" in text
+def test_retest_queues_a_settled_head_again() -> None:
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    run(g, srv, b)
+    srv.jobs["job-1"] = {"status": "complete", "result": BAD}
+    run(g, srv, b)
+    assert prq.load_state()["reported"] == {"5": A1}
+    assert "forgotten" in prq.retest("5")
+    state = run(g, srv, b)
+    assert state["running"]["sha"] == A1 and len(srv.submitted) == 2
+    assert "running now" in prq.retest("5")
 
 
 # -- dev mode, supersedes, closes, preempts ----------------------------------------------------
@@ -433,7 +463,7 @@ def test_a_closed_pr_is_dropped_and_nothing_posted() -> None:
     g.prs = []
     state = run(g, srv, b)
     assert srv.cancelled == ["job-1"] and "running" not in state
-    assert g.on(B1)[-1] == ("pending", "testing on 1 test device(s)")  # nothing after
+    assert g.on(B1)[-1] == ("pending", "hardware checks on 1 test device(s)")  # nothing after
     assert state["queue"] == {} and state["reported"] == {}
 
 
@@ -518,11 +548,14 @@ def test_a_busy_box_is_retried(code: int) -> None:
     assert run(g, srv, b)["running"]["sha"] == A1
 
 
-def test_a_refused_smoke_test_is_a_failure_not_a_retry() -> None:
+def test_refused_hardware_checks_are_a_failure_not_a_retry() -> None:
     g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
-    srv.refuse = http_error(400, "unknown tracks")
+    srv.refuse = http_error(400, "not a test device")
     state = run(g, srv, b)
-    assert g.on(A1)[-1] == ("failure", "the server refused the smoke test (400): unknown tracks")
+    assert g.on(A1)[-1] == (
+        "failure",
+        "the server refused the hardware checks (400): not a test device",
+    )
     assert state["reported"] == {"5": A1}
 
 

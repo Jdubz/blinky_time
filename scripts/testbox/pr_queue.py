@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""The PR hardware queue on the test box (docs/DEV_LOOP.md, "PR hardware queue"): a smoke test of
-each firmware PR's head on the box's test chips before it merges into staging.
+"""The PR hardware queue on the test box (docs/DEV_LOOP.md, "PR hardware queue"): the blocking
+hardware checks (blinky-server testing/hardware_checks.py) on each firmware PR's head, on the
+box's test chips, before it merges into staging. A PR staging -> master must pass them, and a
+red commit must not reach the history (owner, 2026-11-25): so they run here, on the PR head, and
+the staging runner only confirms them for the merged commit (same tree).
 
 blinky-pr-queue.timer runs this every 2 minutes from the deploy worktree (master code), like
 staging.py, whose helpers it shares. One pass:
@@ -16,27 +19,31 @@ staging.py, whose helpers it shares. One pass:
    - anything else is queued: the newest head of each PR, oldest PR first. A head superseded
      while it waits drops out (its successor carries its changes, and its place); one this
      runner had posted on is marked superseded.
-2. A smoke test in flight (GET /api/test/jobs/{id}): its PR closed or merged, the job is
-   cancelled (DELETE /api/test/pr-smoke/{id}) and nothing more is posted; its PR has a new head,
-   it is cancelled and its head marked superseded. Finished: ``success``/``failure`` on the head
-   and one report comment per tested head, headed ``## Hardware test (PR) — <sha>`` so a re-run
-   updates it. Cancelled by dev mode's --preempt (the job among the mode's "preempted"): not a
-   failure, the head goes back in the queue.
+2. Hardware checks in flight (GET /api/test/jobs/{id}): its PR closed or merged, the job is
+   cancelled (DELETE /api/test/hardware-checks/{id}) and nothing more is posted; its PR has a
+   new head, it is cancelled and its head marked superseded. Finished:
+   - passed: ``success`` "hardware checks passed: ...";
+   - a check failed: ``failure`` naming it;
+   - a rig error (the camera, the speaker, the build service, a job that crashed): no verdict.
+     The head stays ``pending`` "rig error: ..., retrying" and goes back in the queue (its build
+     kept), tried again on the next pass, then backing off (staging.rig_backoff) so a broken
+     rig isn't flashed every pass. Never red for a rig fault.
+   One report comment per tested head, headed ``## Hardware test (PR) — <sha>`` and updated in
+   place: the checks table first, then the quality section (non-blocking: scores are the
+   staging quality suite's, after merge). Cancelled by dev mode's --preempt (the job among the
+   mode's "preempted"): not a failure, the head goes back in the queue.
 3. Dev mode (or switching to it): nothing is submitted, builds included. Each queued head gets
    the pending status "queued: box in dev mode since HH:MM (N waiting)", posted when its text
    changes.
 4. Queue mode: each queued head is built on the build service by sha (its head is a branch of
    the repo, so the service's trust check passes). A failed build: ``failure`` and the log's
    tail in the head's report comment. The oldest PR's built head is submitted
-   (POST /api/test/pr-smoke) unless the staging runner has a ready head that has waited longer
-   (staging.older_elsewhere), or the box is busy (409: next pass).
+   (POST /api/test/hardware-checks) unless the staging runner has a ready head that has waited
+   longer (staging.older_elsewhere), or the box is busy (409: next pass).
 5. The queue is reported to the server (PUT /api/box/queue/pr), so dev.py status,
    GET /api/box/mode and the metrics show what waits, and the staging runner can take turns.
 
-The smoke test (blinky-server testing/pr_smoke.py): deploy, 2 min of health, the info timers,
-three tracks, then no reboot and no [ASSERT]/[FALLBACK]. Pass = deploy + health + asserts; the
-scores are reported with the corpus pin, never gating (owner, 2026-11-25).
-
+``--retest PR`` queues the PR's current head again (a rig flake that ended in a verdict).
 State: ~/.local/share/blinky-server/pr-queue.json; log: ``journalctl -u blinky-pr-queue``;
 ``--status`` prints the state. Stdlib only.
 """
@@ -56,29 +63,28 @@ from typing import Any, Protocol
 
 from dev import BuildService, DevError, Untrusted, build_config
 from staging import (
-    DRUM_HEAD,
-    DRUMS,
     GH_REPO,
     RETRY_CODES,
     TERMINAL,
     Gh,
     _detail,
-    alert_lines,
     box_mode,
-    check_rows,
     firmware_change,
     gh,
     holds,
     http,
+    hw_lines,
+    hw_status,
     log,
     older_elsewhere,
     post_status,
     preempted,
     put_queue,
     queued_description,
+    rig_backoff,
     test_devices,
-    verdict_line,
 )
+from staging import upsert_comment as _upsert
 
 BASE = "staging"  # the branch the queue's PRs merge into
 CONTEXT = "Hardware test (PR)"
@@ -96,8 +102,11 @@ NO_CHANGE = "no firmware change: hardware test skipped"
 # fetch failing for a moment: tried this many passes before it is a failure.
 REFUSED_MAX = 3
 LOG_TAIL_CHARS = 6000
-# The info timers first, in dev.py's order; then the rest.
-TIMERS = ("acfUs", "acfSliceUs", "acfStageUs", "plpUs", "onsetUs", "maxFrameMs", "heapPeak")
+QUALITY_NOTE = (
+    "**Quality (non-blocking):** not run on PR heads. After merge, the staging quality suite "
+    "(every edm/ track, beat pace, scores with the corpus pin) reports on the staging commit; "
+    "it never blocks."
+)
 
 Server = Callable[..., Any]
 
@@ -136,102 +145,20 @@ def status(gh_: Gh, sha: str, state: str, description: str, url: str | None = No
 def upsert_comment(gh_: Gh, number: str, sha: str, body: str) -> str | None:
     """The head's report comment: the one starting with its header is updated, else one is
     added. Returns its URL."""
-    header = f"{REPORT_HEADER}{sha}"
-    raw = gh_(
-        "api",
-        "--paginate",
-        f"repos/{GH_REPO}/issues/{number}/comments?per_page=100",
-        "--jq",
-        '.[] | {id, url: .html_url, first: (.body | split("\\n")[0])}',
-    )
-    found = next(
-        (
-            c
-            for ln in raw.splitlines()
-            if ln.strip()
-            for c in [json.loads(ln)]
-            if c["first"].strip() == header
-        ),
-        None,
-    )
-    payload = json.dumps({"body": body})
-    if found:
-        got = gh_json_stdin(
-            gh_, payload, "-X", "PATCH", f"repos/{GH_REPO}/issues/comments/{found['id']}"
-        )
-    else:
-        got = gh_json_stdin(gh_, payload, "-X", "POST", f"repos/{GH_REPO}/issues/{number}/comments")
-    return str(got.get("html_url")) if isinstance(got, dict) and got.get("html_url") else None
-
-
-def gh_json_stdin(gh_: Gh, payload: str, *args: str) -> Any:
-    return json.loads(gh_("api", *args, "--input", "-", stdin=payload) or "null")
+    return _upsert(gh_, number, f"{REPORT_HEADER}{sha}", body)
 
 
 # -- the report --------------------------------------------------------------------------------
 
 
-def _fmt(v: Any) -> str:
-    return "-" if v is None else str(round(v, 3) if isinstance(v, float) else v)
-
-
 def render(report: dict[str, Any]) -> str:
-    """The smoke test's report as markdown, built from the staging report's pieces: the verdict,
-    the gating checks per device, the info timers, then each track's scores (not gated)."""
-    lines = [
-        f"{REPORT_HEADER}{report.get('sha', '?')}",
-        "",
-        verdict_line(report),
-        "",
-        (
-            "Pass = deploy + health + asserts (no reboot, no `[ASSERT]`/`[FALLBACK]` since the "
-            "flash). Scores are reported, not gated."
-        ),
-        "",
-    ]
+    """The hardware checks' report as markdown: the checks table first, then the quality note
+    (non-blocking)."""
+    lines = [f"{REPORT_HEADER}{report.get('sha', '?')}", ""]
     if report.get("build_id"):
         lines += [f"Build `{report['build_id']}` from the build service.", ""]
-    dep = report.get("deploy") or {}
-    if not dep.get("pass"):
-        lines += [f"Deploy failed at `{dep.get('failed_step')}`: {dep.get('message')}"]
-        flash = (dep.get("steps") or {}).get("flash") or {}
-        per_device = (flash.get("detail") or flash).get("per_device") or {}
-        lines += [f"- {dev}: {r.get('message') or r.get('flash')}" for dev, r in per_device.items()]
-        return "\n".join(lines) + "\n"
-    minutes = (report.get("limits") or {}).get("stable_minutes")
-    if minutes is not None:
-        lines += [f"Health: {minutes:g} min of `json info`, no music.", ""]
-    lines += check_rows(report, ("health", "final"))
-    for dev, got in (report.get("info") or {}).items():
-        t = dict(got.get("timers") or {})
-        first = [f"{k}={t.pop(k)}" for k in TIMERS if k in t]
-        rest = [f"{k}={v}" for k, v in sorted(t.items())]
-        lines.append(f"Info timers ({dev[:12]}): {', '.join(first + rest) or 'none reported'}")
-    lines.append("")
-    val = report.get("validation") or {}
-    pin = str(report.get("corpus") or "unknown")[:12]
-    if val.get("results"):
-        lines += [
-            (
-                f"Tracks: {val.get('played')}/{val.get('tracks')} played, scores reported, not "
-                f"gated (corpus `{pin}`):"
-            ),
-            "",
-            f"| track | device | {DRUM_HEAD} |",
-            "|---|---|---|---|---|---|---|",
-        ]
-        for r in val["results"]:
-            if r.get("failed"):
-                lines.append(f"| {r.get('track')} | | not played | | | | |")
-                continue
-            for dev, s in (r.get("scores") or {}).items():
-                drums = s.get("drums") or {}
-                vals = " | ".join(_fmt(drums.get(k)) for k in DRUMS)
-                lines.append(f"| {r.get('track')} | {dev[:12]} | {vals} |")
-        lines.append("")
-    elif val:
-        lines += [f"Tracks: not played ({val.get('detail')}); not gated (corpus `{pin}`)", ""]
-    lines += alert_lines(report)
+    lines += hw_lines(report)
+    lines += ["", QUALITY_NOTE]
     return "\n".join(lines) + "\n"
 
 
@@ -285,9 +212,9 @@ def settled(state: dict[str, Any], number: str, sha: str) -> None:
 
 
 def cancel(server: Server, job: str) -> bool:
-    """Cancel our smoke test: True once it is cancelled or gone."""
+    """Cancel our hardware checks: True once they are cancelled or gone."""
     try:
-        server("DELETE", f"/api/test/pr-smoke/{job}")
+        server("DELETE", f"/api/test/hardware-checks/{job}")
     except urllib.error.HTTPError as e:
         if e.code != 404:
             log(f"cancelling {job}: server answered {e.code}; next pass")
@@ -303,28 +230,36 @@ def finish(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
     number, sha = run["pr"], run["sha"]
     report = job.get("result") if job.get("status") == "complete" else None
     if not isinstance(report, dict) or "passed" not in report:
+        # The job itself crashed (or was cancelled by hand): no verdict on the firmware.
         report = {
             "sha": sha,
             "passed": False,
             "devices": run["devices"],
-            "build_id": run.get("build"),
-            "deploy": {"pass": False, "failed_step": "smoke test", "message": job.get("error")},
+            "rig_error": f"the hardware-checks job ended {job.get('status')}: "
+            f"{job.get('error') or 'no result'}",
         }
+    report.setdefault("build_id", run.get("build"))
     url = upsert_comment(gh_, number, sha, render(report))
-    passed = bool(report["passed"])
-    n = len(report.get("devices") or [])
-    status(
-        gh_,
-        sha,
-        "success" if passed else "failure",
-        f"passed on {n} test device(s): deploy, health, asserts"
-        if passed
-        else "FAILED: see the report",
-        url,
-    )
-    log(f"{sha[:12]} (#{number}): {'passed' if passed else 'FAILED'} ({url})")
-    settled(state, number, sha)
+    st, desc = hw_status(report)
     state.pop("running", None)
+    if report.get("rig_error"):
+        n = int(run.get("rig_errors") or 0) + 1
+        retry = time.time() + rig_backoff(n) - 60  # the next pass first (passes are 2 min)
+        state.setdefault("queue", {})[number] = {
+            "sha": sha,
+            "since": run["since"],
+            "build": run.get("build"),
+            "ready": bool(run.get("build")),
+            "rig_errors": n,
+            "retry_at": retry,
+            "posted": desc,
+        }
+        status(gh_, sha, st, desc, url)
+        log(f"{sha[:12]} (#{number}): {desc} (rig error {n} in a row)")
+        return
+    status(gh_, sha, st, desc, url)
+    log(f"{sha[:12]} (#{number}): {desc} ({url})")
+    settled(state, number, sha)
 
 
 def poll_running(
@@ -338,7 +273,9 @@ def poll_running(
         if not cancel(server, run["job"]):
             return
         if pr is None:
-            log(f"{sha[:12]}: PR #{number} closed or merged; smoke test {run['job']} cancelled")
+            log(
+                f"{sha[:12]}: PR #{number} closed or merged; hardware checks {run['job']} cancelled"
+            )
         else:
             superseded(gh_, sha, pr["sha"])
             # The new head is judged (fork? firmware change?) like any other, this pass, and
@@ -352,7 +289,7 @@ def poll_running(
         if e.code != 404:
             log(f"server answered {e.code}; next pass")
             return
-        job = {"status": "error", "error": f"smoke test job {run['job']} not found"}
+        job = {"status": "error", "error": f"hardware-checks job {run['job']} not found"}
     except (urllib.error.URLError, OSError) as e:
         log(f"server not answering ({e}); next pass")
         return
@@ -363,7 +300,7 @@ def poll_running(
         try:
             pre = preempted(server, run["job"])
         except (urllib.error.URLError, OSError) as e:  # HTTPError included
-            log(f"{sha[:12]}: smoke test cancelled, box mode unreadable ({e}); next pass")
+            log(f"{sha[:12]}: hardware checks cancelled, box mode unreadable ({e}); next pass")
             return
         if pre is not None:
             state.pop("running")
@@ -374,7 +311,7 @@ def poll_running(
                 "ready": bool(run.get("build")),
                 "preempted": True,
             }
-            log(f"{sha[:12]} (#{number}): smoke test preempted by dev mode; queued again")
+            log(f"{sha[:12]} (#{number}): hardware checks preempted by dev mode; queued again")
             return
     finish(gh_, state, job)
 
@@ -465,7 +402,12 @@ def build(gh_: Gh, state: dict[str, Any], builds: Builds) -> None:
 def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any]) -> None:
     """The oldest PR's built head to the box, unless another runner's older item goes first."""
     queue = state.get("queue") or {}
-    ready = [n for n in sorted(queue, key=int) if queue[n].get("ready")]
+    now = time.time()
+    ready = [
+        n
+        for n in sorted(queue, key=int)
+        if queue[n].get("ready") and float(queue[n].get("retry_at") or 0) <= now
+    ]
     if not ready or "running" in state:
         return
     number = ready[0]
@@ -486,12 +428,13 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
             return
         job = server(
             "POST",
-            "/api/test/pr-smoke",
+            "/api/test/hardware-checks",
             {
                 "sha": item["sha"],
                 "build_id": item["build"],
                 "device_ids": devices,
                 "pr": int(number),
+                "source": "dev_build",
             },
         )
     except urllib.error.HTTPError as e:
@@ -504,10 +447,13 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
             return
         detail = _detail(e)
         status(
-            gh_, item["sha"], "failure", f"the server refused the smoke test ({e.code}): {detail}"
+            gh_,
+            item["sha"],
+            "failure",
+            f"the server refused the hardware checks ({e.code}): {detail}",
         )
         settled(state, number, item["sha"])
-        log(f"{item['sha'][:12]} (#{number}): smoke test refused ({e.code}): {detail}")
+        log(f"{item['sha'][:12]} (#{number}): hardware checks refused ({e.code}): {detail}")
         return
     except (urllib.error.URLError, OSError) as e:
         log(f"server not answering ({e}); next pass")
@@ -519,10 +465,11 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
         "build": item["build"],
         "devices": devices,
         "since": item["since"],
+        "rig_errors": item.get("rig_errors") or 0,
     }
     del queue[number]
-    status(gh_, item["sha"], "pending", f"testing on {len(devices)} test device(s)")
-    log(f"{item['sha'][:12]} (#{number}): smoke test {job['job_id']} on {devices}")
+    status(gh_, item["sha"], "pending", f"hardware checks on {len(devices)} test device(s)")
+    log(f"{item['sha'][:12]} (#{number}): hardware checks {job['job_id']} on {devices}")
 
 
 def report_queue(server: Server, state: dict[str, Any]) -> None:
@@ -530,8 +477,8 @@ def report_queue(server: Server, state: dict[str, Any]) -> None:
     for number in sorted(state.get("queue") or {}, key=int):
         item = state["queue"][number]
         w = {"sha": item["sha"], "since": item["since"], "what": f"PR #{number}"}
-        if item.get("ready"):
-            w["ready"] = True
+        if item.get("ready") and float(item.get("retry_at") or 0) <= time.time():
+            w["ready"] = True  # backing off after a rig error: the staging runner needn't wait
         if item.get("preempted"):
             w["preempted"] = True
         waiting.append(w)
@@ -601,12 +548,36 @@ def run_once(
     return state
 
 
+def retest(number: str) -> str:
+    """Queue PR ``number``'s head again on the next pass (a rig flake that ended in a verdict):
+    its settled verdict is forgotten and a queued head's backoff dropped. A running test is
+    left alone."""
+    state = load_state()
+    if (state.get("running") or {}).get("pr") == number:
+        return f"PR #{number}: its hardware checks are running now; nothing to do"
+    had = (state.get("reported") or {}).pop(number, None)
+    item = (state.get("queue") or {}).get(number)
+    if item:
+        item.pop("retry_at", None)
+        item["rig_errors"] = 0
+    save_state(state)
+    if had:
+        return f"PR #{number}: {had[:12]} forgotten; the next pass queues its head again"
+    if item:
+        return f"PR #{number}: {item['sha'][:12]} queued, its backoff dropped"
+    return f"PR #{number}: nothing settled or queued; the next pass judges its head"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--status", action="store_true", help="print the state and exit")
+    ap.add_argument("--retest", metavar="PR", help="queue the PR's head again (a rig flake)")
     args = ap.parse_args(argv)
     if args.status:
         print(json.dumps(load_state(), indent=2))
+        return 0
+    if args.retest:
+        log(retest(str(int(args.retest))))
         return 0
     run_once()
     return 0

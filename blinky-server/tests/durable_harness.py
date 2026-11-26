@@ -28,7 +28,7 @@ from blinky_server.api.deps import set_fleet
 from blinky_server.device.device import DeviceState
 from blinky_server.firmware import deploy_pipeline
 from blinky_server.paths import data_dir
-from blinky_server.testing import dev_run, pr_smoke, staging, workflows
+from blinky_server.testing import dev_run, hardware_checks, staging, workflows
 from blinky_server.work import durable
 
 TRACKS = ["alpha", "bravo", "charlie"]
@@ -67,21 +67,34 @@ class Protocol:
         if cmd == "json rhythm":  # the staging suite's beat pace: 120 bpm, counted exactly
             return json.dumps({"bpm": 120.0, "beatCount": int(2 * time.time()) % 65536})
         effect(f"{self.dev} cmd {cmd}")
+        if WORKFLOW == "hardware-checks":
+            return hw_reply(self.dev, cmd)
         if kill == "drain-setup" and cmd == "restore_runtime_settings" and not setup_drain:
             setup_drain = True  # SIGTERM in the middle of the session's device setup
             asyncio.get_running_loop().create_task(sigterm())
         return "{}"
 
+    async def send_command_timed(self, cmd: str) -> tuple[str, float, list[float]]:
+        t = time.time()
+        return await self.send_command(cmd), t, [t + 0.003]
+
     async def start_stream(self, mode: str) -> None:
         effect(f"{self.dev} stream {mode}")
+        for q in live_queues:  # the hardware checks' stream check reads what follows
+            for _ in range(5):
+                q.put_nowait({"type": "audio", "data": {"a": {"l": 0.3}, "m": {"p": 0.0}}})
 
     async def stop_stream(self) -> None:
         effect(f"{self.dev} stream off")
 
 
+live_queues: list[asyncio.Queue[dict[str, Any] | None]] = []
+
+
 def subscribe_stream() -> asyncio.Queue[dict[str, Any] | None]:
     """The staging suite's music check: a loud stream with a pulse every other line."""
     q: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    live_queues.append(q)
     for n in range(200):
         q.put_nowait({"type": "audio", "data": {"a": {"l": 0.3}, "m": {"p": float(n % 2)}}})
     return q
@@ -96,6 +109,8 @@ devices = {
         alerts=[],
         subscribe_stream=subscribe_stream,
         unsubscribe_stream=lambda q: None,
+        device_type="testbox_grid_v1",
+        ble_address="",
     )
     for d in DEVICES
 }
@@ -186,9 +201,9 @@ STAGING_VERSION = "b300-dev-abababab"
 
 async def fake_deploy(*a: Any, **k: Any) -> dict[str, Any]:
     out = {"status": "ok", "version": STAGING_VERSION, "steps": {"store": {"flash_t": 0.0}}}
-    if k.get("dev_build"):  # the PR smoke test's build-service package, of its commit
+    if k.get("dev_build"):  # the hardware checks' build-service package, of its commit
         effect(f"deploy build {k['dev_build']}")
-        return {**out, "build_id": k["dev_build"], "sha": PR_SMOKE_REQ["sha"]}
+        return {**out, "build_id": k["dev_build"], "sha": HW_REQ["sha"]}
     effect(f"deploy {k['staging_sha'][:8]}")
     return out
 
@@ -246,16 +261,104 @@ DEV_RUN_REQ = {
 }
 
 
-# The PR hardware queue's smoke test (docs/DEV_LOOP.md): deploy, health, info, tracks, asserts.
-PR_SMOKE_REQ = {
+# The hardware checks (testing/hardware_checks.py): a PR head's build, every phase.
+HW_REQ = {
     "sha": "cd" * 20,
-    "build_id": "b-1",
     "device_ids": DEVICES,
+    "source": {"kind": "dev_build", "build_id": "b-1", "sha": "cd" * 20},
     "pr": 7,
-    "tracks": TRACKS,
-    "track_dir": "/fake",
-    "limits": STAGING_REQ["limits"],
+    "runner": "pr",
 }
+hw_settings: dict[str, str] = {}
+
+
+def hw_reply(dev: str, cmd: str) -> str:
+    """What the box's chip answers to the hardware checks' commands."""
+    words = cmd.split()
+    if words[0] == "leds" and words[1].isdigit():
+        return json.dumps({"brightness": int(words[1]), "config": 0, "override": True})
+    if words[0] == "testpattern":
+        return f"OK testpattern {words[1]}"
+    if words[0] == "set":
+        hw_settings[f"{dev}:{words[1]}"] = words[2]
+        return f"{words[1]} = {words[2]}  [effect]"
+    if words[0] == "get":
+        return f"{words[1]} = {hw_settings.get(f'{dev}:{words[1]}', '0.000')}  [effect]"
+    if cmd == "ble":
+        return "[BLE] NUS: disconnected\n[BLE] advertising=yes\n[BLE] role=scanner state=active"
+    return "{}"
+
+
+class FakeCamera:
+    """camera_lights.py's replies for a grid whose every LED works."""
+
+    @classmethod
+    async def open(cls, regions: str) -> tuple[Any, dict[str, Any]]:
+        return cls(), {"ready": True, "regions": 64}
+
+    async def ask(self, req: dict[str, Any]) -> dict[str, Any]:
+        if req["op"] == "dark":
+            return {"frame_mean": 27.8, "dark_mean": [5000.0] * 64}
+        if req["op"] == "lit":
+            if "key" not in req:
+                return {"lit": list(range(64)), "frame_rise": 0.5}
+            x, y = (int(v) for v in req["key"].split(","))
+            return {"lit": [y * 8 + x], "frame_rise": 0.01}
+        return {"ok": True, "dead": [], "unseen": [], "ambiguous": [], "shared": {}}
+
+    async def close(self) -> None:
+        pass
+
+
+async def fake_capture(devs: list[Any], wav: str | None, seconds: float) -> dict[str, Any]:
+    """The stream while a stimulus plays: the noise and the response stimulus are playbacks
+    (counted, and a crash point), the silence isn't."""
+    global plays
+    from tests import hw_synth
+
+    t0 = time.time() * 1000
+    if wav is None:
+        cap = hw_synth.level(t0, seconds, 0.002)
+    else:
+        kind = "noise" if "noise" in wav else "response"
+        plays += 1
+        effect(f"play {kind} start")
+        if kill == f"crash:{plays}":
+            os._exit(9)
+        if kill in (f"drain:{plays}", f"two-drain:{plays}"):
+            asyncio.get_running_loop().create_task(sigterm())
+        await asyncio.sleep(0.3)
+        effect(f"play {kind} end")
+        cap = hw_synth.level(t0, seconds, 0.08) if kind == "noise" else hw_synth.response(t0)
+    one = cap["devices"]["grid"]
+    cap["devices"] = {d.id: one for d in devs}
+    return cap
+
+
+async def hw_info(device: Any) -> dict[str, Any]:
+    return {
+        "version": STAGING_VERSION,
+        "platform": "nrf52840",
+        "millis": int(time.time() * 1000),
+        "fps": 120.0,
+        "maxFrameMs": 20,
+        "audioOverruns": 0,
+        "audioSamplesLost": 0,
+        "device": {
+            "id": "testbox_grid_v1",
+            "width": 8,
+            "height": 8,
+            "leds": 64,
+            "configured": True,
+        },
+    }
+
+
+hardware_checks.Camera = FakeCamera  # type: ignore[misc,assignment]
+hardware_checks.capture = fake_capture
+hardware_checks._info = hw_info
+hardware_checks.ffplay = lambda: "/usr/bin/ffplay"
+hardware_checks.host_bluetooth = lambda: None
 
 
 async def reconnect_late() -> None:
@@ -300,8 +403,8 @@ async def main() -> None:
             wid = await durable.submit(staging.staging_suite, STAGING_REQ)
         elif WORKFLOW == "dev-run":
             wid = await durable.submit(dev_run.dev_run, DEV_RUN_REQ)
-        elif WORKFLOW == "pr-smoke":
-            wid = await durable.submit(pr_smoke.pr_smoke, PR_SMOKE_REQ)
+        elif WORKFLOW == "hardware-checks":
+            wid = await durable.submit(hardware_checks.hardware_checks, HW_REQ)
         elif WORKFLOW == "capture-nn":
             wid = await durable.submit(workflows.capture_nn, "dev-a", 1000.0, str(out / "c.jsonl"))
         else:

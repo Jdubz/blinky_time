@@ -301,6 +301,7 @@ class Box:
         }
         self.calls: list[tuple[str, str, Any]] = []
         self.reset_refusals = 0
+        self.hw: dict[str, Any] = HW_REPORT
 
     def __call__(self, method: str, path: str, body: Any = None) -> Any:
         self.calls.append((method, path, body))
@@ -343,6 +344,10 @@ class Box:
             }
         if path == "/api/dev/run":
             return {"job_id": "r1"}
+        if path == "/api/dev/hardware-checks":
+            return {"job_id": "h1"}
+        if path == "/api/test/jobs/h1":
+            return {"status": "complete", "result": self.hw}
         if path == "/api/test/jobs/r1":
             return {"status": "complete", "result": RUN_REPORT}
         if path == "/api/work":
@@ -351,6 +356,15 @@ class Box:
 
 
 DEV = "87DE9B58C90AFE2D"
+HW_REPORT: dict[str, Any] = {
+    "passed": True,
+    "rig_error": None,
+    "phases": [{"name": "upload", "result": "yes", "seconds": 61.0},
+               {"name": "lights", "result": "yes", "seconds": 14.0}],
+    "checks": [{"phase": "lights", "name": "walk", "device": DEV, "result": "yes",
+                "evidence": "64/64 pixels each lit one region"}],
+    "path": "/data/hardware-checks/dev-pass.json",
+}  # fmt: skip
 RUN_REPORT = {
     "passed": True,
     "checks": [
@@ -428,6 +442,7 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
         pace=False,
         camera=False,
         info=False,
+        hw=False,
     )
     assert dev.cmd_try(args, box, svc, repo) == 0
     out = capsys.readouterr().out
@@ -445,6 +460,47 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
     assert "box: DEV mode since" in report
 
 
+def test_try_hw_runs_the_hardware_checks_against_the_flashed_version(
+    repo: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    box, svc = Box("dev"), FakeService()
+    args = dev.main.__globals__["argparse"].Namespace(
+        ref=None, wip=False, note=None, preempt=False, device=None, health=None, tracks=None,
+        pace=False, camera=False, info=False, hw=True,
+    )  # fmt: skip
+    assert dev.cmd_try(args, box, svc, repo) == 0
+    hw = next(c for c in box.calls if c[1] == "/api/dev/hardware-checks")
+    assert hw[2] == {"device_ids": [DEV], "expected_version": "b220-dev-abcdef01"}
+    assert not any(c[1] == "/api/dev/run" for c in box.calls)  # nothing else was asked for
+    out = capsys.readouterr().out
+    assert "phase lights: yes 14 s" in out and "lights/walk 87DE9B58: yes: 64/64" in out
+    assert "hardware checks: PASSED" in out
+    box.hw = {**HW_REPORT, "passed": False, "rig_error": "preflight: camera: busy"}
+    assert dev.cmd_try(args, box, svc, repo) == 1
+    assert (
+        "RIG ERROR (no verdict on the firmware): preflight: camera: busy" in capsys.readouterr().out
+    )
+
+
+def test_test_hw_passes_its_options(capsys: pytest.CaptureFixture[str]) -> None:
+    box = Box("dev")
+    rc = dev.main(
+        ["test", "--hw", "--phases", "upload,lights", "--lights-brightness", "0", "--regions",
+         "/tmp/x.npz"],
+        server=box,
+    )  # fmt: skip
+    assert rc == 0
+    hw = next(c for c in box.calls if c[1] == "/api/dev/hardware-checks")
+    assert hw[2] == {
+        "device_ids": [DEV],
+        "phases": ["upload", "lights"],
+        "regions": "/tmp/x.npz",
+        "lights_brightness": 0,
+    }
+    assert dev.main(["test"], server=box) == 1  # neither checks nor --hw
+    assert "--hw" in capsys.readouterr().out
+
+
 def test_try_refuses_a_dirty_tree_before_touching_the_box(repo: Any) -> None:
     (repo.root / "c.cpp").write_text("dirty")
     box = Box("queue")
@@ -459,6 +515,7 @@ def test_try_refuses_a_dirty_tree_before_touching_the_box(repo: Any) -> None:
         pace=False,
         camera=False,
         info=False,
+        hw=False,
     )
     with pytest.raises(dev.DevError, match="dirty"):
         dev.cmd_try(args, box, FakeService(), repo)

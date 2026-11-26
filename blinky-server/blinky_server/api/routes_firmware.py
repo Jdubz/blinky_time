@@ -381,14 +381,14 @@ async def _deploy_active() -> bool:
     if not durable.launched():
         return False
     # Every job that flashes devices: the fleet deploys, and the staging suite (#349) and the
-    # PR smoke test (docs/DEV_LOOP.md), which deploy and then measure the chips, so they hold
-    # them until they finish.
+    # hardware checks (testing/hardware_checks.py), which deploy and then measure the chips, so
+    # they hold them until they finish.
     return bool(
         await jobs.active(FLEET_JOBS, "deploy")
         or await jobs.active(FLEET_JOBS, "deploy-staging")
         or await jobs.active(FLEET_JOBS, "deploy-dev")
         or await jobs.active(TEST_JOBS, "staging")
-        or await jobs.active(TEST_JOBS, "pr-smoke")
+        or await jobs.active(TEST_JOBS, "hardware-checks")
     )
 
 

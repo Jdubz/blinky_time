@@ -1,5 +1,8 @@
-"""The staging hardware suite (#349, docs/RELEASE_PROCESS.md "Staging"): one durable job that
-puts a staging build on the test chips and tests it on real hardware.
+"""The staging quality suite (#349, docs/RELEASE_PROCESS.md "Staging"; docs/TEST_BOX.md): one
+durable job that puts a staging build on the test chips and judges it on real hardware. Since
+2026-11-25 it is non-blocking: the blocking yes/no hardware checks are
+testing/hardware_checks.py, and the staging runner runs this suite only after they pass, to
+score the algorithm (the report comment and the score record; it never posts a failing status).
 
 1. Deploy: the staging build of the commit, through the fleet deploy pipeline
    (deploy_pipeline.run_deploy with ``staging_sha``: test devices only, the single flash path,
@@ -36,6 +39,7 @@ import asyncio
 import itertools
 import json
 import logging
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -322,13 +326,82 @@ async def uptimes(device_ids: list[str], alert_t: float) -> dict[str, Any]:
     return {"t": time.time(), "ms": ms, "alert_t": alert_t}
 
 
+def _git_head(path: str) -> str | None:
+    try:
+        r = subprocess.run(
+            ["git", "-C", path, "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    out = r.stdout.strip()
+    return out if r.returncode == 0 and len(out) == 40 else None
+
+
+@durable.step
+async def corpus_pin(track_dir: str) -> str | None:
+    """The corpus commit the tracks come from (the blinky-corpus submodule), or None: scores
+    compare only within one pin (docs/DEV_LOOP.md, "Stable candidates from scores")."""
+    return await asyncio.to_thread(_git_head, track_dir)
+
+
+# The drum score fields the score record keeps per track and device, with the scorer's lag
+# evidence (blinky-corpus blinky_scoring/lag.py): a fallback or ambiguous lag is flagged.
+SCORE_FIELDS = (
+    "drumF",
+    "kickR50",
+    "snareR50",
+    "onDrum",
+    "loneHat",
+    "lagMs",
+    "lagSource",
+    "lagAmbiguous",
+    "lagNote",
+)
+
+
+def score_record(report: dict[str, Any]) -> dict[str, Any]:
+    """One line of the score record: the commit, version, corpus pin and setup, and each
+    track's drum scores per device with where its lag came from."""
+    rows = []
+    for r in (report.get("validation") or {}).get("results") or []:
+        for dev, s in (r.get("scores") or {}).items():
+            drums = s.get("drums") or {}
+            rows.append(
+                {"track": r.get("track"), "device": dev, **{k: drums.get(k) for k in SCORE_FIELDS}}
+            )
+    return {
+        "sha": report.get("sha"),
+        "version": report.get("version"),
+        "corpus": report.get("corpus"),
+        "devices": report.get("devices"),
+        "limits": report.get("limits"),
+        "at": round(time.time(), 1),
+        "tracks": rows,
+    }
+
+
 @durable.step
 async def write_report(sha: str, report: dict[str, Any]) -> str:
-    """The whole report as a file (bulk data is a file, not a step result)."""
+    """The whole report as a file (bulk data is a file, not a step result), and its line in
+    the score record (staging-scores.jsonl, one line per commit: a repeated step rewrites it)."""
     d = data_dir() / "staging-reports"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{sha}.json"
     path.write_text(json.dumps(report, indent=2) + "\n")
+    if (report.get("validation") or {}).get("results"):
+        rec = data_dir() / "staging-scores.jsonl"
+        keep = [
+            ln
+            for ln in (rec.read_text().splitlines() if rec.exists() else [])
+            if ln.strip() and json.loads(ln).get("sha") != sha
+        ]
+        tmp = rec.with_suffix(".tmp")
+        tmp.write_text("".join(f"{ln}\n" for ln in [*keep, json.dumps(score_record(report))]))
+        tmp.replace(rec)
     telemetry.record_staging(report)  # gauges, so a repeated step just sets them again
     return str(path)
 
@@ -408,6 +481,7 @@ async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
     report: dict[str, Any] = {"sha": sha, "devices": device_ids, "limits": limits}
 
     async with reserve(device_ids):
+        report["corpus"] = await corpus_pin(req["track_dir"])
         return await _suite(sha, device_ids, req, limits, report)
 
 

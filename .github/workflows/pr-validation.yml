@@ -189,10 +189,11 @@ jobs:
 
     # The analysis runs on the box's system Python (numpy from apt), not the server's venv;
     # the capture helper needs the camera and is exercised on the box.
-    - name: Region discovery and visual onsets on synthetic data
+    - name: Region discovery, visual onsets and the lights worker, on synthetic data
       run: |
         pip install 'numpy>=1.26,<3' pytest
-        python -m pytest -v scripts/testbox/camera/test_camera_analysis.py
+        python -m pytest -v scripts/testbox/camera/test_camera_analysis.py \
+          scripts/testbox/camera/test_camera_lights.py
 
   feature-parity:
     # The name is a required status check: keep it. "firmware" is the contract the firmware
