@@ -198,7 +198,7 @@ async def music_and_pace(
         play_audio(track["audio_file"], duration_ms=total_s * 1000, seek_sec=track["seek"])
     )
     try:
-        await asyncio.sleep(2.0)  # ffplay start-up
+        await asyncio.sleep(2.0)  # the player's start-up
         queues = {d.id: d.subscribe_stream() for d in devices}
         levels: dict[str, list[float]] = {d.id: [] for d in devices}
         onsets: dict[str, int] = dict.fromkeys(queues, 0)

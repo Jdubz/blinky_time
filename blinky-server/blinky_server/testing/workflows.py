@@ -244,6 +244,27 @@ def _raw_path(track: str, run: int, device: str) -> Path:
     return d / f"{safe}.json"
 
 
+def _score(data: Any, playback: Any, gt: Any) -> dict[str, Any]:
+    """A run's score summary. The lag is the measured one (the DAC start plus the rig's fixed
+    path: ``PlaybackResult.measured_lag_ms``), so the drum score says ``lagSource: measured``
+    and the scorer's search over the music becomes its cross-check (``lagCheckMs``). Without a
+    measurement the scorer searches for the lag as before, and the summary's ``audioStart``
+    says why it wasn't measured: never silently."""
+    lag = playback.measured_lag_ms()
+    summary: dict[str, Any] = format_score_summary(
+        score_device_run(data, playback.audio_start_time_ms, gt, latency_ms=lag)
+    )
+    start = playback.audio_start()
+    summary["audioStart"] = {
+        "measured": lag is not None,
+        "lagMs": start["lag_ms"],
+        "dacOffsetMs": start["dac_offset_ms"],
+        "pathMs": start["path_ms"],
+        "error": start.get("error") or start.get("note"),
+    }
+    return summary
+
+
 async def _play(device_ids: list[str], track: dict[str, Any], duration_ms: float) -> Any:
     devices = await _connected(device_ids)
     playback, recordings = await _record_and_play(
@@ -280,17 +301,23 @@ async def validation_run(
             continue
         if settle_ms > 0:
             data = _apply_settle_filter(data, settle_ms)
-        scores[device.id[:12]] = format_score_summary(
-            score_device_run(data, playback.audio_start_time_ms, gt)
-        )
+        scores[device.id[:12]] = _score(data, playback, gt)
         if persist_raw:
             path = _raw_path(track["name"], run, device.id[:12])
             capture = _serialize_raw_capture(
-                data, playback.audio_start_time_ms, playback.clock.get(device.id)
+                data,
+                playback.audio_start_time_ms,
+                playback.clock.get(device.id),
+                playback.audio_start(),
             )
             path.write_text(json.dumps(capture))
             raw[device.id[:12]] = str(path)
-    result: dict[str, Any] = {"track": track["name"], "run": run, "scores": scores}
+    result: dict[str, Any] = {
+        "track": track["name"],
+        "run": run,
+        "scores": scores,
+        "audio_start": playback.audio_start(),
+    }
     if persist_raw:
         result["raw_capture_path"] = raw
     return result
@@ -365,9 +392,7 @@ async def sweep_run(
                 "run": run,
                 "device": device_id[:12],
                 "value": value,
-                "score": format_score_summary(
-                    score_device_run(data, playback.audio_start_time_ms, gt)
-                ),
+                "score": _score(data, playback, gt),
             }
         )
     return entries
@@ -434,7 +459,7 @@ async def tune_run(
     if not data:
         return None
     data = _apply_settle_filter(data, settle_ms)
-    summary = format_score_summary(score_device_run(data, playback.audio_start_time_ms, gt))
+    summary = _score(data, playback, gt)
     val = _extract_metric(summary, target_metric)
     if val is None:
         # A drum metric on a track with no drum labels, or a run with no lag estimate: leave

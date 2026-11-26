@@ -29,6 +29,7 @@ from blinky_server.device.device import DeviceState
 from blinky_server.firmware import deploy_pipeline
 from blinky_server.paths import data_dir
 from blinky_server.testing import dev_run, hardware_checks, staging, workflows
+from blinky_server.testing.audio_player import PlaybackResult
 from blinky_server.work import durable
 
 TRACKS = ["alpha", "bravo", "charlie"]
@@ -140,7 +141,7 @@ async def fake_play(device_ids: list[str], track: dict[str, Any], duration_ms: f
     devs = [devices[d] for d in device_ids]
     return (
         devs,
-        SimpleNamespace(success=True, audio_start_time_ms=0.0, clock={}),
+        PlaybackResult(success=True, audio_start_time_ms=0.0, duration_ms=300.0),
         {d: "data" for d in device_ids},
     )
 
@@ -165,7 +166,7 @@ workflows.load_track_manifest = lambda d: {}
 workflows._ground_truth = lambda track, duration_ms: None
 staging.track_seconds = lambda t: 100.0  # every fake track has room for music and pace
 workflows._play = fake_play
-workflows.score_device_run = lambda data, start, gt: {"data": data}
+workflows.score_device_run = lambda data, start, gt, **k: {"data": data}
 workflows.format_score_summary = lambda score: {"ok": True, "drums": {"drumF": 0.5}}
 
 

@@ -73,6 +73,28 @@ Per run type:
 
 A camera survey (`camera_capture.py survey`) runs outside any job: light the chip first (`leds 40` through `POST /api/devices/{id}/command`) and send `leds config` after.
 
+## Audio start
+
+The drum scorer removes each run's lag, from the audio start to the chip's detections, before matching (blinky-corpus `blinky_scoring/lag.py`). The server measures that start instead of guessing it.
+
+**Where the old lag came from.** Up to 2026-11-25 the server timed the run from spawning ffplay (`audio_start_epoch_ms`), and the detections came 240-318 ms later. In 28 runs, the speaker's ALSA substream was read from `/proc/asound` during live jobs, next to the scorer's lag:
+
+| part | measured (28 runs, 2026-11-25) |
+|---|---|
+| spawn to the ALSA stream starting (ffplay exec, probe, seek, open) | 113-163 ms, median 134, sd 13 |
+| stream start to the chip's detection | 117-171 ms, median 149, sd 16, in steps of about 21 ms |
+| the clock sync putting detections on the host clock (#394) | about 3 ms |
+
+The steps in the second part are ffplay: its SDL callback hands out silence, a chunk at a time, until the decoder has the seeked audio. So the music started 0-2 chunks after the stream did. Both parts vary run to run, and neither is the speaker or the chip.
+
+**The method.** The player (`blinky-server/blinky_server/testing/alsa_play.py`) decodes exactly the segment with ffmpeg and writes it to ALSA (`plughw` on the default card) through libasound with ctypes: no new package. After each write it takes `snd_pcm_status`. With timestamp T, delay D (frames queued ahead of the DAC) and W frames written, the first frame was at the DAC at `T - (W - D) / rate`. It uses the median of the first 40 such estimates and reports their spread. Sources: the kernel's timestamping design (`Documentation/sound/designs/timestamping.rst`: the delay is "the time it will take to hear a new sample after all queued samples have been played out"; USB audio dates its position with the bus frame counter, to about 1 ms), and alsa-lib's `snd_pcm_delay` ("the overall latency from the write call to the final DAC"). PortAudio's `outputBufferDacTime` is the same quantity, computed the same way on ALSA. dmix's delay leaves out the frames queued on the USB bus, which is why the player uses `plughw`. The audio lock keeps any other player off the device.
+
+**What the measurement can't see:** the speaker's own processing, the air, and the chip's mic buffering and detection. All of these are fixed for a rig and a firmware. The server adds them as one calibrated constant, `audio_player.AUDIO_PATH_MS` (override: `BLINKY_AUDIO_PATH_MS`). The run is then scored at `lag = (DAC start - spawn) + AUDIO_PATH_MS`, its drum score says `lagSource: measured`, and the scorer's search over the music becomes the cross-check (`lagCheckMs`, `lagNote`). A chip whose detection latency differs from the calibrated one shows up as `lagCheckMs - lagMs`. This follows the evaluation convention of removing a known delay as a fixed, calibrated constant (madmom's `delay`; Böck et al., ISMIR 2012).
+
+**Recorded:** every raw capture keeps `audio_start_epoch_ms` (the spawn: every `t` is measured from it) and adds `audio_dac_start_epoch_ms` and `audio_start` (offset, spread, the lag used, or why there was none). Every validation result carries `audio_start`, and every score carries `audioStart`.
+
+**Failures are explicit.** If the player can't play anything (no libasound, the device won't open), ffplay plays the file as before. The same applies to a timestamp spread over 10 ms, an underrun (the audio after it is late by the gap) or a missing calibration. In all these cases the run isn't measured: `audioStart.measured` is false with the reason, the scorer searches as before, and the server logs a `[FALLBACK]` line.
+
 ## Recovery chain (hands-off)
 
 1. **USB, by blinky-server** (#378, #379). A chip enumerating as its UF2 bootloader (`2886:0045`, or `0065` for a Sense Plus factory bootloader) is parked in `DFU_RECOVERY`. After 120 s there, the server flashes the armed stable image through the single flash path onto the drive bound by USB serial, then verifies. Recovery is armed for a device by a stable deploy to it through `POST /api/fleet/deploy`. Verified on 2026-11-21: a chip with no app came back on b217 with nobody touching it.
@@ -110,12 +132,12 @@ Two behaviours to expect: the server doesn't auto-recover a device within 30 min
    - State: `python3 ~/blinky-deploy/scripts/testbox/deploy.py --status` (`--dry-run` gates the latest master and changes nothing).
    - Log: `journalctl -u blinky-deploy`.
    - Never restart the server against the dev clone. To try a branch, run it on another port from `~/blinky_time`.
-4. **USB speaker as the default ALSA device.** `audio_player.py` uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`, and Pi OS Lite has no PipeWire, so without this ffplay plays to HDMI. Put the card's name (from `aplay -l`, the word after `card N:`) in `/etc/asound.conf` or the server user's `~/.asoundrc`, by name and with the `!` override (USB card numbers can change between boots, and a plain `defaults.pcm.card <name>` is rejected as "card is not a string"):
+4. **USB speaker as the default ALSA card.** The server's player (`testing/alsa_play.py`, run by `audio_player.py`) writes to `plughw` on the default card and measures when the first sample reached the DAC (see "Audio start" below). Its ffplay fallback uses default ALSA routing (dmix), not `AUDIODEV=hw:N,0`. Pi OS Lite has no PipeWire, so without this both play to HDMI. Put the card's name (from `aplay -l`, the word after `card N:`) in `/etc/asound.conf` or the server user's `~/.asoundrc`, by name and with the `!` override (USB card numbers can change between boots, and a plain `defaults.pcm.card <name>` is rejected as "card is not a string"):
    ```
    defaults.pcm.!card Pebbles
    defaults.ctl.!card Pebbles
    ```
-   Check with `ffplay -nodisp -autoexit <track>.mp3`.
+   Check with `ffplay -nodisp -autoexit <track>.mp3`. `BLINKY_AUDIO_PCM` in the server's environment names another PCM for the player.
 5. **Enroll a chip** with its device config through `device upload` (on the box, straight to the chip, #382), and respect the 60-second rule between resets. The grid's chip takes `devices/registry/testbox_grid_v1.json` (brightness 0: see "LEDs: dark unless a test runs").
 
 ## Build service client

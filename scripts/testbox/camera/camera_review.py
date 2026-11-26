@@ -184,7 +184,13 @@ def frame_epoch_s(ts_ns: np.ndarray, summary: dict[str, Any]) -> np.ndarray:
 
 def detections_epoch_s(raw: dict[str, Any], duration_s: float) -> np.ndarray | None:
     """The chip's detections on the host wall clock, the clock's drift spread linearly over the
-    run (its offset was taken before the music). None without absolute timing."""
+    run (its offset was taken before the music). None without absolute timing.
+
+    ``audio_start_epoch_ms`` is the zero of every ``t`` (when the server spawned the player), so
+    it is the right one here: this puts detections on the clock, it doesn't ask when the sound
+    started. Detection-to-light lags don't involve the audio start at all. An audio-to-light
+    lag would start from ``audio_dac_start_epoch_ms`` (the measured DAC start, docs/TEST_BOX.md
+    "Audio start")."""
     start = raw.get("audio_start_epoch_ms")
     clock = raw.get("clock")
     if start is None or not clock:
