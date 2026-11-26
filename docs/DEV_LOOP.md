@@ -124,9 +124,10 @@ The bench release gate's limits that don't block on the box yet (owner, 2026-11-
 
 | Rule | Limit | Measured | Waits on |
 |---|---|---|---|
-| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | blinky-firmware#23 |
-| `fps` | ≥ 60 in every window | the same reads | #23 |
-| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | #23 |
+| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | — |
+| `fps` | ≥ 60 in every window | the same reads | — |
+| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | — |
+| `stream_dropped` | no stream line skipped (`streamDropped` growth across the run; firmware since blinky-firmware#85, older firmware: no data) | the same reads | — |
 | `beat_pace` | beats counted within 3% (±2 beats) of the tempo, 60 s of music | quality suite, `dev.py test pace` | — |
 | `music_level`, `music_onsets` | mean level ≥ 0.05, ≥ 1 pulse onset/s with music | the same | — |
 | `detection_latency` | the chip's detection latency within ±10 ms of the rig's 45 ms calibration: the median over the run's tracks of `lagCheckMs − lagMs`, tracks with kickR50 < 0.5 left out and listed ([TEST_BOX.md](TEST_BOX.md), "Audio start") | every scored track: quality suite, `dev.py test validate` | — |
