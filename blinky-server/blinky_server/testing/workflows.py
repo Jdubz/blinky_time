@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from blinky_scoring.lag import acoustic_search
 from blinky_scoring.scoring import format_score_summary, score_device_run
 from blinky_scoring.track_discovery import (
     discover_tracks,
@@ -248,14 +249,24 @@ def _score(data: Any, playback: Any, gt: Any) -> dict[str, Any]:
     """A run's score summary. The lag is the measured one (the DAC start plus the rig's fixed
     path: ``PlaybackResult.measured_lag_ms``), so the drum score says ``lagSource: measured``
     and the scorer's search over the music becomes its cross-check (``lagCheckMs``). Without a
-    measurement the scorer searches for the lag as before, and the summary's ``audioStart``
-    says why it wasn't measured: never silently."""
+    measurement the scorer searches for the lag, its tie-break prior the typical lag of the
+    player that ran (blinky-corpus ``lag.acoustic_search``: the ALSA player's ~220 ms, ffplay's
+    ~270), and the summary's ``audioStart`` says which player and why the start wasn't
+    measured: never silently. A playback that doesn't name its player is a bug and raises."""
     lag = playback.measured_lag_ms()
+    player = playback.start_measure.get("method")
     summary: dict[str, Any] = format_score_summary(
-        score_device_run(data, playback.audio_start_time_ms, gt, latency_ms=lag)
+        score_device_run(
+            data,
+            playback.audio_start_time_ms,
+            gt,
+            latency_ms=lag,
+            lag_search=acoustic_search(player),
+        )
     )
     start = playback.audio_start()
     summary["audioStart"] = {
+        "player": player,
         "measured": lag is not None,
         "lagMs": start["lag_ms"],
         "dacOffsetMs": start["dac_offset_ms"],
