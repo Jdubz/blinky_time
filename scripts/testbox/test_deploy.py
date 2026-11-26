@@ -663,6 +663,20 @@ def test_unhealthy_switches_back_and_refuses_the_commit(box: dict[str, Any]) -> 
     assert deploy.deploy_once() == 0 and len(box["prepared"]) == 1  # never retried
 
 
+def test_a_refused_head_is_logged_every_pass(
+    box: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The alert BlinkyDeployHeadRefused matches this line while it holds, so it repeats."""
+    box["healthy"] = [False, True]
+    assert deploy.deploy_once() == 1
+    capsys.readouterr()
+    for _ in range(2):
+        assert deploy.deploy_once() == 0
+        out = capsys.readouterr().out
+        assert f"{SHA[:12]}: master head refused (deploy failed: " in out
+        assert f"deploy.py --accept {SHA[:12]} REASON" in out
+
+
 def test_a_refused_review_is_kept_until_the_owner_accepts_it(
     box: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
