@@ -152,16 +152,18 @@ class TrackStore:
             clean = [self._check(o, limit) for o in ops]  # all or nothing
             if len(st["hits"]) + sum(1 for o in clean if o["op"] == "add") > MAX_HITS:
                 raise OpError("too many hits")
-            now = self.clock()
+            rev0 = st["rev"]
             for op in clean:
                 if self._apply_one(st, op):
                     st["rev"] += 1
                     st["ops"].append([st["rev"], tab, op])
+            rev = st["rev"]
+            if rev == rev0:  # nothing changed (e.g. two pages deleted the same hit): touch nothing
+                return rev
             del st["ops"][:-KEEP_OPS]
-            st["edited_at"] = now
+            st["edited_at"] = self.clock()
             st["updated"] = hosted.now_iso()
             self._save(st)
-            rev = st["rev"]
         if self.on_change:
             self.on_change(stem)
         return rev

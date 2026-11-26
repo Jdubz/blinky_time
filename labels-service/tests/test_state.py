@@ -66,6 +66,13 @@ def test_stale_operations_change_nothing(store):
     assert rev == 1 and len(store.view("a")["onsets"]) == 2
 
 
+def test_a_batch_that_changes_nothing_touches_nothing(store):
+    apply(store, {"op": "del", "id": "h1"})
+    before = (store.text("a"), store.edited_at("a"), list(store.changed))
+    rev = apply(store, {"op": "del", "id": "h1"}, {"op": "move", "id": "h2", "time": 1.5})  # both no-ops
+    assert rev == 1 and (store.text("a"), store.edited_at("a"), store.changed) == before
+
+
 def test_pull(store):
     apply(store, {"op": "move", "id": "h1", "time": 1.1}, tab="tab-aaaa")
     apply(store, {"op": "del", "id": "h2"}, tab="tab-bbbb")
