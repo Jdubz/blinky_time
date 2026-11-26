@@ -358,3 +358,45 @@ def test_every_board_names_a_known_platform() -> None:
         assert board.platform in ("nrf52840", "esp32s3"), name
         if board.regions:
             assert board.regions.endswith(".npz")
+
+
+# -- a chip that stops answering is the firmware's, never a rig error --------------------------
+
+
+async def test_a_chip_that_stops_answering_mid_phase_is_a_no_not_a_rig_error() -> None:
+    async def times_out() -> dict[str, Any]:
+        raise TimeoutError("json info: no reply in 20 s")
+
+    got = await hc._guard("audio", ["grid", "other"], times_out())
+    assert got["rig_error"] is None
+    assert [(c["name"], c["device"], c["result"]) for c in got["checks"]] == [
+        ("chip answers", "grid", hc.NO),
+        ("chip answers", "other", hc.NO),
+    ]
+    assert "TimeoutError: json info: no reply" in got["checks"][0]["evidence"]
+
+    async def camera_gone() -> dict[str, Any]:
+        raise hc.RigError("camera: the worker went away")
+
+    got = await hc._guard("lights", ["grid"], camera_gone())
+    assert got["rig_error"] == "camera: the worker went away" and got["checks"] == []
+
+
+async def test_a_chip_that_disconnected_is_never_dropped_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def connected(ids: list[str]) -> list[Any]:
+        return [SimpleNamespace(id="grid")]  # "other" crashed and is gone
+
+    monkeypatch.setattr(hc, "_connected", connected)
+    assert [d.id for d in await hc._chips(["grid"])] == ["grid"]
+    with pytest.raises(hc.ChipGone, match="other"):
+        await hc._chips(["grid", "other"])
+
+    async def body() -> dict[str, Any]:
+        await hc._chips(["grid", "other"])
+        return {"checks": []}
+
+    got = await hc._guard("response", ["grid", "other"], body())
+    assert {c["result"] for c in got["checks"]} == {hc.NO} and got["rig_error"] is None
+    assert "not connected: other" in got["checks"][0]["evidence"]

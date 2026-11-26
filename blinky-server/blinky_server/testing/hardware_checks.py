@@ -290,8 +290,7 @@ def judge_deploy(deploy: dict[str, Any], before: dict[str, str | None]) -> tuple
     return NO, f"deploy failed at {step}: {msg}"
 
 
-@durable.step
-async def upload_checks(
+async def _upload_checks(
     device_ids: list[str], expected: str | None, board_of: dict[str, str | None]
 ) -> dict[str, Any]:
     """Version, configured, stable past the window, json info sane. Waits until every chip has
@@ -299,7 +298,7 @@ async def upload_checks(
     an uptime that falls back)."""
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
-    for d in await _connected(device_ids):
+    for d in await _chips(device_ids):
         board = BOARDS.get(board_of.get(d.id) or "")
         try:
             info = await _info(d)
@@ -409,15 +408,14 @@ def sane(info: dict[str, Any], device_id: str, board: Board | None) -> list[str]
 # -- 2. lights ---------------------------------------------------------------------------------
 
 
-@durable.step
-async def lights(
+async def _lights(
     device_ids: list[str], board_of: dict[str, str | None], regions: str | None, brightness: int
 ) -> dict[str, Any]:
     """Per chip with a camera view: ``leds`` lights it, then the walk. A rig fault raises
     nothing: it returns {"rig_error": ...}."""
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
-    for d in await _connected(device_ids):
+    for d in await _chips(device_ids):
         board = BOARDS.get(board_of.get(d.id) or "")
         path = regions or (board.regions if board else None)
         if path is None:
@@ -696,10 +694,9 @@ def judge_audio(
     return [mic, counters]
 
 
-@durable.step
-async def audio(device_ids: list[str]) -> dict[str, Any]:
+async def _audio(device_ids: list[str]) -> dict[str, Any]:
     t0 = time.monotonic()
-    devices = await _connected(device_ids)
+    devices = await _chips(device_ids)
     for d in devices:
         await _configure_device(d, None)  # runtime defaults, as a test session (never saved)
     before = {d.id: await _info(d) for d in devices}
@@ -1143,10 +1140,9 @@ def _capture_path() -> Path:
     return d / "response.json"
 
 
-@durable.step
-async def response(device_ids: list[str]) -> dict[str, Any]:
+async def _response(device_ids: list[str]) -> dict[str, Any]:
     t0 = time.monotonic()
-    devices = await _connected(device_ids)
+    devices = await _chips(device_ids)
     wav = await asyncio.to_thread(stimulus.ensure, "response", data_dir() / "stimuli")
     cap = await capture(devices, str(wav), stimulus.RESPONSE_S)
     if not cap.get("played"):
@@ -1179,15 +1175,14 @@ def _settings_value(reply: str, name: str) -> float | None:
     return float(m.group(1)) if m else None
 
 
-@durable.step
-async def interfaces(
+async def _interfaces(
     device_ids: list[str], board_of: dict[str, str | None], start: dict[str, Any]
 ) -> dict[str, Any]:
     t0 = time.monotonic()
     out: list[dict[str, Any]] = []
     adapter = host_bluetooth()
     alerts = alerts_since(device_ids, float(start["alert_t"]))
-    for d in await _connected(device_ids):
+    for d in await _chips(device_ids):
         board = BOARDS.get(board_of.get(d.id) or "")
         out.append(await _serial(d))
         out.append(await _stream(d))
@@ -1389,6 +1384,78 @@ async def _ble_scan(d: Any, adapter: str | None) -> dict[str, Any]:
         rule,
         f"{addr} {'seen' if seen else 'not seen'} in 10 s on {adapter}",
     )
+
+
+class ChipGone(RuntimeError):
+    """A chip the checks run on isn't connected any more (a crash, a reset): the firmware's."""
+
+
+async def _chips(device_ids: list[str]) -> list[Any]:
+    """Every chip of the run, connected; any missing raises ChipGone (never dropped
+    silently: a chip that crashed would get no checks and the phase pass on the others)."""
+    devices = await _connected(device_ids)  # RuntimeError when none is
+    missing = sorted(set(device_ids) - {d.id for d in devices})
+    if missing:
+        raise ChipGone(f"not connected: {', '.join(m[:12] for m in missing)}")
+    return devices
+
+
+# What a chip that stops answering raises mid-phase: a timeout, a dropped port, an empty or
+# garbled reply, or gone from the fleet. Judged the firmware's (a crash is the likely cause),
+# never a rig error: the runners would retry a crashing build for good, never red.
+DEVICE_ERRORS = (OSError, TimeoutError, ConnectionError, RuntimeError, ValueError)
+
+
+async def _guard(phase: str, device_ids: list[str], body: Any) -> dict[str, Any]:
+    """Run a phase's body: a rig fault becomes ``rig_error``; a chip that stops answering
+    becomes a "chip answers" no for every chip of the run, with what it raised."""
+    t0 = time.monotonic()
+    try:
+        res: dict[str, Any] = await body
+    except RigError as e:
+        return {"checks": [], "rig_error": str(e), "seconds": round(time.monotonic() - t0, 1)}
+    except DEVICE_ERRORS as e:
+        log.warning("hardware checks: %s: a chip stopped answering: %r", phase, e)
+        rule = "every chip answers throughout the phase"
+        ev = f"{type(e).__name__}: {str(e)[:120]}"
+        return {
+            "checks": [check(phase, "chip answers", i, NO, rule, ev) for i in device_ids],
+            "rig_error": None,
+            "seconds": round(time.monotonic() - t0, 1),
+        }
+    res["seconds"] = round(time.monotonic() - t0, 1)
+    return res
+
+
+@durable.step
+async def upload_checks(
+    device_ids: list[str], expected: str | None, board_of: dict[str, str | None]
+) -> dict[str, Any]:
+    return await _guard("upload", device_ids, _upload_checks(device_ids, expected, board_of))
+
+
+@durable.step
+async def lights(
+    device_ids: list[str], board_of: dict[str, str | None], regions: str | None, brightness: int
+) -> dict[str, Any]:
+    return await _guard("lights", device_ids, _lights(device_ids, board_of, regions, brightness))
+
+
+@durable.step
+async def audio(device_ids: list[str]) -> dict[str, Any]:
+    return await _guard("audio", device_ids, _audio(device_ids))
+
+
+@durable.step
+async def response(device_ids: list[str]) -> dict[str, Any]:
+    return await _guard("response", device_ids, _response(device_ids))
+
+
+@durable.step
+async def interfaces(
+    device_ids: list[str], board_of: dict[str, str | None], start: dict[str, Any]
+) -> dict[str, Any]:
+    return await _guard("interfaces", device_ids, _interfaces(device_ids, board_of, start))
 
 
 # -- the report --------------------------------------------------------------------------------
