@@ -64,9 +64,13 @@ SND_PCM_TSTAMP_ENABLE = 1
 SND_PCM_STATE_PREPARED = 2
 SND_PCM_STATE_RUNNING = 3
 
+SND_PCM_TSTAMP_TYPE_MONOTONIC = 1
+
 # The clocks an ALSA timestamp can be on (snd_pcm_tstamp_type_t: gettimeofday, monotonic,
-# monotonic_raw). Which one a PCM uses depends on the plugin chain, so each timestamp is put
-# on the clock it is nearest to.
+# monotonic_raw). configure() asks for monotonic. Only if the PCM refuses is a timestamp put on
+# the clock it is nearest to now, which works for fresh timestamps: monotonic and
+# monotonic_raw can be hundreds of ms apart on a long-running host, so an old one could land
+# on the wrong one.
 _CLOCKS = {
     "realtime": time.CLOCK_REALTIME,
     "monotonic": time.CLOCK_MONOTONIC,
@@ -105,6 +109,7 @@ class Alsa:
             "snd_pcm_sw_params_sizeof": (ctypes.c_size_t, []),
             "snd_pcm_sw_params_current": (c_int, [p, p]),
             "snd_pcm_sw_params_set_tstamp_mode": (c_int, [p, p, c_int]),
+            "snd_pcm_sw_params_set_tstamp_type": (c_int, [p, p, c_int]),
             "snd_pcm_sw_params": (c_int, [p, p]),
             "snd_pcm_status_sizeof": (ctypes.c_size_t, []),
             "snd_pcm_status": (c_int, [p, p]),
@@ -125,9 +130,15 @@ class Alsa:
         return rc
 
 
-def to_epoch_ms(ts: float) -> tuple[float, str] | None:
-    """An ALSA timestamp on the host wall clock (epoch ms), and the clock it was on. None when
-    it is on no clock this knows (more than 1 s from all of them now)."""
+def to_epoch_ms(ts: float, clock: str | None = None) -> tuple[float, str] | None:
+    """An ALSA timestamp on the host wall clock (epoch ms), and the clock it was on: ``clock``
+    when it is known (None if the timestamp is more than a minute from it now: a zero or
+    garbage), else the nearest one now (None if it is more than 1 s from all of them)."""
+    if clock is not None:
+        clk = _CLOCKS[clock]
+        if abs(time.clock_gettime(clk) - ts) > 60.0:
+            return None
+        return (ts + time.time() - time.clock_gettime(clk)) * 1000.0, clock
     best = None
     for name, clk in _CLOCKS.items():
         now = time.clock_gettime(clk)
@@ -159,11 +170,12 @@ def read_up_to(f: IO[bytes], n: int) -> bytes:
 class Meter:
     """Frame 0's time at the DAC, from status snapshots taken after writes."""
 
-    def __init__(self, alsa: Alsa, pcm: ctypes.c_void_p) -> None:
+    def __init__(self, alsa: Alsa, pcm: ctypes.c_void_p, clock: str | None = None) -> None:
         self.alsa, self.pcm = alsa, pcm
         self.status = ctypes.create_string_buffer(alsa.lib.snd_pcm_status_sizeof())
         self.estimates: list[float] = []
-        self.clock: str | None = None
+        self.known_clock = clock  # the timestamps' clock, when configure() could set it
+        self.clock: str | None = clock
         self.trigger_ms: float | None = None
         self.rejected = 0
         self.done = False
@@ -180,7 +192,7 @@ class Meter:
         ts = Timespec()
         lib.snd_pcm_status_get_htstamp(self.status, ctypes.byref(ts))
         delay = lib.snd_pcm_status_get_delay(self.status)
-        at = to_epoch_ms(ts.seconds())
+        at = to_epoch_ms(ts.seconds(), self.known_clock)
         if at is None or delay < 0 or delay > written:
             self.rejected += 1
             return
@@ -189,7 +201,7 @@ class Meter:
         if self.trigger_ms is None:
             trig = Timespec()
             lib.snd_pcm_status_get_trigger_htstamp(self.status, ctypes.byref(trig))
-            t = to_epoch_ms(trig.seconds())
+            t = to_epoch_ms(trig.seconds(), self.known_clock)
             self.trigger_ms = t[0] if t else None
 
     def report(self, out: IO[str], extra: dict[str, Any]) -> None:
@@ -238,12 +250,13 @@ def open_pcm(alsa: Alsa, name: str) -> ctypes.c_void_p:
     return pcm
 
 
-def configure(alsa: Alsa, pcm: ctypes.c_void_p) -> tuple[int, int]:
+def configure(alsa: Alsa, pcm: ctypes.c_void_p) -> tuple[int, int, str | None]:
     """The stream's format and buffer, and timestamps on: with the software params' default
     timestamp mode (none), the kernel leaves a running stream's status timestamp at zero
     (``snd_pcm_status64``: the tstamp is filled only for SND_PCM_TSTAMP_ENABLE), so there would
     be nothing to date the DAC by. dmix turns it on for its own slave the same way
-    (alsa-lib ``pcm_direct.c``). Returns the buffer and period sizes (frames)."""
+    (alsa-lib ``pcm_direct.c``). Returns the buffer and period sizes (frames) and the
+    timestamps' clock (None if the PCM wouldn't take monotonic)."""
     lib = alsa.lib
     alsa.check(
         lib.snd_pcm_set_params(
@@ -263,13 +276,19 @@ def configure(alsa: Alsa, pcm: ctypes.c_void_p) -> tuple[int, int]:
         lib.snd_pcm_sw_params_set_tstamp_mode(pcm, sw, SND_PCM_TSTAMP_ENABLE),
         "sw_params_set_tstamp_mode",
     )
+    # The clock, too, so a timestamp's clock is known rather than guessed (alsa-lib >= 1.0.29).
+    clock = (
+        "monotonic"
+        if lib.snd_pcm_sw_params_set_tstamp_type(pcm, sw, SND_PCM_TSTAMP_TYPE_MONOTONIC) >= 0
+        else None
+    )
     alsa.check(lib.snd_pcm_sw_params(pcm, sw), "sw_params")
     buf_frames, period_frames = ctypes.c_ulong(), ctypes.c_ulong()
     alsa.check(
         lib.snd_pcm_get_params(pcm, ctypes.byref(buf_frames), ctypes.byref(period_frames)),
         "get_params",
     )
-    return buf_frames.value, period_frames.value
+    return buf_frames.value, period_frames.value, clock
 
 
 def ffmpeg_cmd(path: str, seek: float | None, duration: float | None) -> list[str]:
@@ -331,7 +350,7 @@ def _play(
     started = False
     try:
         try:
-            buf_frames, period_frames = configure(alsa, pcm)
+            buf_frames, period_frames, clock = configure(alsa, pcm)
         except OSError as e:
             emit(out, "error", stage="open", error=str(e))
             return EXIT_NOTHING_PLAYED
@@ -341,7 +360,7 @@ def _play(
             "buffer_frames": buf_frames,
             "period_frames": period_frames,
         }
-        meter = Meter(alsa, pcm)
+        meter = Meter(alsa, pcm, clock)
         written = xruns = 0
         eof = False
         while True:

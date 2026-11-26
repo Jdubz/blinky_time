@@ -140,12 +140,17 @@ def test_the_measured_lag_needs_the_calibrated_path(monkeypatch: pytest.MonkeyPa
 
 def test_timestamps_go_onto_the_wall_clock() -> None:
     mono = time.clock_gettime(time.CLOCK_MONOTONIC)
-    got = alsa_play.to_epoch_ms(mono - 0.25)
-    assert got is not None
-    ms, clock = got
-    assert clock in ("monotonic", "monotonic_raw")
-    assert ms == pytest.approx(time.time() * 1000 - 250, abs=20)
-    got = alsa_play.to_epoch_ms(time.time() - 0.1)
+    got = alsa_play.to_epoch_ms(mono - 0.25, "monotonic")
+    assert got is not None and got[1] == "monotonic"
+    assert got[0] == pytest.approx(time.time() * 1000 - 250, abs=20)
+    # A trigger seconds old is still dated on a known clock; a zero isn't.
+    got = alsa_play.to_epoch_ms(mono - 5.0, "monotonic")
+    assert got is not None and got[0] == pytest.approx(time.time() * 1000 - 5000, abs=20)
+    assert alsa_play.to_epoch_ms(0.0, "monotonic") is None
+    # Unknown clock: a fresh timestamp goes on the nearest one.
+    got = alsa_play.to_epoch_ms(time.clock_gettime(time.CLOCK_MONOTONIC))
+    assert got is not None and got[0] == pytest.approx(time.time() * 1000, abs=20)
+    got = alsa_play.to_epoch_ms(time.time() - 0.001)
     assert got is not None and got[1] == "realtime"
     assert alsa_play.to_epoch_ms(12.0) is None  # on no clock
 
@@ -193,7 +198,7 @@ class _FakeLib:
 def test_frame_zero_is_dated_from_each_snapshot() -> None:
     lib = _FakeLib()
     alsa = type("A", (), {"lib": lib})()
-    meter = alsa_play.Meter(alsa, ctypes.c_void_p())
+    meter = alsa_play.Meter(alsa, ctypes.c_void_p(), "monotonic")
     now = time.clock_gettime(time.CLOCK_MONOTONIC)
     start = now - 0.5  # frame 0 left the DAC half a second ago
     for written in (24000, 26400, 28800, 31200, 33600):
@@ -261,11 +266,14 @@ def test_the_stream_is_configured_with_timestamps_on() -> None:
 
     alsa = alsa_play.Alsa.__new__(alsa_play.Alsa)
     alsa.lib = Lib()  # type: ignore[assignment]
-    assert alsa_play.configure(alsa, ctypes.c_void_p()) == (9600, 2400)
+    assert alsa_play.configure(alsa, ctypes.c_void_p()) == (9600, 2400, "monotonic")
     names = [c[0] for c in calls]
     tstamp = names.index("snd_pcm_sw_params_set_tstamp_mode")
     assert calls[tstamp][3] == alsa_play.SND_PCM_TSTAMP_ENABLE
     assert names.index("snd_pcm_set_params") < tstamp < names.index("snd_pcm_sw_params")
+    ttype = names.index("snd_pcm_sw_params_set_tstamp_type")
+    assert calls[ttype][3] == alsa_play.SND_PCM_TSTAMP_TYPE_MONOTONIC
+    assert ttype < names.index("snd_pcm_sw_params")
     # A zero timestamp (what the mode left off gives) dates nothing.
     assert alsa_play.to_epoch_ms(0.0) is None
 
