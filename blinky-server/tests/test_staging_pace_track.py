@@ -45,7 +45,7 @@ def test_no_track_long_enough_leaves_music_and_pace_unmeasured_and_says_so() -> 
     music = staging.no_pace_track(["dev-a"])
     assert "no track long enough" in music["dev-a"]["music"]["detail"]
     # Judged by the strict rules: nothing measured is "no data", never a pass.
-    rows = strict_rules.report({}, {}, music)["rules"]
+    rows = strict_rules.report({}, music)["rules"]
     got = {r["rule"]: r["status"] for r in rows}
     assert got["music_level"] == got["music_onsets"] == got["beat_pace"] == strict_rules.NO_DATA
 

@@ -124,20 +124,20 @@ The bench release gate's limits that don't block on the box yet (owner, 2026-11-
 
 | Rule | Limit | Measured | Waits on |
 |---|---|---|---|
-| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | blinky-firmware#49, #23 |
+| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | blinky-firmware#23 |
 | `fps` | ≥ 60 in every window | the same reads | #23 |
-| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | #49, #23 |
+| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | #23 |
 | `beat_pace` | beats counted within 3% (±2 beats) of the tempo, 60 s of music | quality suite, `dev.py test pace` | — |
 | `music_level`, `music_onsets` | mean level ≥ 0.05, ≥ 1 pulse onset/s with music | the same | — |
 | `detection_latency` | the chip's detection latency within ±10 ms of the rig's 45 ms calibration: the median over the run's tracks of `lagCheckMs − lagMs`, tracks with kickR50 < 0.5 left out and listed ([TEST_BOX.md](TEST_BOX.md), "Audio start") | every scored track: quality suite, `dev.py test validate` | — |
 
 The reads: the hardware checks' (upload's stability wait, audio before and after the noise, the first read after the response stream, the last), the quality suite's (5 min of health, one after each track while the chip streams, the last) and a dev run's (info, health, after each validated track).
 
-- **warn** (every rule now): a section "⚠ strict rules (non-blocking)" in every report (PR and staging comments, `dev.py`), each rule with pass/warn, its worst value, where and when it was read, and the windows excluded. A warning never changes a commit status; the description may end "· 2 strict warnings". Metrics: `blinky_strict_rule_pass{rule,source}`, `_worst`, `_excluded_windows`, `_streak`, `_ready`, `_blocking`; and `blinky_detection_latency_offset_ms{device,source}` with `_tracks` for the detection latency itself.
+- **warn** (every rule now): a section "⚠ strict rules (non-blocking)" in every report (PR and staging comments, `dev.py`), each rule with pass/warn, its worst value, where and when it was read, and the tracks a rule left out (detection latency). A warning never changes a commit status; the description may end "· 2 strict warnings". Metrics: `blinky_strict_rule_pass{rule,source}`, `_worst`, `_streak`, `_ready`, `_blocking`; and `blinky_detection_latency_offset_ms{device,source}` with `_tracks` for the detection latency itself.
 - **ready:** passed on the last 5 distinct firmware builds with real runs (staging quality suites, and PR or staging heads that passed the hardware checks; a staging commit with a PR head's tree is that head's build), no warning in between. A run without data for a rule counts neither way. `BLINKY_STRICT_READY_AFTER` changes the 5. The staging report then says "strict rule X has passed on 5 consecutive builds: ready to block", and the staging runner opens one blinky_time issue, "Ready to enable strict rule: X", with the evidence (never a second one). `dev.py status` and `GET /api/test/strict-rules` show each rule's streak.
 - **block:** the owner sets the rule's mode to `BLOCK` (its one line in `RULES`). A failing block rule is then a failing check in the hardware checks (red `Hardware test`) and fails a dev run. Never automatic. Beat pace and music are measured only by the quality suite and `dev.py test pace`, so blocking them fails dev runs but no commit status (`Quality suite (staging)` is always `success`): that needs a decision on where they block.
 
-**The settings-save exclusion.** A `save` stalls the loop ~85–115 ms (blinky-firmware#49), and a deploy does a restore + save. The server records the host time of every `save` it sends (the protocol, so deploys and commands alike; `settings-saves.jsonl` in its data dir). The firmware reports its last *closed* window, and since blinky-firmware#80 also when it closed and how long it ran (`json info` `frameWindowEndMs`, `frameWindowMs`). The read's own `millis` maps that into host time (host minus millis, the clock sync's offset), so a window is excluded from `frame_time` only when a recorded save falls inside it. For older firmware a read at t covers a window inside [t − 10 s, t], and a save anywhere in that span excludes it. Each exclusion is listed with the window's edges: "excluded: settings save at hh:mm:ss.mmm (blinky-firmware#49)". Nothing else is excluded.
+**No settings-save exclusion.** A `save` used to stall the loop ~85–115 ms erasing a flash page, and the windows that might hold one of the server's saves were left out of `frame_time`. Since blinky-firmware#49 (the settings journal: a save only writes flash; measured on the box, windows with a save 15–19 ms, the same as without) every window counts, and the server no longer records its saves.
 
 ### 6. Stable candidates from scores
 

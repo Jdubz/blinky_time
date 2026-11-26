@@ -81,11 +81,11 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 
 ## P2: LED smoothness
 
-- [blinky-firmware#49](https://github.com/Jdubz/blinky-firmware/issues/49): a settings save stalls the loop ~85–115 ms (flash page erase).
+- ~~blinky-firmware#49, a settings save stalls the loop ~85–115 ms~~: fixed 2026-11-26 by the settings journal ([blinky-firmware#83](https://github.com/Jdubz/blinky-firmware/pull/83): saves only write flash, erases happen at boot). On the box, windows with a save went from 115–119 ms to 15–19 ms, the same as windows without one.
 - [blinky-firmware#23](https://github.com/Jdubz/blinky-firmware/issues/23): JSON stream formatting runs on the render loop. The box streams during tests.
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
 - ~~blinky-firmware#59, the ~30 ms detection-to-light tail~~: fixed 2026-11-25 by ACF phase 1 ([blinky-firmware#61](https://github.com/Jdubz/blinky-firmware/pull/61), exact incremental lag tables, each decision spread over its cycle). On the box: `maxFrameMs` 31–34 → 15 ms (streaming off), `acfUs` 17–19.5 → 6.4–7.2 ms, and a camera p90 of 29–31 → 19–21 ms; tracker harness unchanged. ACF phase 2 (narrower range or comb filterbank for pass 2, 32-bit table updates) is optional CPU headroom, not a smoothness blocker.
-- The frame-time gate: strict rules in warn mode; each blocks once it passes (readiness tracker, [`DEV_LOOP.md`](DEV_LOOP.md) "Strict rules"; owner, 2026-11-25). Longest frame ≤ 100 ms, fps ≥ 60 and no overrun growth are measured over every run's `json info` reads, the server's own settings saves (#49) excluded and listed. A tighter threshold than 100 ms (the release docs call 100 ms a visible freeze) is the owner's call, one line in `strict_rules.py` and blinky-firmware's `release_gate.py` together. The camera harness (P0) can confirm frames from outside.
+- The frame-time gate: strict rules in warn mode; each blocks once it passes (readiness tracker, [`DEV_LOOP.md`](DEV_LOOP.md) "Strict rules"; owner, 2026-11-25). Longest frame ≤ 100 ms, fps ≥ 60 and no overrun growth are measured over every run's `json info` reads, with no exclusions (the settings-save exclusion went with blinky-firmware#49). A tighter threshold than 100 ms (the release docs call 100 ms a visible freeze) is the owner's call, one line in `strict_rules.py` and blinky-firmware's `release_gate.py` together. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
@@ -140,4 +140,4 @@ Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate ob
 
 Still open:
 
-- **The frame-time gate:** the target threshold once the remaining P2 stalls are fixed (blinky-firmware#49, #23; the ACF one, #59, is fixed).
+- **The frame-time gate:** the target threshold once the remaining P2 stalls are fixed (blinky-firmware#23; the save stall, #49, and the ACF one, #59, are fixed).

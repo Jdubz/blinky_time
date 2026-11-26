@@ -636,8 +636,8 @@ async def test_a_dev_deploy_rechecks_the_mode_under_the_deploy_lock(
 
 
 async def test_the_info_check_waits_out_a_metrics_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A dev run starts right after a deploy, whose settings save stalls the loop (~100 ms,
-    blinky-firmware#49): the info check must read a 5 s metrics window that began after it."""
+    """A dev run starts right after a deploy (a reboot, then the settings restore + save): the
+    info check must read a 5 s metrics window that began after it."""
     from blinky_server.testing import dev_run
 
     events: list[Any] = []

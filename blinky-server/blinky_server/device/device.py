@@ -47,33 +47,6 @@ def alerts_since(device_ids: list[str], t0: float) -> dict[str, list[str]]:
     return out
 
 
-def saves_path() -> Path:
-    """Every settings ``save`` this server sent a device, JSONL {t, t_end, device}: from just
-    before the command was written to its reply (or failure). A save stalls the firmware's loop
-    ~85-115 ms erasing a flash page (blinky-firmware#49); the strict frame-time rule excludes the
-    loop windows that may hold one (testing/strict_rules.py), and only those."""
-    from ..paths import data_dir
-
-    return data_dir() / "settings-saves.jsonl"
-
-
-def saves_between(device_ids: list[str], t0: float, t1: float) -> dict[str, list[dict[str, Any]]]:
-    """The saves recorded for ``device_ids`` overlapping wall times [t0, t1]."""
-    out: dict[str, list[dict[str, Any]]] = {}
-    p = saves_path()
-    if not p.exists():
-        return out
-    for raw in p.read_text().splitlines():
-        try:
-            rec = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        t, end = float(rec.get("t", 0)), float(rec.get("t_end", rec.get("t", 0)))
-        if rec.get("device") in device_ids and end >= t0 and t <= t1:
-            out.setdefault(rec["device"], []).append({"t": t, "t_end": end})
-    return out
-
-
 class DeviceState(StrEnum):
     DISCONNECTED = "disconnected"
     CONNECTING = "connecting"
@@ -161,7 +134,6 @@ class Device:
         self.protocol.on_stream_line(self._route_stream_line)
         self.protocol.on_raw_line(self._on_raw_line)
         self.protocol.on_alert(self._on_alert)
-        self.protocol.on_save(self._on_save)
 
     async def connect(self) -> None:
         """Connect to the device and retrieve its info.
@@ -368,21 +340,6 @@ class Device:
     def _on_raw_line(self, line: str) -> None:
         """Handle non-streaming, non-response lines (log output)."""
         log.debug("[%s] %s", self.id[:8], line)
-
-    def _on_save(self, t0: float, t1: float) -> None:
-        log.info(
-            "[%s] settings save sent at %.3f (reply after %.0f ms)",
-            self.id[:8],
-            t0,
-            (t1 - t0) * 1000,
-        )
-        try:
-            with saves_path().open("a") as f:
-                f.write(
-                    json.dumps({"t": round(t0, 3), "t_end": round(t1, 3), "device": self.id}) + "\n"
-                )
-        except OSError as e:
-            log.error("[FALLBACK] could not record a settings save to %s: %s", saves_path(), e)
 
     def _on_alert(self, line: str) -> None:
         text = line.strip()

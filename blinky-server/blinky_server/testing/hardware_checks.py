@@ -1507,7 +1507,7 @@ async def baseline(device_ids: list[str], alert_t: float) -> dict[str, Any]:
 @durable.step
 async def strict(device_ids: list[str], windows: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """The strict rules over every loop window the phases read (strict_rules.judge)."""
-    return strict_rules.judge(device_ids, windows, "hardware-checks")
+    return strict_rules.judge(windows, "hardware-checks")
 
 
 LIMIT_OP = {"max": "max", "min": "min", "abs": "within ±"}  # a strict rule's kind of limit

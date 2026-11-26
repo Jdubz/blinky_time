@@ -87,11 +87,6 @@ STRICT_WORST = Gauge(
     "Each strict rule's worst measured value in the last run of its source (its unit).",
     ["rule", "source"],
 )
-STRICT_EXCLUDED = Gauge(
-    "blinky_strict_rule_excluded_windows",
-    "Loop windows the last run of its source excluded from the rule (a settings save).",
-    ["rule", "source"],
-)
 STRICT_BLOCKING = Gauge(
     "blinky_strict_rule_blocking", "1 if the rule blocks (mode block), 0 if it warns.", ["rule"]
 )
@@ -112,7 +107,6 @@ def record_strict(source: str, strict: dict[str, Any]) -> None:
     for r in strict.get("rules") or []:
         labels = (r["rule"], source)
         STRICT_BLOCKING.labels(r["rule"]).set(1 if r["mode"] == "block" else 0)
-        STRICT_EXCLUDED.labels(*labels).set(len(r.get("excluded") or []))
         if r["status"] == "no data":
             for g in (STRICT_PASS, STRICT_WORST):
                 with contextlib.suppress(KeyError):
