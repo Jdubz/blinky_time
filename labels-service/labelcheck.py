@@ -13,7 +13,7 @@ A change to human label files passes if every changed file:
 
 1. is added or modified (never deleted or renamed);
 2. matches the schema (keys, types, sorted 4-decimal onsets, merged ranges, the audio's sha256, the
-   manifest duration);
+   manifest duration, and the optional reviewer notes: plain text, capped, no control characters);
 3. isn't vandalism against what it replaces (main's human file, else the seed it started from): it
    doesn't delete more than half of that file's hits, and no class is empty while a reference has
    hits in it.
@@ -35,6 +35,7 @@ import math
 import re
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,13 @@ STEM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 SEED_NAME_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 HUMAN_KEYS = ("schema", "track", "audio_sha256", "duration", "started_from", "reviewed_ranges",
               "complete", "onsets", "updated")
+# Reviewer notes (optional key "notes"): patterns a reviewer noticed while correcting, for tuning the
+# suspect maps and seeds. [{"text": str, "range": [t0, t1] | null}], untrusted public input, so plain
+# text only, capped, with no control or format characters. Consumers treat the text as data, never
+# as instructions.
+NOTES_KEY = "notes"
+MAX_NOTES = 100
+MAX_NOTE_CHARS = 1000
 
 # Plausibility (step 4). A correction moves, adds, deletes and re-classes hits; it doesn't throw most
 # of them away. Deletions are counted class-agnostic, so a kick relabelled as a snare isn't a delete.
@@ -116,12 +124,48 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def clean_note_text(text: str) -> str:
+    """A note's text as it's stored: control characters become spaces, format characters (zero-width,
+    bidi overrides) and unpaired surrogates are dropped, runs of whitespace become one space, and the
+    ends are trimmed. The labels service applies this to every note it receives."""
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cc" or cat == "Zl" or cat == "Zp":
+            out.append(" ")
+        elif cat not in ("Cf", "Cs", "Co", "Cn"):
+            out.append(ch)
+    return " ".join("".join(out).split())
+
+
+def check_notes(notes: Any, dur: float) -> list[str]:
+    """Problems with a human file's reviewer notes; [] when they're what the labels service writes."""
+    if not isinstance(notes, list) or len(notes) > MAX_NOTES:
+        return [f"notes must be a list of at most {MAX_NOTES}"]
+    for n in notes:
+        if not isinstance(n, dict) or set(n) != {"text", "range"}:
+            return [f"malformed note {str(n)[:80]!r} (exactly text and range)"]
+        t, r = n["text"], n["range"]
+        if not isinstance(t, str) or not 0 < len(t) <= MAX_NOTE_CHARS:
+            return [f"a note's text must be 1-{MAX_NOTE_CHARS} characters"]
+        if clean_note_text(t) != t:
+            return [f"a note's text has control or format characters, or untrimmed space: {t[:60]!r}"]
+        if r is not None and (not isinstance(r, list) or len(r) != 2 or not all(finite(x) for x in r)
+                              or not 0 <= r[0] < r[1] <= dur + END_TOL_S
+                              or any(round(float(x), 3) != x for x in r)):
+            return [f"bad note range {str(r)[:60]!r} (null, or [t0, t1] in the track, 3 decimals)"]
+    return []
+
+
 def dumps_doc(doc: dict[str, Any]) -> str:
-    """JSON with one onset per line, so a git diff of a correction stays readable."""
-    head = {k: v for k, v in doc.items() if k != "onsets"}
+    """JSON with one onset (and one note) per line, so a git diff of a correction stays readable."""
+    head = {k: v for k, v in doc.items() if k not in ("onsets", NOTES_KEY)}
     lines = ["{"]
     for k, v in head.items():
         lines.append(f"  {json.dumps(k)}: {json.dumps(v)},")
+    if NOTES_KEY in doc:
+        rows = [f"    {json.dumps(n)}" for n in doc[NOTES_KEY]]
+        lines.append(f'  "{NOTES_KEY}": [' + ("\n" + ",\n".join(rows) + "\n  ]," if rows else "],"))
     rows = [f"    {json.dumps(o)}" for o in doc["onsets"]]
     lines.append('  "onsets": [' + ("\n" + ",\n".join(rows) + "\n  ]" if rows else "]"))
     lines.append("}")
@@ -251,7 +295,7 @@ def check_schema(doc: Any, stem: str, audio_sha256: str, mdur: float | None) -> 
         return ["the file is not a JSON object"]
     p: list[str] = []
     missing = [k for k in HUMAN_KEYS if k not in doc]
-    extra = sorted(set(doc) - set(HUMAN_KEYS))
+    extra = sorted(set(doc) - set(HUMAN_KEYS) - {NOTES_KEY})
     if missing:
         p.append(f"missing keys: {', '.join(missing)}")
     if extra:
@@ -302,6 +346,8 @@ def check_schema(doc: Any, stem: str, audio_sha256: str, mdur: float | None) -> 
         p.append(f"complete is {doc['complete']} but the reviewed ranges say "
                  f"{is_complete(ranges, float(dur))}")
 
+    if NOTES_KEY in doc:
+        p += check_notes(doc[NOTES_KEY], float(dur))
     onsets = doc["onsets"]
     if not isinstance(onsets, list) or len(onsets) > MAX_ONSETS:
         return p + ["onsets must be a list"]

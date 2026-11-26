@@ -86,9 +86,14 @@ def main() -> None:
     check(st == 200 and a["rev"] == t["rev"] + 2, "page A's edits are saved")
     pulled = call("GET", f"/api/ops?stem={stem}&since={t['rev']}")[2]
     check([op["op"] for _, by, op in pulled["ops"] if by == "page-aaaa"] == ["move", "add"], "page B pulls page A's edits")
-    st, _, b = call("POST", f"/api/ops?stem={stem}", {**base, "tab": "page-bbbb", "ops": [{"op": "del", "id": h2}]})
+    st, _, b = call("POST", f"/api/ops?stem={stem}", {**base, "tab": "page-bbbb", "ops": [
+        {"op": "del", "id": h2}, {"op": "note_add", "id": "page-bbbb-n1", "text": "snares\u202e under the sweep dropped", "range": [1, 3]}]})
     pulled = call("GET", f"/api/ops?stem={stem}&since={a['rev']}")[2]
-    check([(by, op["op"]) for _, by, op in pulled["ops"]] == [("page-bbbb", "del")], "page A pulls page B's edit")
+    check([(by, op["op"]) for _, by, op in pulled["ops"]] == [("page-bbbb", "del"), ("page-bbbb", "note_add")],
+          "page A pulls page B's edit and note")
+    check(pulled["ops"][1][2]["text"] == "snares under the sweep dropped", "the note's text is cleaned")
+    check(call("POST", f"/api/ops?stem={stem}", {**base, "tab": "page-bbbb", "ops": [
+        {"op": "note_add", "id": "page-bbbb-n2", "text": "x" * 1001, "range": None}]})[0] == 400, "an over-long note is refused")
     view = call("GET", f"/api/track?stem={stem}")[2]
     ids = {o["id"] for o in view["onsets"]}
     check("page-aaaa-1" in ids and h2 not in ids and view["unpublished"], "both edits are in the shared labels; publishing soon")
@@ -99,6 +104,7 @@ def main() -> None:
     check(list(exp["tracks"]) == [path], "the export offers the edited track")
     doc = json.loads(exp["tracks"][path])
     check(len(doc["onsets"]) == len(t["onsets"]) and doc["complete"] is False, "with both pages' edits (partial progress)")
+    check(doc.get("notes") == [{"text": "snares under the sweep dropped", "range": [1.0, 3.0]}], "and the note")
     # What labels-sync.yml does: the file, committed on main (here straight onto the stand-in's main).
     with tempfile.TemporaryDirectory() as d:
         subprocess.run(["git", "clone", "-q", args.remote, d], check=True)

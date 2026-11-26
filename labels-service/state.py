@@ -10,7 +10,14 @@ change different hits and never overwrite each other; on the same hit, the later
     {"op": "type",   "id": "...", "type": "snare"}
     {"op": "del",    "id": "..."}
     {"op": "review", "a": 0.0, "b": 6.0, "on": true}                 (mark a range reviewed or not)
+    {"op": "note_add",  "id": "...", "text": "...", "range": [a, b] | null}   (a reviewer note)
+    {"op": "note_edit", "id": "...", "text": "...", "range": ...}             (either or both)
+    {"op": "note_del",  "id": "..."}
     {"op": "reset"}                                                   (server only: reload the track)
+
+Reviewer notes are untrusted public text: the server cleans each one (labelcheck.clean_note_text:
+no control or format characters, trimmed), caps it at labelcheck.MAX_NOTE_CHARS and a track at
+labelcheck.MAX_NOTES, and refuses an empty one. They're published in the label file's "notes".
 
 State lives in <root>/<stem>.json, written atomically after every change. A track's state starts
 from its human file (or its best seed) the first time anyone opens it. Python standard library only.
@@ -33,6 +40,8 @@ ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 TAB_RE = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
 MAX_OPS_PER_REQUEST = 500
 MAX_HITS = 50_000
+MAX_NOTE_INPUT = 4 * labelcheck.MAX_NOTE_CHARS  # raw text longer than this is refused before cleaning
+NOTE_OPS = ("note_add", "note_edit", "note_del")
 KEEP_OPS = 2000  # recent operations kept for pulling; a page further behind reloads the track
 
 
@@ -65,6 +74,7 @@ class TrackStore:
         if st is None:
             p = self._path(stem)
             st = json.loads(p.read_text()) if p.is_file() else self._fresh(stem, self.initial(stem))
+            st.setdefault("notes", {})  # a state saved before notes existed
             self._cache[stem] = st
         return st
 
@@ -81,7 +91,10 @@ class TrackStore:
         hits = {f"{prefix}{i + 1}": [round(float(o["time"]), 4), o["type"]]
                 for i, o in enumerate(sorted(init["onsets"], key=lambda o: (o["time"], o["type"])))
                 if o["type"] in labelcheck.LABEL_TYPES}
-        return {"stem": stem, "rev": rev, "base_rev": rev, "hits": hits,
+        notes = {f"{prefix[:-1]}n{i + 1}": {"text": n["text"], "range": n.get("range")}
+                 for i, n in enumerate(init.get("notes") or [])
+                 if isinstance(n, dict) and isinstance(n.get("text"), str) and n["text"]}
+        return {"stem": stem, "rev": rev, "base_rev": rev, "hits": hits, "notes": notes,
                 "reviewed": labelcheck.merge_ranges(init.get("reviewed_ranges") or []),
                 "started_from": init.get("started_from"), "seed": init.get("seed"),
                 "audio_sha256": init["audio_sha256"], "duration": init.get("duration"),
@@ -103,6 +116,7 @@ class TrackStore:
             return {"rev": st["rev"], "reviewed_ranges": st["reviewed"],
                     "onsets": sorted(({"id": i, "time": t, "type": ty} for i, (t, ty) in st["hits"].items()),
                                      key=lambda o: o["time"]),
+                    "notes": [{"id": i, **n} for i, n in st["notes"].items()],
                     "updated": st["updated"], "seed": st["seed"], "started_from": st["started_from"],
                     "edited": st["rev"] > st["base_rev"]}
 
@@ -152,6 +166,9 @@ class TrackStore:
             clean = [self._check(o, limit) for o in ops]  # all or nothing
             if len(st["hits"]) + sum(1 for o in clean if o["op"] == "add") > MAX_HITS:
                 raise OpError("too many hits")
+            new_notes = {o["id"] for o in clean if o["op"] == "note_add"} - set(st["notes"])
+            if len(st["notes"]) + len(new_notes) > labelcheck.MAX_NOTES:
+                raise OpError(f"a track has at most {labelcheck.MAX_NOTES} notes")
             rev0 = st["rev"]
             for op in clean:
                 if self._apply_one(st, op):
@@ -170,9 +187,11 @@ class TrackStore:
 
     @staticmethod
     def _check(o: Any, limit: float) -> dict[str, Any]:
-        if not isinstance(o, dict) or o.get("op") not in ("add", "move", "type", "del", "review"):
-            raise OpError(f"bad operation {o!r}")
+        if not isinstance(o, dict) or o.get("op") not in ("add", "move", "type", "del", "review") + NOTE_OPS:
+            raise OpError(f"bad operation {str(o)[:200]}")
         kind = o["op"]
+        if kind in NOTE_OPS:
+            return TrackStore._check_note(o, limit)
         if kind == "review":
             a, b = o.get("a"), o.get("b")
             if not (_finite(a) and _finite(b) and 0 <= a < b <= limit) or not isinstance(o.get("on"), bool):
@@ -193,9 +212,61 @@ class TrackStore:
         return out
 
     @staticmethod
+    def _check_note(o: dict[str, Any], limit: float) -> dict[str, Any]:
+        """A note operation, its text cleaned (labelcheck.clean_note_text) and checked."""
+        kind = o["op"]
+        if not isinstance(o.get("id"), str) or not ID_RE.match(o["id"]):
+            raise OpError(f"bad note id in {kind}")
+        out: dict[str, Any] = {"op": kind, "id": o["id"]}
+        if kind == "note_del":
+            return out
+        if kind == "note_add" and not ("text" in o and "range" in o):
+            raise OpError("note_add needs text and range")
+        if kind == "note_edit" and not ("text" in o or "range" in o):
+            raise OpError("note_edit needs text or range")
+        if "text" in o:
+            t = o["text"]
+            if not isinstance(t, str) or len(t) > MAX_NOTE_INPUT:
+                raise OpError("a note's text must be a string")
+            t = labelcheck.clean_note_text(t)
+            if not 0 < len(t) <= labelcheck.MAX_NOTE_CHARS:
+                raise OpError(f"a note's text must be 1-{labelcheck.MAX_NOTE_CHARS} characters of plain text")
+            out["text"] = t
+        if "range" in o:
+            r = o["range"]
+            if r is not None:
+                if (not isinstance(r, list) or len(r) != 2 or not all(_finite(x) for x in r)
+                        or not 0 <= r[0] < r[1] <= limit):
+                    raise OpError("a note's range must be null or [start, end] inside the track")
+                r = [round(float(r[0]), 3), round(float(r[1]), 3)]
+                if r[1] <= r[0]:
+                    raise OpError("a note's range is empty")
+            out["range"] = r
+        return out
+
+    @staticmethod
+    def _apply_note(st: dict[str, Any], op: dict[str, Any]) -> bool:
+        notes, kind, cur = st["notes"], op["op"], st["notes"].get(op["id"])
+        if kind == "note_add":
+            new = {"text": op["text"], "range": op["range"]}
+        elif cur is None:
+            return False
+        elif kind == "note_del":
+            del notes[op["id"]]
+            return True
+        else:
+            new = {"text": op.get("text", cur["text"]), "range": op["range"] if "range" in op else cur["range"]}
+        if new == cur:
+            return False
+        notes[op["id"]] = new
+        return True
+
+    @staticmethod
     def _apply_one(st: dict[str, Any], op: dict[str, Any]) -> bool:
         """Apply one operation; False when it changes nothing (e.g. it names a hit someone deleted)."""
         hits, kind = st["hits"], op["op"]
+        if kind in NOTE_OPS:
+            return TrackStore._apply_note(st, op)
         if kind == "review":
             before = st["reviewed"]
             if op["on"]:
@@ -264,11 +335,16 @@ class TrackStore:
             onsets = sorted({(t, ty) for t, ty in st["hits"].values()})
             ranges = [[round(a, 3), round(min(b, dur), 3)] for a, b in st["reviewed"] if min(b, dur) > a]
             ranges = labelcheck.merge_ranges(ranges)
-            return {"schema": labelcheck.SCHEMA, "track": stem, "audio_sha256": st["audio_sha256"],
-                    "duration": dur, "started_from": st["started_from"], "reviewed_ranges": ranges,
-                    "complete": labelcheck.is_complete(ranges, dur),
-                    "onsets": [{"time": t, "type": ty} for t, ty in onsets],
-                    "updated": st["updated"] or hosted.now_iso()}
+            out = {"schema": labelcheck.SCHEMA, "track": stem, "audio_sha256": st["audio_sha256"],
+                   "duration": dur, "started_from": st["started_from"], "reviewed_ranges": ranges,
+                   "complete": labelcheck.is_complete(ranges, dur),
+                   "onsets": [{"time": t, "type": ty} for t, ty in onsets],
+                   "updated": st["updated"] or hosted.now_iso()}
+            notes = [{"text": n["text"], "range": n["range"] if n["range"] is None or n["range"][1] <= dur + labelcheck.END_TOL_S
+                      else None} for n in st["notes"].values()]
+            if notes:  # no "notes" key without notes: such a file stays byte-identical to before
+                out[labelcheck.NOTES_KEY] = notes
+            return out
 
     def text(self, stem: str) -> str | None:
         d = self.doc(stem)

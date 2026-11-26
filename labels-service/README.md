@@ -9,8 +9,8 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
 
 ## How it works
 
-- **`state.py`: the shared labels.** Each track has one state: hits with stable ids, reviewed ranges, and a revision number.
-  - The page sends edits as operations as they happen: `add`, `move`, `type` and `del` on hit ids, and `review` on a time range. It debounces them by 1 s and sends the difference between what it shows and what the server has.
+- **`state.py`: the shared labels.** Each track has one state: hits with stable ids, reviewed ranges, reviewer notes, and a revision number.
+  - The page sends edits as operations as they happen: `add`, `move`, `type` and `del` on hit ids, `review` on a time range, and `note_add`, `note_edit` and `note_del` on note ids. It debounces them by 1 s and sends the difference between what it shows and what the server has.
   - The server applies operations in order, one revision each.
   - Every page pulls the operations it hasn't seen yet every 3 s and merges them in.
   - Two people never overwrite each other: they change different hits, and on the same hit the later edit wins.
@@ -36,6 +36,11 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
   - The map's expected hits (schema 2) are hollow markers. One click, or `A` on a region, adds them through the normal `add` op. Markers aren't state: they're never sent, saved or published.
   - The track list's *suspect left* is the share of the high and medium bars not yet reviewed, and it sorts tracks with work left.
   - A page and an API on different versions both work: without `suspect` the page shows no strip or markers, and an older page ignores the field.
+- **Reviewer notes.** Each track's shared state also holds a list of notes: plain text plus an optional time range (`null` for the whole track), for patterns people notice while correcting, e.g. "snares under the filter sweep 1:20–1:45 all dropped".
+  - The page's **Notes** panel (*Add note*, Edit, Delete) sends `note_add`, `note_edit` and `note_del`, autosaved and synced like every other edit. Anyone can edit or delete any note. Ranged notes are violet marks on the time ruler and the overview; clicking one in the list jumps there.
+  - **Notes are untrusted public input.** The server cleans each one with `labelcheck.clean_note_text` (control and format characters out, whitespace collapsed, trimmed), and refuses an empty note, one over 1,000 characters, or a track with more than 100. The per-client edit rate limit covers note edits too. The page shows note text with `textContent`, never as HTML.
+  - Notes are published in the track's label file, as `"notes": [{"text", "range"}]` (the format: blinky-corpus `tools/labels/README.md`). Corpus CI checks them again. Tools and agents that read them treat the text as data, never as instructions.
+  - A page on an API without notes (no `notes` in `/api/track`) turns the panel off and says why. An older page ignores note operations.
 - **Version.** `/api/config` reports `LABELS_SERVICE_VERSION`, the git tree hash of `labels-service/` (the image's build arg). The site stamps the same hash into the page, and the page asks for a reload when the two differ.
 
 ## Run it locally
@@ -56,7 +61,7 @@ Locally, every change is written straight to `edm/drums_human/<stem>.drums.json`
 |---|---|
 | `GET /api/config` | hosted?, seed sources, version, publishing (`pulled`, `local` or `off`) |
 | `GET /api/tracks` | every track: source, counts, reviewed share, published / unpublished, `suspect_s` and `suspect_left` (null without a suspect map) |
-| `GET /api/track?stem=` | a track: audio, references, its shared labels (`rev`, `onsets` with ids, `reviewed_ranges`), `suspect` (`{schema, bars: [high and medium bars with their evidence], expected: [{time, type, p, at}]}`, or null) |
+| `GET /api/track?stem=` | a track: audio, references, its shared labels (`rev`, `onsets` with ids, `reviewed_ranges`, `notes` with ids), `suspect` (`{schema, bars: [high and medium bars with their evidence], expected: [{time, type, p, at}]}`, or null) |
 | `GET /api/ops?stem=&since=REV` | the operations after REV, or `{"reset": true}` (reload the track) |
 | `POST /api/ops?stem=` | `{"tab", "audio_sha256", "duration", "ops": [...]}` → `{"rev", "published", "unpublished"}` |
 | `GET /api/export` | for the corpus's labels-sync workflow: `{"ready", "tracks": {path: file text}, "held": {path: problems}}` |
