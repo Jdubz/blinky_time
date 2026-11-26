@@ -211,6 +211,38 @@ def test_frame_zero_is_dated_from_each_snapshot() -> None:
     assert len(meter.estimates) == 5 and meter.rejected == 1
 
 
+def test_the_device_is_opened_without_waiting_for_it() -> None:
+    """A blocking open of a busy device waits for it; non-blocking, it's EBUSY at once (and the
+    caller falls back to ffplay). Writes go back to blocking."""
+    calls: list[tuple[Any, ...]] = []
+
+    class Lib:
+        def __init__(self, open_rc: int) -> None:
+            self.open_rc = open_rc
+
+        def snd_pcm_open(self, ref: Any, name: bytes, stream: int, mode: int) -> int:
+            calls.append(("open", name, stream, mode))
+            return self.open_rc
+
+        def snd_pcm_nonblock(self, pcm: Any, on: int) -> int:
+            calls.append(("nonblock", on))
+            return 0
+
+        def snd_strerror(self, rc: int) -> bytes:
+            return b"Device or resource busy"
+
+    alsa = alsa_play.Alsa.__new__(alsa_play.Alsa)
+    alsa.lib = Lib(0)  # type: ignore[assignment]
+    alsa_play.open_pcm(alsa, "plughw")
+    assert calls == [
+        ("open", b"plughw", alsa_play.SND_PCM_STREAM_PLAYBACK, alsa_play.SND_PCM_NONBLOCK),
+        ("nonblock", 0),
+    ]
+    alsa.lib = Lib(-16)  # type: ignore[assignment]
+    with pytest.raises(OSError, match="busy"):
+        alsa_play.open_pcm(alsa, "plughw")
+
+
 def test_the_stream_is_configured_with_timestamps_on() -> None:
     """Without SND_PCM_TSTAMP_ENABLE the kernel leaves a running stream's status timestamp at
     zero on real hardware (the null PCM fills it in anyway, so the end-to-end test can't

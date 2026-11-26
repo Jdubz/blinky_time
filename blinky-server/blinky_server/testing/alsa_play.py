@@ -57,6 +57,7 @@ EXIT_FAILED_PLAYING = 3
 
 # alsa/pcm.h
 SND_PCM_STREAM_PLAYBACK = 0
+SND_PCM_NONBLOCK = 1
 SND_PCM_FORMAT_S16_LE = 2
 SND_PCM_ACCESS_RW_INTERLEAVED = 3
 SND_PCM_TSTAMP_ENABLE = 1
@@ -89,6 +90,7 @@ class Alsa:
         p, c_int, c_long, c_ulong = ctypes.c_void_p, ctypes.c_int, ctypes.c_long, ctypes.c_ulong
         sig = {
             "snd_pcm_open": (c_int, [ctypes.POINTER(p), ctypes.c_char_p, c_int, c_int]),
+            "snd_pcm_nonblock": (c_int, [p, c_int]),
             "snd_pcm_set_params": (
                 c_int,
                 [p, c_int, c_int, ctypes.c_uint, ctypes.c_uint, c_int, ctypes.c_uint],
@@ -218,6 +220,24 @@ class Meter:
         )
 
 
+def open_pcm(alsa: Alsa, name: str) -> ctypes.c_void_p:
+    """Open the PCM without waiting: a blocking open of a device another process holds waits
+    for it to be freed, and nothing above would time it out. Non-blocking, a busy device is
+    EBUSY at once (nothing played: the caller falls back). Writes block again after."""
+    pcm = ctypes.c_void_p()
+    alsa.check(
+        alsa.lib.snd_pcm_open(
+            ctypes.byref(pcm), name.encode(), SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK
+        ),
+        f"open {name}",
+    )
+    rc = alsa.lib.snd_pcm_nonblock(pcm, 0)
+    if rc < 0:
+        alsa.lib.snd_pcm_close(pcm)
+        alsa.check(rc, f"blocking mode on {name}")
+    return pcm
+
+
 def configure(alsa: Alsa, pcm: ctypes.c_void_p) -> tuple[int, int]:
     """The stream's format and buffer, and timestamps on: with the software params' default
     timestamp mode (none), the kernel leaves a running stream's status timestamp at zero
@@ -304,13 +324,7 @@ def _play(
         return EXIT_NOTHING_PLAYED
     try:
         alsa = Alsa()
-        pcm = ctypes.c_void_p()
-        alsa.check(
-            alsa.lib.snd_pcm_open(
-                ctypes.byref(pcm), args.device.encode(), SND_PCM_STREAM_PLAYBACK, 0
-            ),
-            f"open {args.device}",
-        )
+        pcm = open_pcm(alsa, args.device)
     except OSError as e:
         emit(out, "error", stage="open", error=str(e))
         return EXIT_NOTHING_PLAYED
