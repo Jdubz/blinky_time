@@ -114,7 +114,7 @@ To recalibrate after a change of speaker, placement or detection latency: run va
 2. **SWD:** blinky-firmware's `scripts/swd_recover.sh restore` (backup, CTRL-AP erase, MBR + S140 + fleet bootloader + UICR + stable app + a valid settings page, verify, reset). Verified in 3.5 min. The server doesn't trigger it yet (open work in blinky-firmware's [BOOTLOADER_WORKFLOW.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/BOOTLOADER_WORKFLOW.md)).
 3. **Power:** the hub cuts VBUS per port. A real cold boot cuts **both** ports, the chip's and the Debug Mate's, because the Debug Mate also powers the chip. End SWD sessions with the core running: a core left halted survives a cut of the chip's port alone.
 
-Two behaviours to expect: the server doesn't auto-recover a device within 30 minutes of a UF2 write to it (the cascade guard), and a chip stuck in an enumeration loop can make the hub reset its upstream link, so switch that port off.
+Three behaviours to expect: the server doesn't auto-recover a device within 30 minutes of a UF2 write to it (the cascade guard); a flash whose UF2 drive is still attached 60 s after the copy (the bootloader never got every block, as when a USB reset cut the copy short on 2026-11-25) copies once more into that bootloader, with the anomaly `uf2_write_retried`, instead of waiting out the guard; and a chip stuck in an enumeration loop can make the hub reset its upstream link, so switch that port off.
 
 ## Software setup
 

@@ -19,7 +19,7 @@ from ..firmware._guard import (
     enter_orchestrator_context,
     reset_orchestrator_context,
 )
-from ..firmware.anomalies import SignalHistory
+from ..firmware.anomalies import UF2_WRITE_RETRIED, UF2_WRITE_UNCONFIRMED, SignalHistory
 from ..firmware.anomalies import check_all as check_anomalies
 from ..firmware.flash_job import (
     FlashConflict,
@@ -30,7 +30,7 @@ from ..firmware.flash_job import (
     TransportProbe,
     select_transport,
 )
-from ..firmware.uf2_upload import _uf2_write_impl_for_job
+from ..firmware.uf2_upload import _uf2_write_impl_for_job, uf2_drive_present, usb_serial_of_port
 from ..firmware.verify import run_verify
 from ..transport.base import Transport
 from ..transport.discovery import (
@@ -105,6 +105,13 @@ USB_DFU_RECOVERY_GRACE_S = 120.0
 # the whole call can take (USB reset or up to four 20 s mount steps, then the subprocess's
 # 300 s stream timeout + 10 s exit wait), released as soon as it returns.
 UF2_WRITE_HOLD_S = 600.0
+# After a UF2 write, a chip whose drive is still attached this long never got the whole
+# image: the bootloader reboots within a second of its last block, and it waits for
+# missing blocks forever. Then the copy is retried once, into the same bootloader, rather
+# than leaving the chip parked until auto-recovery's 30-minute guard runs out (2026-11-25,
+# job ecc8a4780e9f: a USB reset cut the copy short). The wait also keeps the reset that
+# the retry's completion causes at least 60 s after the bootloader entry.
+UF2_RETRY_SETTLE_S = 60.0
 
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
@@ -1151,16 +1158,55 @@ class FleetManager:
         prior_hold = self._reconnect_blackout.get(job.device_id)
         self.hold_reconnect(job.device_id, UF2_WRITE_HOLD_S)
         write_hold = self._reconnect_blackout.get(job.device_id)
+        serial_port = device.transport.address
+        usb_sn = usb_serial_of_port(serial_port)
         try:
             write_ok = await _uf2_write_impl_for_job(
                 job,
-                serial_port=device.transport.address,
+                serial_port=serial_port,
                 firmware_path=str(job.firmware_path),
                 transport=device.transport,
                 already_in_bootloader=(
                     device.state is DeviceState.DFU_RECOVERY and self._in_usb_bootloader(device.id)
                 ),
             )
+            drive = await self._uf2_drive_outcome(usb_sn)
+            if drive == "stayed":
+                # The bootloader is up and waiting for blocks: copy once more into it.
+                job.add_anomaly(UF2_WRITE_RETRIED)
+                log.warning(
+                    "flash job %s: %s's UF2 drive still attached %.0fs after the write "
+                    "(writer said %s); retrying the copy once into its bootloader",
+                    job.job_id,
+                    usb_sn,
+                    UF2_RETRY_SETTLE_S,
+                    "ok" if write_ok else repr(job.error),
+                )
+                job.clear_error()
+                if self._reconnect_blackout.get(job.device_id) in (None, write_hold):
+                    # A fresh hold of our own for the second copy: the tool's exit
+                    # /reconnect cleared the first. Someone else's hold is left as is.
+                    self.hold_reconnect(job.device_id, UF2_WRITE_HOLD_S)
+                    write_hold = self._reconnect_blackout.get(job.device_id)
+                write_ok = await _uf2_write_impl_for_job(
+                    job,
+                    serial_port=serial_port,
+                    firmware_path=str(job.firmware_path),
+                    transport=device.transport,
+                    already_in_bootloader=True,
+                    usb_serial=usb_sn,
+                )
+            elif drive == "left" and not write_ok:
+                # The writer couldn't confirm the copy, but the bootloader took it and
+                # rebooted after all: let verify judge the result.
+                log.info(
+                    "flash job %s: writer reported %r but the UF2 drive left; verifying",
+                    job.job_id,
+                    job.error,
+                )
+                job.add_anomaly(UF2_WRITE_UNCONFIRMED)
+                job.clear_error()
+                write_ok = True
         finally:
             # Lift this hold only. Someone else's is left alone: one set during the write (an
             # operator's /release extends it, so the deadline is no longer ours; /reconnect
@@ -1197,6 +1243,23 @@ class FleetManager:
             check_anomalies(job, history)
             job.set_error("verify did not converge within 5 minutes")
             job.transition(FlashJobState.FAILED)
+
+    async def _uf2_drive_outcome(self, usb_sn: str | None) -> Literal["absent", "left", "stayed"]:
+        """Where the chip's UF2 drive stands once a write attempt has returned.
+
+        ``absent``: no drive (the chip is not in its bootloader, or it can't be
+        identified). ``left``: the drive was there and went away within
+        ``UF2_RETRY_SETTLE_S`` (the bootloader finished and rebooted).
+        ``stayed``: still attached after it, so the image was never applied.
+        """
+        if not uf2_drive_present(usb_sn):
+            return "absent"
+        deadline = _time.monotonic() + UF2_RETRY_SETTLE_S
+        while _time.monotonic() < deadline:
+            await asyncio.sleep(1.0)
+            if not uf2_drive_present(usb_sn):
+                return "left"
+        return "stayed"
 
     async def _run_ble_dfu_flash(self, job: FlashJob) -> None:
         """BLE-DFU branch of ``_run_flash_job``.
