@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drum Reviewer</title>
+<!-- Self-contained: no external scripts, fonts or styles, so it works offline on a LAN. -->
+<!-- The API this page talks to. Empty: the server that served the page (local mode). A site that
+     hosts the page elsewhere sets the hosted API's public URL here at build time. -->
+<meta name="drum-reviewer-api" content="">
+<!-- The labels-service version this page was built from (the site's build sets it); the page says
+     "reload" when the server reports another one. -->
+<meta name="drum-reviewer-version" content="">
+<style>
+  :root {
+    --bg: #14161c; --panel: #1c1f27; --panel2: #242833; --line: #333846; --text: #e3e6ee; --dim: #8a90a0;
+    --kick: #ff9f1c; --snare: #3ec5ff; --hihat: #9aa0ad; --sel: #ffffff; --rev: #2bb673; --unrev: #5a2a2a;
+    --warn: #e0a800; --err: #e5484d; --region: rgba(120,160,255,0.18); --play: #ff4d6d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, select, input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; }
+  button { padding: 3px 9px; cursor: pointer; }
+  button:hover { border-color: #556; }
+  button.primary { background: #1f6f4a; border-color: #2bb673; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  select { padding: 2px 4px; }
+  label { white-space: nowrap; }
+  header { display: flex; gap: 10px; align-items: center; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 15px; margin: 0 6px 0 0; }
+  #trackname { font-weight: 600; font-size: 14px; }
+  .badge { padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; background: var(--panel2); border: 1px solid var(--line); }
+  .badge.human { border-color: var(--rev); color: var(--rev); }
+  .badge.seed { border-color: var(--snare); color: var(--snare); }
+  .badge.bad, .badge.empty { border-color: var(--err); color: var(--err); }
+  .badge.pending { border-color: var(--warn); color: var(--warn); }
+  #status { color: var(--dim); }
+  #status.dirty { color: var(--warn); }
+  .spacer { flex: 1; }
+  .banner { padding: 8px 14px; font-weight: 600; display: none; }
+  .banner.warn { background: #4a3a00; color: #ffd75e; display: block; }
+  .banner.err { background: #4d1416; color: #ffb3b5; display: block; }
+  #toolbar { display: flex; gap: 12px; align-items: center; padding: 6px 14px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  #toolbar .grp { display: flex; gap: 6px; align-items: center; }
+  #time { font-family: ui-monospace, Menlo, monospace; min-width: 120px; }
+  #view { padding: 8px 14px 0; }
+  #overview { width: 100%; height: 36px; display: block; background: #0d0f14; border-radius: 4px; cursor: pointer; }
+  #stackwrap { position: relative; margin-top: 6px; }
+  #main, #overlay { width: 100%; display: block; }
+  #overlay { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  #info { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; padding: 8px 14px; }
+  #info .box { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  #info .box h3 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .k { color: var(--kick); } .s { color: var(--snare); } .ok { color: var(--rev); } .bad { color: var(--err); } .dim { color: var(--dim); }
+  a.link { color: var(--snare); cursor: pointer; text-decoration: underline; }
+  .modal-bg { position: fixed; inset: 0; background: #000a; display: none; z-index: 30; overflow: auto; padding: 32px 16px; }
+  .modal-bg.open { display: flex; align-items: flex-start; justify-content: center; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-width: 900px; width: 100%; padding: 14px 20px 18px; box-shadow: 0 12px 40px #000c; }
+  .modal-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .modal-head h2 { margin: 0; font-size: 17px; }
+  .modal h3 { margin: 16px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--dim); }
+  .modal p, .modal li { line-height: 1.5; }
+  .modal ol { margin: 4px 0; padding-left: 22px; }
+  .modal table { border-collapse: collapse; }
+  .modal td { padding: 3px 14px 3px 0; vertical-align: top; }
+  .lanes td:first-child { white-space: nowrap; font-weight: 600; }
+  .setting { display: grid; grid-template-columns: 210px 1fr; gap: 2px 14px; padding: 8px 0; border-top: 1px solid var(--line); align-items: start; }
+  .setting:first-of-type { border-top: 0; }
+  .setting .ctl { display: flex; gap: 8px; align-items: center; }
+  .setting .desc { color: var(--dim); font-size: 12px; line-height: 1.45; }
+  #help-keys { color: var(--dim); font-size: 12px; }
+  #help-keys td { padding: 1px 12px 1px 0; }
+  .chip { padding: 2px 9px; border-radius: 10px; font-size: 12px; cursor: pointer; }
+  kbd { font-family: ui-monospace, Menlo, monospace; font-size: 11px; background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; color: var(--text); }
+  #tracks { position: fixed; inset: 40px 6% auto 6%; max-height: calc(100vh - 80px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 10px 40px #000a; padding: 12px 16px; display: none; z-index: 10; }
+  #tracks.open { display: block; }
+  #tracks table { width: 100%; border-collapse: collapse; }
+  #tracks th { text-align: left; color: var(--dim); font-weight: 500; border-bottom: 1px solid var(--line); padding: 4px 6px; }
+  #tracks td { padding: 4px 6px; border-bottom: 1px solid #262a35; }
+  #tracks tbody tr { cursor: pointer; }
+  #tracks tbody tr:hover td { background: var(--panel2); }
+  .bar { display: inline-block; width: 80px; height: 8px; background: var(--unrev); border-radius: 4px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--rev); }
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #000d; padding: 6px 14px; border-radius: 6px; display: none; z-index: 20; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drum Reviewer</h1>
+  <button id="btn-tracks" title="Track list (T)">Tracks</button>
+  <button id="btn-settings" title="Playback, label clicks, display and editing options">⚙ Settings</button>
+  <button id="btn-help" title="How this page works (?)">? Help</button>
+  <span id="trackname">no track</span>
+  <span id="seedbadge" class="badge" style="display:none"></span>
+  <span id="counts" class="dim"></span>
+  <span class="spacer"></span>
+  <span id="status"></span>
+  <button id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+  <button id="btn-redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+</header>
+<div id="banner-err" class="banner"></div>
+<div id="banner-warn" class="banner"></div>
+<div id="toolbar">
+  <div class="grp">
+    <button id="btn-play" title="Play/pause (Space)">Play</button>
+    <span id="time" class="mono">0:00.000</span>
+    <span id="clicks-chip" class="chip badge" title="Label clicks: a low click at every kick label and a high click at every snare label during playback. Click to change in Settings."></span>
+  </div>
+  <div class="grp">
+    <button id="btn-zout" title="Zoom out (-)">−</button>
+    <button id="btn-zin" title="Zoom in (+)">+</button>
+    <button id="btn-review" title="Mark region / visible range reviewed (R)">Mark reviewed</button>
+    <button id="btn-next" title="Mark visible reviewed and go to the next screen (Enter)">Reviewed → next</button>
+  </div>
+</div>
+<div id="view">
+  <canvas id="overview"></canvas>
+  <div id="stackwrap"><canvas id="main"></canvas><canvas id="overlay" tabindex="0"></canvas></div>
+</div>
+<div id="info">
+  <div class="box"><h3>Track</h3><div id="info-track" class="mono">—</div></div>
+  <div class="box"><h3>Selection</h3><div id="info-sel" class="mono">—</div></div>
+  <div class="box"><h3>Offset check (label → snap target, ±25 ms)</h3><div id="info-offset" class="mono">—</div></div>
+  <div class="box"><h3>Checks</h3><div id="info-checks" class="mono">—</div></div>
+</div>
+<div id="settings" class="modal-bg"><div class="modal" role="dialog" aria-label="Settings">
+  <div class="modal-head"><h2>Settings</h2><span class="dim">remembered in this browser</span><span class="spacer"></span><button id="btn-settings-close">Close (Esc)</button></div>
+  <h3>Label clicks</h3>
+    <div class="setting"><div class="ctl"><label class="k"><input type="checkbox" id="click-kick"> kick clicks</label></div><div class="desc"><strong style="color:var(--text)">Kick clicks.</strong> A low click at every kick label during playback. If the click doesn't land on the kick drum, the label is off. Off by default. Shortcut <kbd>Shift+K</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label class="s"><input type="checkbox" id="click-snare"> snare clicks</label></div><div class="desc"><strong style="color:var(--text)">Snare clicks.</strong> A high click at every snare label. Off by default. Shortcut <kbd>Shift+S</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label>clicks <input type="range" id="click-vol" min="0" max="1" step="0.05" value="0.5" style="width:90px"></label><label>music <input type="range" id="music-vol" min="0" max="1" step="0.05" value="0.8" style="width:90px"></label></div><div class="desc"><strong style="color:var(--text)">Volumes.</strong> The click level and the music level.</div></div>
+  <h3>Playback</h3>
+    <div class="setting"><div class="ctl"><select id="rate"><option value="1">1.0×</option><option value="0.75">0.75×</option><option value="0.5">0.5×</option></select></div><div class="desc"><strong style="color:var(--text)">Speed.</strong> Slow the music down to hear timing. The clicks stay exactly on their labels; the pitch drops. Shortcuts <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="loop"> loop</label></div><div class="desc"><strong style="color:var(--text)">Loop.</strong> Repeat the selected region, or what's on screen if nothing is selected. Shortcut <kbd>L</kbd>.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="follow" checked> follow the playhead</label></div><div class="desc"><strong style="color:var(--text)">Follow.</strong> Scroll the view along with playback.</div></div>
+    <div class="setting"><div class="ctl"><select id="band"><option value="full">full mix</option><option value="low">low band (kick, 30–150 Hz)</option><option value="mid">mid band (snare, 150 Hz–5 kHz)</option></select></div><div class="desc"><strong style="color:var(--text)">Band solo.</strong> Play only the kick or snare frequency band, to hear one drum under its clicks. Shortcut <kbd>B</kbd> cycles.</div></div>
+  <h3>Editing</h3>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="snap-add" checked> snap new hits</label></div><div class="desc"><strong style="color:var(--text)">Snap on add.</strong> A hit you add moves to the nearest strong attack within ±25 ms. <kbd>N</kbd> snaps selected hits.</div></div>
+    <div class="setting"><div class="ctl"><select id="snap-ref"><option value="attack">attack (150 Hz–5 kHz)</option><option value="lane">own lane band</option></select></div><div class="desc"><strong style="color:var(--text)">Snap target.</strong> What snapping aligns to. "attack" is the transient both drums share; a kick's low-frequency energy builds up a few ms after it.</div></div>
+  <h3>Display</h3>
+    <div class="setting"><div class="ctl"><select id="ref"><option value="">none</option></select></div><div class="desc"><strong style="color:var(--text)">Reference ticks.</strong> Faint ghost ticks at the bottom of each lane from another label set, for comparison. They're not editable.</div></div>
+    <div class="setting"><div class="ctl"><label><input type="checkbox" id="show-hats"> show seed hi-hats</label></div><div class="desc"><strong style="color:var(--text)">Hi-hat ticks.</strong> Faint read-only marks along the top of the snare lane where the best automatic labels heard hi-hats. Not labels you're reviewing. Off by default.</div></div>
+</div></div>
+<div id="help" class="modal-bg"><div class="modal" role="dialog" aria-label="Help">
+  <div class="modal-head"><h2>How this page works</h2><span class="spacer"></span><button id="btn-help-close">Got it (Esc)</button></div>
+  <p>You're checking the <span class="k">kick</span> and <span class="s">snare</span> labels of one track at a time. Each track starts with the best automatic labels available (from a drum transcriber such as ADTOF). Fix what's wrong, mark each screen reviewed, and save. The scorer uses your labels once a track is 100% reviewed and saved.</p>
+  <h3>Reviewing a track</h3>
+  <ol>
+    <li><strong>Pick a track</strong> with <em>Tracks</em> (or <kbd>T</kbd>). The tracks most likely to be wrong are listed first.</li>
+    <li><strong>Play</strong> (<kbd>Space</kbd>). To hear where the labels are, turn on <em>label clicks</em> in <em>⚙ Settings</em>: a low click at each kick label, a high click at each snare label. A click that doesn't sit on its drum is a bad label. Slowing down (<kbd>2</kbd>, <kbd>3</kbd>) makes small offsets easier to hear.</li>
+    <li><strong>Fix</strong> what's wrong:
+      <ul>
+        <li><em>add:</em> double-click in the kick or snare lane, or press <kbd>K</kbd> / <kbd>S</kbd> at the mouse;</li>
+        <li><em>move:</em> hover a marker until the pointer turns into a hand and the marker lights up, then drag. In the kick lane you grab kicks, in the snare lane snares, in the waveform either. Dragging empty space selects a region instead;</li>
+        <li><em>delete:</em> select it and press <kbd>X</kbd>;</li>
+        <li><em>swap kick ↔ snare:</em> select it and press <kbd>C</kbd>;</li>
+        <li><em>nudge:</em> <kbd>←</kbd> / <kbd>→</kbd> by 1 ms.</li>
+      </ul></li>
+    <li><strong>Mark the screen reviewed</strong> with <em>Reviewed → next</em> (<kbd>Enter</kbd>). It moves on one screen. Green in the bottom lane and the overview shows what you've covered; <kbd>U</kbd> jumps to anything skipped.</li>
+    <li><strong>That's it: there's no Save.</strong> Every change saves by itself, and everyone works on the same labels: other people's changes show up within a few seconds. The labels are published to the corpus every few minutes; the scorer uses a track once it's 100% reviewed.</li>
+  </ol>
+  <h3>What you're looking at</h3>
+  <table class="lanes">
+    <tr><td>overview</td><td>The whole track. Green is reviewed; the box is the current view. Click to jump.</td></tr>
+    <tr><td>spectrogram</td><td>Frequency over time, 30 Hz–12 kHz. Drums show as vertical streaks.</td></tr>
+    <tr><td>waveform</td><td>The full mix. Every label is drawn through it as a line.</td></tr>
+    <tr><td class="k">kick lane</td><td>The 30–150 Hz band: the fill is its loudness, the line its onset strength. Peaks in the line are likely kicks. Kick labels are the markers.</td></tr>
+    <tr><td class="s">snare lane</td><td>The 150 Hz–5 kHz band, drawn the same way, with the snare labels.</td></tr>
+    <tr><td>reviewed</td><td>Green where you've marked reviewed, red where you haven't.</td></tr>
+  </table>
+  <p class="dim">The panels under the lanes show the selection, an <em>offset check</em> (labels consistently early or late against the attack), and <em>checks</em> (two same-drum hits closer than 20 ms; <kbd>I</kbd> jumps to the next).</p>
+  <h3>Mouse and keyboard</h3>
+  <table id="help-keys">
+    <tr><td><kbd>Space</kbd> play / pause</td><td><kbd>K</kbd> / <kbd>S</kbd> add kick / snare (at mouse when paused, else playhead)</td><td><kbd>R</kbd> mark region (or view) reviewed, <kbd>Shift+R</kbd> unmark</td></tr>
+    <tr><td><kbd>L</kbd> loop region (or view)</td><td><kbd>N</kbd> snap selected to onset peak (±25 ms)</td><td><kbd>Enter</kbd> mark view reviewed + next screen</td></tr>
+    <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> rate 1.0 / 0.75 / 0.5</td><td><kbd>C</kbd> change class kick ↔ snare</td><td><kbd>PgDn</kbd> / <kbd>PgUp</kbd> next / previous screen</td></tr>
+    <tr><td><kbd>Shift+K</kbd> / <kbd>Shift+S</kbd> kick / snare clicks</td><td><kbd>X</kbd> / <kbd>Del</kbd> delete selected</td><td><kbd>U</kbd> next unreviewed gap, <kbd>I</kbd> next check issue</td></tr>
+    <tr><td><kbd>B</kbd> band solo full → low → mid</td><td><kbd>←</kbd> <kbd>→</kbd> nudge 1 ms, <kbd>Shift</kbd> 5 ms (no selection: pan)</td><td><kbd>+</kbd> / <kbd>−</kbd> zoom, <kbd>0</kbd> whole track, <kbd>Z</kbd> 1 s zoom ↔ back</td></tr>
+    <tr><td><kbd>T</kbd> track list, <kbd>?</kbd> this help, <kbd>Esc</kbd> close</td><td><kbd>Tab</kbd> / <kbd>Shift+Tab</kbd> select next / previous hit</td><td><kbd>Home</kbd> / <kbd>End</kbd> start / end</td></tr>
+    <tr><td><kbd>Ctrl+S</kbd> save</td><td><kbd>Ctrl+A</kbd> select hits in region (or view), <kbd>Esc</kbd> clear</td><td><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Shift+Z</kbd> / <kbd>Ctrl+Y</kbd> redo</td></tr>
+    <tr><td colspan="3">Mouse: click = cursor / select a hit (<kbd>Shift</kbd> adds) · drag a hit = move · drag empty space = region (selects its hits; in a lane, that lane's class) · double-click in the kick or snare lane = add · wheel = zoom · <kbd>Shift</kbd>+wheel or sideways scroll = pan · overview = jump.</td></tr>
+  </table>
+</div></div>
+<div id="tracks">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+    <strong>Tracks</strong><span class="dim" id="tracks-sum"></span><span class="spacer"></span><button id="btn-tracks-close">Close (Esc)</button>
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>track</th><th>reviewed</th><th>labels</th><th class="k">kicks</th><th class="s">snares</th><th title="1 − mean per-class F-measure (±50 ms) between the two best automatic label sets: higher = they disagree more, review first">seed disagreement</th><th>published</th><th>updated</th></tr></thead>
+    <tbody id="tracks-body"></tbody>
+  </table>
+  <p class="dim">Sorted worst first: unfinished tracks by disagreement, then finished ones. A track is done when 100% of it is marked reviewed and saved.</p>
+</div>
+<div id="toast"></div>
+
+<!-- Analysis runs in a worker built from this text (a Blob URL), so the page stays responsive. -->
+<script id="worker-src" type="text/plain">
+"use strict";
+const LOW = [30, 150], MID = [150, 5000];
+const BUTTER4_Q = [0.5411961, 1.3065630];
+
+function coeffs(kind, f, sr, Q) {
+  const w0 = 2 * Math.PI * f / sr, cs = Math.cos(w0), alpha = Math.sin(w0) / (2 * Q), a0 = 1 + alpha;
+  const b = kind === "lp" ? [(1 - cs) / 2, 1 - cs, (1 - cs) / 2] : [(1 + cs) / 2, -(1 + cs), (1 + cs) / 2];
+  return [b[0] / a0, b[1] / a0, b[2] / a0, (-2 * cs) / a0, (1 - alpha) / a0];
+}
+function biquad(y, c, reverse) {
+  const [b0, b1, b2, a1, a2] = c, n = y.length;
+  let z1 = 0, z2 = 0;
+  if (!reverse) {
+    for (let i = 0; i < n; i++) { const x = y[i], o = b0 * x + z1; z1 = b1 * x - a1 * o + z2; z2 = b2 * x - a2 * o; y[i] = o; }
+  } else {
+    for (let i = n - 1; i >= 0; i--) { const x = y[i], o = b0 * x + z1; z1 = b1 * x - a1 * o + z2; z2 = b2 * x - a2 * o; y[i] = o; }
+  }
+}
+// Zero-phase (forward + backward) 4th-order Butterworth band-pass: no group delay, so the
+// envelope's timing is the audio's timing.
+function bandpass(mono, sr, lo, hi) {
+  const y = new Float32Array(mono);
+  const secs = [];
+  for (const q of BUTTER4_Q) secs.push(coeffs("hp", lo, sr, q));
+  if (hi < sr / 2 * 0.95) for (const q of BUTTER4_Q) secs.push(coeffs("lp", hi, sr, q));
+  for (const c of secs) biquad(y, c, false);
+  for (const c of secs) biquad(y, c, true);
+  return y;
+}
+function percentile(arr, p) {
+  const step = Math.max(1, Math.floor(arr.length / 20000)), s = [];
+  for (let i = 0; i < arr.length; i += step) s.push(arr[i]);
+  s.sort((a, b) => a - b);
+  return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : 0;
+}
+// Band envelope at a 1 ms hop: centred RMS over (2h+1) blocks, log-compressed; onset strength
+// is the positive centred slope of that, so its peak sits on the attack's steepest rise.
+function laneAnalysis(y, hop, nb, h, d) {
+  const e = new Float64Array(nb);
+  for (let b = 0; b < nb; b++) { let s = 0; const o = b * hop; for (let i = 0; i < hop; i++) { const v = y[o + i]; s += v * v; } e[b] = s; }
+  const env = new Float32Array(nb);
+  let acc = 0; const w = 2 * h + 1;
+  for (let i = -h; i < nb; i++) {
+    const add = i + h, rem = i - h - 1;
+    if (add < nb) acc += e[add];
+    if (rem >= 0) acc -= e[rem];
+    if (i >= 0) env[i] = Math.sqrt(Math.max(0, acc) / (w * hop));
+  }
+  const ref = percentile(env, 0.999) || 1;
+  const c = new Float32Array(nb), L = Math.log1p(100);
+  for (let i = 0; i < nb; i++) c[i] = Math.log1p(100 * Math.min(env[i] / ref, 1.5)) / L;
+  const os = new Float32Array(nb);
+  for (let i = d; i < nb - d; i++) os[i] = Math.max(0, c[i + d] - c[i - d]);
+  const osScale = percentile(os, 0.995) || 1;
+  return { env: c, os, osScale };
+}
+function fftPlan(N) {
+  const rev = new Uint32Array(N), bits = Math.log2(N);
+  for (let i = 0; i < N; i++) { let r = 0; for (let b = 0; b < bits; b++) r |= ((i >> b) & 1) << (bits - 1 - b); rev[i] = r; }
+  const cos = new Float64Array(N / 2), sin = new Float64Array(N / 2);
+  for (let i = 0; i < N / 2; i++) { cos[i] = Math.cos(-2 * Math.PI * i / N); sin[i] = Math.sin(-2 * Math.PI * i / N); }
+  return { N, rev, cos, sin };
+}
+function fft(p, re, im) {
+  const N = p.N;
+  for (let i = 0; i < N; i++) { const j = p.rev[i]; if (j > i) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; } }
+  for (let size = 2; size <= N; size <<= 1) {
+    const half = size >> 1, step = N / size;
+    for (let s = 0; s < N; s += size) {
+      for (let k = 0; k < half; k++) {
+        const wr = p.cos[k * step], wi = p.sin[k * step], a = s + k, b = a + half;
+        const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+  }
+}
+function spectrogram(mono, sr, progress) {
+  const N = 1024, hop = Math.round(sr * 0.01), rows = 72, fmin = 30, fmax = Math.min(12000, sr / 2);
+  const frames = Math.max(0, Math.floor((mono.length - N) / hop) + 1);
+  const plan = fftPlan(N), win = new Float32Array(N);
+  for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+  const lo = new Int32Array(rows), hi = new Int32Array(rows);
+  for (let r = 0; r < rows; r++) {
+    const f0 = fmin * Math.pow(fmax / fmin, r / rows), f1 = fmin * Math.pow(fmax / fmin, (r + 1) / rows);
+    lo[r] = Math.max(1, Math.round(f0 * N / sr)); hi[r] = Math.max(lo[r], Math.round(f1 * N / sr));
+  }
+  const db = new Float32Array(frames * rows), re = new Float64Array(N), im = new Float64Array(N);
+  let mx = -Infinity;
+  for (let f = 0; f < frames; f++) {
+    const o = f * hop;
+    for (let i = 0; i < N; i++) { re[i] = mono[o + i] * win[i]; im[i] = 0; }
+    fft(plan, re, im);
+    for (let r = 0; r < rows; r++) {
+      let m = 0;
+      for (let k = lo[r]; k <= hi[r]; k++) { const pw = re[k] * re[k] + im[k] * im[k]; if (pw > m) m = pw; }
+      const v = 10 * Math.log10(m + 1e-12); db[f * rows + r] = v; if (v > mx) mx = v;
+    }
+    if ((f & 2047) === 0) progress("spectrogram", f / frames);
+  }
+  const out = new Uint8Array(frames * rows), floor = mx - 75;
+  for (let i = 0; i < out.length; i++) out[i] = Math.max(0, Math.min(255, Math.round((db[i] - floor) / 75 * 255)));
+  return { data: out, rows, frames, hopSec: hop / sr, t0: N / 2 / sr, fmin, fmax };
+}
+self.onmessage = (ev) => {
+  const { mono, sr } = ev.data;
+  const progress = (stage, frac) => self.postMessage({ type: "progress", stage, frac });
+  const hop = Math.max(1, Math.round(sr / 1000)), nb = Math.floor(mono.length / hop);
+  progress("waveform", 0);
+  const pmin = new Float32Array(nb), pmax = new Float32Array(nb);
+  for (let b = 0; b < nb; b++) { let lo = 1, hi = -1; const o = b * hop; for (let i = 0; i < hop; i++) { const v = mono[o + i]; if (v < lo) lo = v; if (v > hi) hi = v; } pmin[b] = lo; pmax[b] = hi; }
+  progress("low band", 0);
+  const low = laneAnalysis(bandpass(mono, sr, LOW[0], LOW[1]), hop, nb, 10, 3); // ~21 ms window: smooths sub-bass ripple (presence, not timing)
+  progress("mid band", 0);
+  const mid = laneAnalysis(bandpass(mono, sr, MID[0], MID[1]), hop, nb, 1, 1);
+  const spec = spectrogram(mono, sr, progress);
+  self.postMessage({ type: "done", hopSec: hop / sr, nb, pmin, pmax, low, mid, spec, bands: { low: LOW, mid: MID } },
+    [pmin.buffer, pmax.buffer, low.env.buffer, low.os.buffer, mid.env.buffer, mid.os.buffer, spec.data.buffer]);
+};
+</script>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- constants & state
+const SNAP_WIN = 0.025;        // snap search: +-25 ms
+const HIT_PX = 10;             // marker hit radius (CSS px): forgiving, with a grab cursor and highlight on hover
+const MIN_VIEW = 0.2, DEFAULT_VIEW = 6;
+const DUP_WIN = 0.020;         // same-class hits closer than this are flagged
+const LANES = [
+  { id: "ruler", h: 18 }, { id: "spec", h: 72 }, { id: "wave", h: 90 },
+  { id: "kick", h: 84 }, { id: "snare", h: 84 }, { id: "rev", h: 12 },
+];
+let y0 = 0; for (const l of LANES) { l.y = y0; y0 += l.h; }
+const STACK_H = y0;
+const LANE = Object.fromEntries(LANES.map(l => [l.id, l]));
+const COL = { kick: "#ff9f1c", snare: "#3ec5ff", hihat: "#9aa0ad", sel: "#ffffff", rev: "#2bb673", unrev: "#5a2a2a", play: "#ff4d6d", cursor: "#ffd75e" };
+
+const $ = (id) => document.getElementById(id);
+const S = {
+  tracks: [], stem: null, meta: null,
+  buf: null, sr: 44100, duration: 0, ana: null, analyzing: "",
+  onsets: [], reviewed: [], sel: new Set(),
+  undo: [], redo: [],
+  view: { start: 0, dur: DEFAULT_VIEW }, prevZoom: null,
+  cursor: 0, region: null, hover: null, hoverHit: null, drag: null, flash: null,
+  lastSnap: null, issueIdx: -1,
+};
+// Where the API lives (see the meta tag), and what kind of server it is (/api/config).
+const API_BASE = (document.querySelector('meta[name="drum-reviewer-api"]')?.content || "").replace(/\/+$/, "");
+let CFG = { hosted: false, seeds: [], version: "" };
+const PAGE_VERSION = document.querySelector('meta[name="drum-reviewer-version"]')?.content || "";
+const actx = new (window.AudioContext || window.webkitAudioContext)();
+const P = { playing: false, src: null, startCtx: 0, startPos: 0, rate: 1, loop: false, a: 0, b: 0, schedV: 0, nodes: [], timer: null };
+
+// ---------------------------------------------------------------- utils
+function fmtTime(t) { if (!isFinite(t)) return "—"; const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s.toFixed(3).padStart(6, "0")}`; }
+function fmtMs(d) { return (d >= 0 ? "+" : "−") + Math.abs(d * 1000).toFixed(1) + " ms"; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function toast(msg, ms = 2200) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", ms); }
+function median(a) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function quantile(a, q) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(q * s.length))]; }
+async function api(path, body, extra) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(API_BASE + path, { ...opt, ...(extra || {}) });
+  const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok) { const err = new Error(j.error || `HTTP ${r.status}`); err.status = r.status; err.body = j; throw err; }
+  return j;
+}
+function seedLabel(name) { const s = CFG.seeds.find(x => x.name === name); return s ? s.label : name; }
+function seedBad(name) { const s = CFG.seeds.find(x => x.name === name); return !!(s && s.warning); }
+function lowerBound(t) { let lo = 0, hi = S.onsets.length; while (lo < hi) { const m = (lo + hi) >> 1; if (S.onsets[m].time < t) lo = m + 1; else hi = m; } return lo; }
+function sortOnsets() { S.onsets.sort((a, b) => a.time - b.time); }
+
+// ---------------------------------------------------------------- reviewed ranges
+function mergeRanges(rs) {
+  const s = rs.filter(r => r[1] > r[0]).map(r => [r[0], r[1]]).sort((a, b) => a[0] - b[0]), out = [];
+  for (const r of s) { if (out.length && r[0] <= out[out.length - 1][1] + 0.01) out[out.length - 1][1] = Math.max(out[out.length - 1][1], r[1]); else out.push(r); }
+  return out;
+}
+function addRange(a, b) { S.reviewed = mergeRanges([...S.reviewed, [clamp(a, 0, S.duration), clamp(b, 0, S.duration)]]); }
+function subRange(a, b) {
+  const out = [];
+  for (const [x, y] of S.reviewed) { if (y <= a || x >= b) out.push([x, y]); else { if (x < a) out.push([x, a]); if (y > b) out.push([b, y]); } }
+  S.reviewed = mergeRanges(out);
+}
+function reviewedSeconds() { return S.reviewed.reduce((s, r) => s + (r[1] - r[0]), 0); }
+function isComplete() { const m = mergeRanges(S.reviewed); return m.length === 1 && m[0][0] <= 0.1 && m[0][1] >= S.duration - 0.1; }
+
+// ---------------------------------------------------------------- canvases & view
+const cvMain = $("main"), cvOv = $("overlay"), cvOver = $("overview");
+let W = 800, DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = cvMain.clientWidth || 800;
+  for (const [cv, h] of [[cvMain, STACK_H], [cvOv, STACK_H], [cvOver, 36]]) {
+    cv.style.height = h + "px"; cv.width = Math.round(W * DPR); cv.height = Math.round(h * DPR);
+  }
+  overviewCache = null;
+  drawAll();
+}
+const t2x = (t) => (t - S.view.start) * W / S.view.dur;
+const x2t = (x) => S.view.start + x * S.view.dur / W;
+function clampView() {
+  const D = S.duration || 1;
+  S.view.dur = clamp(S.view.dur, Math.min(MIN_VIEW, D), D);
+  S.view.start = clamp(S.view.start, 0, Math.max(0, D - S.view.dur));
+}
+function zoomAt(factor, t) {
+  const f = (t - S.view.start) / S.view.dur;
+  S.view.dur *= factor; clampView();
+  S.view.start = t - f * S.view.dur; clampView(); drawAll();
+}
+function setView(start, dur) { S.view.start = start; if (dur) S.view.dur = dur; clampView(); drawAll(); }
+function centerOn(t) { if (t < S.view.start + 0.05 * S.view.dur || t > S.view.start + 0.95 * S.view.dur) setView(t - S.view.dur / 2); }
+function visibleRange() { return [S.view.start, Math.min(S.duration, S.view.start + S.view.dur)]; }
+function laneAt(y) { for (const l of LANES) if (y >= l.y && y < l.y + l.h) return l.id; return null; }
+
+// ---------------------------------------------------------------- drawing
+const PALETTE = (() => {
+  const stops = [[0, 0, 0, 0], [0.25, 40, 10, 90], [0.5, 150, 30, 110], [0.75, 240, 110, 40], [1, 255, 240, 160]], p = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const v = i / 255; let k = 0; while (k < stops.length - 2 && v > stops[k + 1][0]) k++;
+    const [a, b] = [stops[k], stops[k + 1]], f = (v - a[0]) / (b[0] - a[0]);
+    for (let c = 0; c < 3; c++) p[i * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * f;
+  }
+  return p;
+})();
+let specCanvas = document.createElement("canvas"), overviewCache = null;
+
+function drawAll() { drawMain(); drawOverlay(); drawOverview(); }
+
+function drawMain() {
+  const g = cvMain.getContext("2d");
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  g.fillStyle = "#0d0f14"; g.fillRect(0, 0, W, STACK_H);
+  for (const l of LANES) { g.fillStyle = l.id === "kick" || l.id === "snare" ? "#11141b" : "#0d0f14"; g.fillRect(0, l.y, W, l.h); g.fillStyle = "#262a35"; g.fillRect(0, l.y + l.h - 1, W, 1); }
+  if (!S.duration) { g.fillStyle = "#8a90a0"; g.fillText(S.analyzing || "Open a track (T)", 12, 40); return; }
+  drawRuler(g);
+  if (S.ana) { drawSpec(g); drawLaneEnv(g, "kick", S.ana.low, COL.kick); drawLaneEnv(g, "snare", S.ana.mid, COL.snare); }
+  else { g.fillStyle = "#8a90a0"; g.fillText(S.analyzing || "analysing…", 12, LANE.spec.y + 20); }
+  drawWave(g);
+  drawReviewed(g);
+  if (S.region) { const x0 = t2x(S.region[0]), x1 = t2x(S.region[1]); g.fillStyle = "rgba(120,160,255,0.16)"; g.fillRect(x0, LANE.spec.y, x1 - x0, STACK_H - LANE.spec.y); g.fillStyle = "rgba(120,160,255,0.8)"; g.fillRect(x0, 0, 1, STACK_H); g.fillRect(x1, 0, 1, STACK_H); }
+  drawRefs(g);
+  drawMarkers(g);
+  // lane captions
+  g.font = "10px system-ui, sans-serif"; g.fillStyle = "#8a90a0";
+  if (S.ana) {
+    const b = S.ana.bands;
+    g.fillText(`spectrogram ${Math.round(S.ana.spec.fmin)} Hz – ${(S.ana.spec.fmax / 1000).toFixed(0)} kHz (log)`, 4, LANE.spec.y + 10);
+    g.fillStyle = COL.kick; g.fillText(`KICK  ${b.low[0]}–${b.low[1]} Hz  (fill: envelope, line: onset strength)`, 4, LANE.kick.y + 10);
+    g.fillStyle = COL.snare; g.fillText(`SNARE  ${b.mid[0]}–${b.mid[1] / 1000} kHz${$("show-hats").checked ? "   · hihat ticks (read-only) on top" : ""}`, 4, LANE.snare.y + 10);
+  }
+  g.fillStyle = "#8a90a0"; g.fillText("reviewed", W - 50, LANE.rev.y + 10);
+}
+
+function niceStep(minSec) { const steps = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60]; for (const s of steps) if (s >= minSec) return s; return 120; }
+function drawRuler(g) {
+  const L = LANE.ruler, step = niceStep(S.view.dur * 70 / W), dec = step < 0.01 ? 3 : step < 0.1 ? 2 : step < 1 ? 1 : 0;
+  g.font = "10px ui-monospace, monospace"; g.fillStyle = "#8a90a0"; g.strokeStyle = "#3a3f4d";
+  for (let t = Math.ceil(S.view.start / step) * step; t <= S.view.start + S.view.dur; t += step) {
+    const x = Math.round(t2x(t)) + 0.5; g.beginPath(); g.moveTo(x, L.y + 10); g.lineTo(x, L.y + L.h); g.stroke();
+    const m = Math.floor(t / 60), s = (t - m * 60).toFixed(dec); g.fillText(m ? `${m}:${s.padStart(dec ? dec + 3 : 2, "0")}` : `${s}s`, x + 2, L.y + 9);
+  }
+}
+function drawSpec(g) {
+  const sp = S.ana.spec, L = LANE.spec, cols = Math.max(1, Math.round(W * DPR)), rows = sp.rows;
+  if (specCanvas.width !== cols || specCanvas.height !== rows) { specCanvas.width = cols; specCanvas.height = rows; }
+  const sg = specCanvas.getContext("2d"), img = sg.createImageData(cols, rows), d = img.data;
+  for (let x = 0; x < cols; x++) {
+    const ta = x2t(x / DPR), tb = x2t((x + 1) / DPR);
+    let f0 = Math.floor((ta - sp.t0) / sp.hopSec), f1 = Math.floor((tb - sp.t0) / sp.hopSec);
+    if (f1 <= f0) { f0 = Math.round(((ta + tb) / 2 - sp.t0) / sp.hopSec); f1 = f0 + 1; }
+    f0 = Math.max(0, f0); f1 = Math.min(sp.frames, f1);
+    for (let r = 0; r < rows; r++) {
+      let m = 0; for (let f = f0; f < f1; f++) { const v = sp.data[f * rows + r]; if (v > m) m = v; }
+      const o = ((rows - 1 - r) * cols + x) * 4; d[o] = PALETTE[m * 3]; d[o + 1] = PALETTE[m * 3 + 1]; d[o + 2] = PALETTE[m * 3 + 2]; d[o + 3] = 255;
+    }
+  }
+  sg.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = true; g.drawImage(specCanvas, 0, 0, cols, rows, 0, L.y, W, L.h - 1);
+}
+function monoAt(i) { const b = S.buf; if (b.numberOfChannels > 1) return (S.ch0[i] + S.ch1[i]) / 2; return S.ch0[i]; }
+function drawWave(g) {
+  const L = LANE.wave, mid = L.y + L.h / 2, amp = L.h / 2 - 3, spp = S.sr * S.view.dur / W;
+  g.fillStyle = "#6b7899"; g.strokeStyle = "#8ea0c8";
+  if (spp < 3) { // sample-level: polyline
+    const i0 = Math.max(0, Math.floor(S.view.start * S.sr)), i1 = Math.min(S.buf.length - 1, Math.ceil((S.view.start + S.view.dur) * S.sr));
+    g.beginPath(); for (let i = i0; i <= i1; i++) { const x = t2x(i / S.sr), y = mid - monoAt(i) * amp; i === i0 ? g.moveTo(x, y) : g.lineTo(x, y); } g.stroke();
+  } else {
+    for (let x = 0; x < W; x++) {
+      const ta = x2t(x), tb = x2t(x + 1); let lo = 0, hi = 0;
+      if (spp <= 2000 || !S.ana) {
+        const i0 = Math.max(0, Math.floor(ta * S.sr)), i1 = Math.min(S.buf.length, Math.ceil(tb * S.sr));
+        const stride = spp > 2000 ? Math.ceil(spp / 2000) : 1;
+        for (let i = i0; i < i1; i += stride) { const v = monoAt(i); if (v < lo) lo = v; if (v > hi) hi = v; }
+      } else {
+        const h = S.ana.hopSec, b0 = Math.max(0, Math.floor(ta / h)), b1 = Math.min(S.ana.nb, Math.ceil(tb / h));
+        for (let b = b0; b < b1; b++) { if (S.ana.pmin[b] < lo) lo = S.ana.pmin[b]; if (S.ana.pmax[b] > hi) hi = S.ana.pmax[b]; }
+      }
+      g.fillRect(x, mid - hi * amp, 1, Math.max(1, (hi - lo) * amp));
+    }
+  }
+  g.fillStyle = "#2a3040"; g.fillRect(0, mid, W, 1);
+}
+function drawLaneEnv(g, lane, A, col) {
+  const L = LANE[lane], base = L.y + L.h - 10, H = L.h - 26, h = S.ana.hopSec;
+  const env = [], os = [];
+  for (let x = 0; x < W; x++) {
+    const b0 = Math.max(0, Math.floor(x2t(x) / h)), b1 = Math.min(S.ana.nb, Math.max(b0 + 1, Math.ceil(x2t(x + 1) / h)));
+    let e = 0, o = 0; for (let b = b0; b < b1; b++) { if (A.env[b] > e) e = A.env[b]; if (A.os[b] > o) o = A.os[b]; }
+    env.push(e); os.push(Math.min(1.2, o / A.osScale));
+  }
+  g.globalAlpha = 0.28; g.fillStyle = col; g.beginPath(); g.moveTo(0, base);
+  for (let x = 0; x < W; x++) g.lineTo(x, base - env[x] * H);
+  g.lineTo(W, base); g.closePath(); g.fill(); g.globalAlpha = 1;
+  g.strokeStyle = col; g.lineWidth = 1; g.beginPath();
+  for (let x = 0; x < W; x++) { const y = base - Math.min(1, os[x] / 1.2) * H; x ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.stroke();
+}
+function drawReviewed(g) {
+  const L = LANE.rev; g.fillStyle = COL.unrev; g.fillRect(0, L.y + 2, W, L.h - 4);
+  g.fillStyle = COL.rev;
+  for (const [a, b] of S.reviewed) { if (b < S.view.start || a > S.view.start + S.view.dur) continue; const x0 = t2x(a), x1 = t2x(b); g.fillRect(x0, L.y + 2, Math.max(1, x1 - x0), L.h - 4); g.globalAlpha = 0.07; g.fillRect(x0, LANE.ruler.y, x1 - x0, LANE.rev.y); g.globalAlpha = 1; }
+}
+function drawRefs(g) {
+  const refs = S.meta && S.meta.references || {}, which = $("ref").value;
+  const t0 = S.view.start - 0.01, t1 = S.view.start + S.view.dur + 0.01;
+  const hatSrc = Object.values(refs).find(r => r.hihat && r.hihat.length);
+  if ($("show-hats").checked && hatSrc) {
+    const hh = hatSrc.hihat;
+    g.fillStyle = "rgba(154,160,173,0.45)";
+    for (const t of hh) if (t >= t0 && t <= t1) g.fillRect(Math.round(t2x(t)), LANE.snare.y + 12, 1, 7);
+  }
+  if (!which || !refs[which]) return;
+  for (const ty of ["kick", "snare"]) {
+    const L = LANE[ty]; g.fillStyle = ty === "kick" ? "rgba(255,159,28,0.55)" : "rgba(62,197,255,0.55)";
+    for (const t of refs[which][ty]) if (t >= t0 && t <= t1) { const x = Math.round(t2x(t)); g.fillRect(x - 1, L.y + L.h - 9, 3, 7); }
+  }
+}
+function drawMarkers(g) {
+  const t0 = S.view.start - 0.05, t1 = S.view.start + S.view.dur + 0.05;
+  for (let i = lowerBound(t0); i < S.onsets.length && S.onsets[i].time <= t1; i++) {
+    const o = S.onsets[i], x = Math.round(t2x(o.time)) + 0.5, sel = S.sel.has(o.id), col = sel ? COL.sel : COL[o.type], L = LANE[o.type];
+    g.strokeStyle = col; g.globalAlpha = sel ? 0.9 : 0.45; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x, LANE.spec.y); g.lineTo(x, LANE.wave.y + LANE.wave.h); g.stroke();
+    g.globalAlpha = 1; g.lineWidth = sel ? 2 : 1.5;
+    g.beginPath(); g.moveTo(x, L.y + 12); g.lineTo(x, L.y + L.h - 10); g.stroke();
+    g.fillStyle = col; g.beginPath(); g.moveTo(x - 5, L.y + 12); g.lineTo(x + 5, L.y + 12); g.lineTo(x, L.y + 20); g.closePath(); g.fill();
+  }
+  g.lineWidth = 1;
+}
+function playPos() { return P.playing ? posAt(actx.currentTime - (actx.outputLatency || 0)) : S.cursor; }
+function drawOverlay() {
+  const g = cvOv.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, STACK_H);
+  // The grabbable marker under the mouse, recomputed on every redraw (not only on mousemove), so a
+  // delete, class swap, undo/redo or zoom never leaves a stale highlight or grab cursor behind.
+  S.hoverHit = S.duration && S.hover && !S.drag ? hitMarker(S.hover.x, S.hover.lane) : null;
+  if (!S.drag) cvOv.style.cursor = S.hoverHit ? "grab" : "crosshair";
+  if (!S.duration) return;
+  if (S.hoverHit && !S.drag) {
+    const o = S.hoverHit, L = LANE[o.type], x = Math.round(t2x(o.time)) + 0.5;
+    g.strokeStyle = "#ffffff"; g.globalAlpha = 0.9; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(x, L.y + 12); g.lineTo(x, L.y + L.h - 10); g.stroke();
+    g.beginPath(); g.moveTo(x - 7, L.y + 10); g.lineTo(x + 7, L.y + 10); g.lineTo(x, L.y + 22); g.closePath(); g.stroke();
+    g.globalAlpha = 1; g.lineWidth = 1;
+    g.font = "10px system-ui, sans-serif"; g.fillStyle = "#ffffff"; g.fillText(`drag to move this ${o.type}`, x + 9, L.y + L.h - 14);
+  }
+  if (S.hover && !S.drag && !S.hoverHit) { g.fillStyle = "rgba(255,255,255,0.25)"; g.fillRect(Math.round(S.hover.x), LANE.spec.y, 1, STACK_H - LANE.spec.y); g.font = "10px ui-monospace, monospace"; g.fillStyle = "#cfd3dc"; g.fillText(fmtTime(S.hover.t), S.hover.x + 4, LANE.wave.y + 10); }
+  { const x = Math.round(t2x(S.cursor)) + 0.5; g.strokeStyle = COL.cursor; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.setLineDash([]); }
+  if (P.playing) { const x = Math.round(t2x(playPos())) + 0.5; g.strokeStyle = COL.play; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, STACK_H); g.stroke(); g.lineWidth = 1; }
+  if (S.flash && performance.now() < S.flash.until) { const x = t2x(S.flash.t); g.font = "bold 11px ui-monospace, monospace"; g.fillStyle = "#000c"; const w = g.measureText(S.flash.text).width; g.fillRect(x + 6, S.flash.y - 11, w + 6, 15); g.fillStyle = "#fff"; g.fillText(S.flash.text, x + 9, S.flash.y); }
+}
+function drawOverview() {
+  const g = cvOver.getContext("2d"); g.setTransform(DPR, 0, 0, DPR, 0, 0); g.clearRect(0, 0, W, 36);
+  if (!S.duration) return;
+  if (!overviewCache && S.ana) {
+    overviewCache = document.createElement("canvas"); overviewCache.width = Math.round(W * DPR); overviewCache.height = Math.round(36 * DPR);
+    const og = overviewCache.getContext("2d"); og.setTransform(DPR, 0, 0, DPR, 0, 0); og.fillStyle = "#4b5670";
+    const per = S.ana.nb / W;
+    for (let x = 0; x < W; x++) { let m = 0; for (let b = Math.floor(x * per); b < Math.min(S.ana.nb, Math.floor((x + 1) * per)); b++) m = Math.max(m, S.ana.pmax[b], -S.ana.pmin[b]); og.fillRect(x, 15 - m * 13, 1, Math.max(1, m * 26)); }
+  }
+  if (overviewCache) g.drawImage(overviewCache, 0, 0, W, 36);
+  const ox = (t) => t / S.duration * W;
+  g.fillStyle = COL.unrev; g.fillRect(0, 31, W, 4); g.fillStyle = COL.rev;
+  for (const [a, b] of S.reviewed) g.fillRect(ox(a), 31, Math.max(1, ox(b) - ox(a)), 4);
+  g.strokeStyle = "#ffd75e"; g.lineWidth = 1; g.strokeRect(ox(S.view.start) + 0.5, 0.5, Math.max(2, ox(S.view.dur) - 1), 35);
+  const pp = playPos(); g.fillStyle = P.playing ? COL.play : COL.cursor; g.fillRect(ox(pp), 0, 1, 36);
+}
+
+// ---------------------------------------------------------------- snapping & checks
+function snapTime(t, type) {
+  if (!S.ana) return null;
+  // Default target is the transient (mid band) for both classes: on the corpus, ADTOF kicks sit
+  // within ~1 ms of the 150 Hz-5 kHz onset peak (IQR ~±3 ms) but 4-6 ms before the 30-150 Hz
+  // one (IQR ~10 ms), because a kick's low-frequency energy builds up after its attack.
+  const A = type === "kick" && $("snap-ref").value === "lane" ? S.ana.low : S.ana.mid, os = A.os, h = S.ana.hopSec;
+  const i0 = Math.max(1, Math.ceil((t - SNAP_WIN) / h - 0.5)), i1 = Math.min(os.length - 2, Math.floor((t + SNAP_WIN) / h - 0.5));
+  const peaks = []; let vmax = 0;
+  for (let i = i0; i <= i1; i++) if (os[i] > 0 && os[i] >= os[i - 1] && os[i] > os[i + 1]) { peaks.push(i); vmax = Math.max(vmax, os[i]); }
+  if (!peaks.length || vmax < 0.02 * A.osScale) return null;
+  let best = -1, bd = Infinity;
+  for (const i of peaks) { if (os[i] < 0.5 * vmax) continue; const d = Math.abs((i + 0.5) * h - t); if (d < bd) { bd = d; best = i; } }
+  const a = os[best - 1], b = os[best], c = os[best + 1], den = a - 2 * b + c;
+  const p = den < 0 ? clamp(0.5 * (a - c) / den, -0.5, 0.5) : 0;
+  return (best + 0.5 + p) * h;
+}
+function offsetStats() {
+  if (!S.ana) return null;
+  const out = {};
+  for (const ty of ["kick", "snare"]) {
+    const ds = []; let n = 0;
+    for (const o of S.onsets) if (o.type === ty) { n++; const s = snapTime(o.time, ty); if (s !== null) ds.push(s - o.time); }
+    out[ty] = { n, m: ds.length, med: median(ds), q1: quantile(ds, 0.25), q3: quantile(ds, 0.75), far: ds.filter(d => Math.abs(d) > 0.010).length };
+  }
+  return out;
+}
+function findIssues() {
+  const issues = [], last = {};
+  for (const o of S.onsets) { const p = last[o.type]; if (p && o.time - p.time < DUP_WIN) issues.push({ t: p.time, ids: [p.id, o.id], text: `${o.type}s ${((o.time - p.time) * 1000).toFixed(1)} ms apart` }); last[o.type] = o; }
+  return issues;
+}
+
+// ---------------------------------------------------------------- editing (every change goes through edit())
+function snapshot() { return { onsets: S.onsets.map(o => ({ ...o })), reviewed: S.reviewed.map(r => r.slice()) }; }
+function checkpoint() { S.undo.push(snapshot()); if (S.undo.length > 500) S.undo.shift(); S.redo = []; }
+function restore(st) { S.onsets = st.onsets.map(o => ({ ...o })); S.reviewed = st.reviewed.map(r => r.slice()); const ids = new Set(S.onsets.map(o => o.id)); for (const id of [...S.sel]) if (!ids.has(id)) S.sel.delete(id); }
+function edited() { sortOnsets(); scheduleSync(); drawAll(); updateInfo(); }
+function viewOnly() { if (!(S.meta && S.meta.error)) return false; toast("editing is off for this track: " + S.meta.error, 5000); return true; }
+function edit(fn) { if (viewOnly()) return; checkpoint(); fn(); edited(); }
+function undo() { if (viewOnly()) return; if (!S.undo.length) return toast("nothing to undo"); S.redo.push(snapshot()); restore(S.undo.pop()); edited(); }
+function redo() { if (viewOnly()) return; if (!S.redo.length) return toast("nothing to redo"); S.undo.push(snapshot()); restore(S.redo.pop()); edited(); }
+function selected() { return S.onsets.filter(o => S.sel.has(o.id)); }
+function flash(t, text, lane) { S.flash = { t, text, y: LANE[lane].y + 34, until: performance.now() + 1600 }; drawOverlay(); setTimeout(drawOverlay, 1650); }
+
+function addOnset(t, type) {
+  if (!S.duration) return;
+  t = clamp(t, 0, S.duration);
+  let snapped = null;
+  if ($("snap-add").checked) snapped = snapTime(t, type);
+  const time = snapped === null ? t : snapped, id = newId();
+  edit(() => { S.onsets.push({ id, time, type }); S.sel = new Set([id]); });
+  S.cursor = time;
+  const msg = snapped === null ? ($("snap-add").checked ? "no peak within ±25 ms, placed as clicked" : "placed (snap off)") : `snapped ${fmtMs(snapped - t)}`;
+  S.lastSnap = `${type} @ ${fmtTime(time)}: ${msg}`;
+  flash(time, snapped === null ? "unsnapped" : fmtMs(snapped - t), type); updateInfo();
+}
+function deleteSelected() { if (!S.sel.size) return toast("nothing selected"); const n = S.sel.size; edit(() => { S.onsets = S.onsets.filter(o => !S.sel.has(o.id)); S.sel.clear(); }); toast(`deleted ${n}`); }
+function nudge(d) { const sel = selected(); if (!sel.length) return; edit(() => { for (const o of sel) o.time = clamp(o.time + d, 0, S.duration); }); if (sel.length === 1) S.cursor = sel[0].time; }
+function toggleClass() { const sel = selected(); if (!sel.length) return toast("nothing selected"); edit(() => { for (const o of sel) o.type = o.type === "kick" ? "snare" : "kick"; }); }
+function snapSelected() {
+  const sel = selected(); if (!sel.length) return toast("nothing selected"); if (!S.ana) return toast("analysis not ready");
+  const ds = []; let miss = 0;
+  edit(() => { for (const o of sel) { const s = snapTime(o.time, o.type); if (s === null) miss++; else { ds.push(s - o.time); o.time = s; } } });
+  const msg = sel.length === 1 ? (ds.length ? `snapped ${fmtMs(ds[0])}` : "no peak within ±25 ms") : `snapped ${ds.length}/${sel.length}, median ${fmtMs(median(ds))}${miss ? `, ${miss} without a peak` : ""}`;
+  S.lastSnap = msg; toast(msg); if (sel.length === 1) { S.cursor = sel[0].time; flash(sel[0].time, ds.length ? fmtMs(ds[0]) : "no peak", sel[0].type); }
+  updateInfo();
+}
+function markReviewed(on) {
+  const [a, b] = S.region || visibleRange();
+  edit(() => on ? addRange(a, b) : subRange(a, b));
+  toast(`${on ? "reviewed" : "unmarked"} ${fmtTime(a)} – ${fmtTime(b)} · ${(100 * reviewedSeconds() / S.duration).toFixed(1)}% of track`);
+}
+function selectInRange(a, b, lane, add) {
+  if (!add) S.sel.clear();
+  for (let i = lowerBound(a); i < S.onsets.length && S.onsets[i].time <= b; i++) { const o = S.onsets[i]; if (lane === "kick" || lane === "snare" ? o.type === lane : true) S.sel.add(o.id); }
+}
+function stepSelect(dir) {
+  if (!S.onsets.length) return;
+  const sel = selected(), ref = sel.length ? (dir > 0 ? sel[sel.length - 1].time : sel[0].time) : S.cursor;
+  let i = dir > 0 ? S.onsets.findIndex(o => o.time > ref + 1e-6) : (() => { let j = -1; for (let k = 0; k < S.onsets.length; k++) if (S.onsets[k].time < ref - 1e-6) j = k; return j; })();
+  if (i < 0) return toast(dir > 0 ? "last hit" : "first hit");
+  const o = S.onsets[i]; S.sel = new Set([o.id]); S.cursor = o.time; centerOn(o.time); drawAll(); updateInfo();
+}
+
+// ---------------------------------------------------------------- playback & click overlay
+const musicGain = actx.createGain(), clickGain = actx.createGain();
+musicGain.connect(actx.destination); clickGain.connect(actx.destination);
+const bandNodes = {
+  low: [mkFilter("lowpass", 150), mkFilter("lowpass", 150)],
+  mid: [mkFilter("highpass", 150), mkFilter("highpass", 150), mkFilter("lowpass", 5000), mkFilter("lowpass", 5000)],
+};
+for (const chain of Object.values(bandNodes)) { for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]); chain[chain.length - 1].connect(musicGain); }
+function mkFilter(type, f) { const n = actx.createBiquadFilter(); n.type = type; n.frequency.value = f; n.Q.value = 0.7071; return n; }
+function musicInput() { const b = $("band").value; return b === "full" ? musicGain : bandNodes[b][0]; }
+function mkClick(freq, dur) {
+  const sr = actx.sampleRate, n = Math.round(sr * dur), buf = actx.createBuffer(1, n, sr), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.sin(2 * Math.PI * freq * i / sr) * Math.exp(-i / (sr * 0.006)); // full level at sample 0: the click's edge is the label
+  return buf;
+}
+const CLICK = { kick: mkClick(700, 0.04), snare: mkClick(2600, 0.03) };
+function posAt(ctxTime) {
+  let v = P.startPos + Math.max(0, ctxTime - P.startCtx) * P.rate;
+  if (P.loop && v >= P.b) v = P.a + ((v - P.a) % (P.b - P.a));
+  return v;
+}
+function startPlayback(pos) {
+  if (!S.buf) return;
+  stopPlayback(true);
+  actx.resume();
+  const rate = parseFloat($("rate").value), loop = $("loop").checked;
+  let a = 0, b = S.duration;
+  if (loop) { [a, b] = S.region || visibleRange(); if (b - a < 0.05) { b = a + 0.05; } if (pos < a || pos >= b) pos = a; }
+  if (pos >= S.duration - 0.01) pos = 0;
+  const src = actx.createBufferSource(); src.buffer = S.buf; src.playbackRate.value = rate;
+  if (loop) { src.loop = true; src.loopStart = a; src.loopEnd = b; }
+  src.connect(musicInput());
+  const when = actx.currentTime + 0.06;
+  src.start(when, pos);
+  Object.assign(P, { playing: true, src, startCtx: when, startPos: pos, rate, loop, a, b, schedV: pos, nodes: [] });
+  src.onended = () => { if (P.src === src) stopPlayback(false); };
+  P.timer = setInterval(scheduleClicks, 25); scheduleClicks();
+  $("btn-play").textContent = "Pause";
+  requestAnimationFrame(tick);
+}
+function stopPlayback(keepCursor) {
+  if (!P.playing) return;
+  const pos = playPos();
+  P.playing = false; clearInterval(P.timer);
+  try { P.src.onended = null; P.src.stop(); } catch (e) { /* already stopped */ }
+  for (const n of P.nodes) { try { n.stop(); } catch (e) { /* already played */ } }
+  P.nodes = []; P.src = null;
+  if (!keepCursor) S.cursor = clamp(pos, 0, S.duration);
+  $("btn-play").textContent = "Play"; drawOverlay(); drawOverview();
+}
+function togglePlay() { if (P.playing) stopPlayback(false); else startPlayback(S.cursor); }
+function restartIfPlaying(pos) { if (P.playing) startPlayback(pos === undefined ? playPos() : pos); }
+function scheduleClicks() {
+  if (!P.playing) return;
+  const v1 = P.startPos + (actx.currentTime + 0.15 - P.startCtx) * P.rate, v0 = P.schedV;
+  if (v1 <= v0) return;
+  P.schedV = v1;
+  const on = { kick: $("click-kick").checked, snare: $("click-snare").checked };
+  const segs = [];
+  if (!P.loop) segs.push([v0, v1, 0]);
+  else { const L = P.b - P.a; for (let k = Math.floor((v0 - P.a) / L); k <= Math.floor((v1 - P.a) / L); k++) { const lo = Math.max(v0, P.a + k * L), hi = Math.min(v1, P.a + (k + 1) * L); if (hi > lo) segs.push([lo - k * L, hi - k * L, k * L]); } }
+  const now = actx.currentTime;
+  P.nodes = P.nodes.filter(n => n._when > now - 0.1);
+  for (const [r0, r1, off] of segs) {
+    for (let i = lowerBound(r0); i < S.onsets.length && S.onsets[i].time < r1; i++) {
+      const o = S.onsets[i]; if (!on[o.type]) continue;
+      const when = P.startCtx + (o.time + off - P.startPos) / P.rate;
+      if (when < now) continue;
+      const n = actx.createBufferSource(); n.buffer = CLICK[o.type]; n.playbackRate.value = P.rate; n.connect(clickGain); n.start(when); n._when = when; P.nodes.push(n);
+    }
+  }
+}
+function tick() {
+  if (!P.playing) return;
+  const pos = playPos();
+  $("time").textContent = fmtTime(pos);
+  if ($("follow").checked && !S.drag) {
+    const inLoopView = P.loop && P.a >= S.view.start && P.b <= S.view.start + S.view.dur;
+    if (!inLoopView && (pos > S.view.start + 0.92 * S.view.dur || pos < S.view.start)) setView(pos - 0.04 * S.view.dur);
+  }
+  drawOverlay(); drawOverview();
+  requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------- track loading & saving
+async function loadTracks() {
+  const j = await api("/api/tracks"); S.tracks = j.tracks; renderTracks();
+}
+function renderTracks() {
+  const rows = [...S.tracks].sort((a, b) => (a.complete - b.complete) || ((b.disagreement ?? -1) - (a.disagreement ?? -1)) || ((a.reviewed_share ?? 0) - (b.reviewed_share ?? 0)) || a.stem.localeCompare(b.stem));
+  const done = S.tracks.filter(t => t.complete).length;
+  $("tracks-sum").textContent = `${done} / ${S.tracks.length} complete`;
+  $("tracks-body").innerHTML = "";
+  rows.forEach((t, i) => {
+    const tr = document.createElement("tr"), share = t.reviewed_share ?? 0;
+    const cells = [
+      String(i + 1), t.stem,
+      `<span class="bar"><i style="width:${(100 * share).toFixed(1)}%"></i></span>${t.complete ? '<span class="ok">done</span>' : (100 * share).toFixed(0) + "%"}`,
+      t.label_source === "human" ? '<span class="badge human">human</span>' : t.label_source === "none" ? '<span class="badge empty">none</span>'
+        : `<span class="badge ${seedBad(t.label_source) ? "bad" : "seed"}">${escapeHtml(seedLabel(t.label_source))}</span>`,
+      String(t.counts.kick), String(t.counts.snare),
+      t.disagreement === null ? '<span class="dim">—</span>' : t.disagreement.toFixed(3),
+      trackStatus(t),
+      t.updated ? t.updated.replace("T", " ").slice(0, 16) : "",
+    ];
+    tr.innerHTML = cells.map((c, k) => `<td${k === 1 ? ' class="mono"' : ""}>${k === 1 ? escapeHtml(c) : c}</td>`).join("");
+    tr.onclick = () => { closeTracks(); openTrack(t.stem); };
+    $("tracks-body").appendChild(tr);
+  });
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
+function hhmm(iso) { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+function trackStatus(t) {
+  if (t.unpublished) return '<span class="badge pending">publishing soon</span>';
+  return t.published ? `<span class="dim">${escapeHtml(hhmm(t.published))}</span>` : "";
+}
+function openTracks() { $("tracks").classList.add("open"); loadTracks().catch(e => toast(e.message)); }
+function closeTracks() { $("tracks").classList.remove("open"); }
+
+async function openTrack(stem) {
+  if (syncPending() && S.stem) await sendOps();  // finish sending this track's edits first
+  stopPlayback(true);
+  let meta;
+  try { meta = await api(`/api/track?stem=${encodeURIComponent(stem)}`); } catch (e) { return toast(`open failed: ${e.message}`, 5000); }
+  Object.assign(S, { stem, meta, buf: null, ana: null, duration: 0, onsets: [], reviewed: [], sel: new Set(), undo: [], redo: [], region: null, cursor: 0, lastSnap: null, issueIdx: -1 });
+  S.view = { start: 0, dur: DEFAULT_VIEW };
+  history.replaceState(null, "", `#${encodeURIComponent(stem)}`);
+  S.onsets = (meta.onsets || []).map(o => ({ id: o.id, time: +o.time, type: o.type }));
+  sortOnsets();
+  S.reviewed = mergeRanges(meta.reviewed_ranges || []);
+  syncReset(meta);
+  $("trackname").textContent = stem;
+  const badge = $("seedbadge"); badge.style.display = "";
+  badge.className = `badge ${meta.seed === "human" || meta.edited ? "human" : meta.seed === "empty" ? "empty" : seedBad(meta.seed) ? "bad" : "seed"}`;
+  badge.textContent = meta.seed === "human" || meta.edited ? "human GT" : meta.seed === "empty" ? "no labels" : `seeded: ${seedLabel(meta.seed)}`;
+  const be = $("banner-err"), bw = $("banner-warn");
+  be.className = "banner" + (meta.error ? " err" : ""); be.textContent = meta.error || "";
+  const notes = [meta.warning ? `⚠ ${meta.warning}` : ""].filter(Boolean);
+  bw.className = "banner" + (notes.length ? " warn" : ""); bw.textContent = notes.join("  ");
+  const refNames = Object.keys(meta.references || {});
+  $("ref").innerHTML = '<option value="">none</option>' + refNames.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(seedLabel(n))}</option>`).join("");
+  $("ref").value = meta.seed === "human" && refNames.length ? refNames[0] : "";
+  S.analyzing = "decoding audio…"; updateInfo(); drawAll();
+  try {
+    const ar = await fetch(API_BASE + meta.audio_url);
+    if (!ar.ok) throw new Error(`HTTP ${ar.status}`);
+    const ab = await ar.arrayBuffer();
+    S.buf = await actx.decodeAudioData(ab);
+  } catch (e) { S.analyzing = `audio decode failed: ${e.message}`; drawAll(); return; }
+  if (S.stem !== stem) return;
+  S.sr = S.buf.sampleRate; S.duration = S.buf.duration; S.ch0 = S.buf.getChannelData(0); S.ch1 = S.buf.numberOfChannels > 1 ? S.buf.getChannelData(1) : null;
+  if (meta.manifest_duration && Math.abs(meta.manifest_duration - S.duration) > 0.5) {
+    bw.className = "banner warn"; bw.textContent = `⚠ decoded duration ${S.duration.toFixed(3)} s differs from track_manifest.json (${meta.manifest_duration.toFixed(3)} s): check the decoder before trusting timing. ` + (meta.warning || "");
+  }
+  clampView(); updateInfo(); S.analyzing = "analysing…"; drawAll();
+  runAnalysis(stem);
+}
+let worker = null;
+function runAnalysis(stem) {
+  if (worker) worker.terminate();
+  const url = URL.createObjectURL(new Blob([$("worker-src").textContent], { type: "text/javascript" }));
+  worker = new Worker(url); URL.revokeObjectURL(url);
+  const mono = new Float32Array(S.buf.length);
+  if (S.ch1) for (let i = 0; i < mono.length; i++) mono[i] = (S.ch0[i] + S.ch1[i]) / 2; else mono.set(S.ch0);
+  const t0 = performance.now();
+  worker.onmessage = (ev) => {
+    if (S.stem !== stem) return;
+    const m = ev.data;
+    if (m.type === "progress") { S.analyzing = `analysing: ${m.stage} ${m.frac ? Math.round(m.frac * 100) + "%" : ""}`; drawMain(); return; }
+    S.ana = m; S.analyzing = ""; overviewCache = null;
+    console.log(`analysis ${(performance.now() - t0).toFixed(0)} ms`);
+    drawAll(); updateInfo(); worker.terminate(); worker = null;
+  };
+  worker.onerror = (e) => { S.analyzing = `analysis failed: ${e.message}`; drawMain(); };
+  worker.postMessage({ mono, sr: S.sr }, [mono.buffer]);
+}
+// ---------------------------------------------------------------- shared labels: send every edit, pull everyone's
+// The server keeps one set of labels per track (labels-service/state.py). Edits go up as operations
+// (add / move / type / del on hit ids, review on ranges), the difference between what this page has
+// and what the server has; everyone's operations come back down every few seconds and are merged in.
+const TAB = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+let hitSeq = 0;
+function newId() { return `${TAB}-${(++hitSeq).toString(36)}`; }
+const SY = { rev: 0, known: new Map(), knownRanges: [], sending: false, timer: null, pulling: false, published: null, unpublished: false, error: "" };
+function syncReset(meta) {
+  SY.rev = meta.rev || 0; SY.error = "";
+  SY.known = new Map((meta.onsets || []).map(o => [o.id, { time: +o.time, type: o.type }]));
+  SY.knownRanges = mergeRanges(meta.reviewed_ranges || []);
+  SY.published = meta.published; SY.unpublished = meta.unpublished;
+}
+function rangeMinus(A, B) {  // the parts of ranges A not covered by ranges B
+  let out = mergeRanges(A);
+  for (const [a, b] of B) { const nx = []; for (const [x, y] of out) { if (y <= a || x >= b) nx.push([x, y]); else { if (x < a) nx.push([x, a]); if (y > b) nx.push([b, y]); } } out = nx; }
+  return out.filter(([x, y]) => y - x > 0.002);
+}
+function diffOps() {
+  const ops = [], cur = new Map(S.onsets.map(o => [o.id, o]));
+  for (const id of SY.known.keys()) if (!cur.has(id)) ops.push({ op: "del", id });
+  for (const o of S.onsets) {
+    const k = SY.known.get(o.id), t = +o.time.toFixed(4);
+    if (!k) ops.push({ op: "add", id: o.id, time: t, type: o.type });
+    else { if (Math.abs(k.time - t) > 5e-5) ops.push({ op: "move", id: o.id, time: t }); if (k.type !== o.type) ops.push({ op: "type", id: o.id, type: o.type }); }
+  }
+  const lim = (x) => +clamp(x, 0, S.duration || x).toFixed(3);
+  for (const [a, b] of rangeMinus(S.reviewed, SY.knownRanges)) ops.push({ op: "review", a: lim(a), b: lim(b), on: true });
+  for (const [a, b] of rangeMinus(SY.knownRanges, S.reviewed)) ops.push({ op: "review", a: lim(a), b: lim(b), on: false });
+  return ops.filter(o => o.op !== "review" || o.b > o.a);
+}
+function syncPending() { return !!S.meta && !S.meta.error && (SY.sending || diffOps().length > 0); }
+function applyOp(st, op) {  // st: { onsets: [...], reviewed: [...] }: one operation, in place
+  if (op.op === "review") {
+    if (op.on) st.reviewed = mergeRanges([...st.reviewed, [op.a, op.b]]); else st.reviewed = rangeMinus(st.reviewed, [[op.a, op.b]]);
+    return;
+  }
+  const i = st.onsets.findIndex(o => o.id === op.id);
+  if (op.op === "del") { if (i >= 0) st.onsets.splice(i, 1); return; }
+  if (op.op === "add") { if (i >= 0) Object.assign(st.onsets[i], { time: op.time, type: op.type }); else st.onsets.push({ id: op.id, time: op.time, type: op.type }); return; }
+  if (i < 0) return;
+  if (op.op === "move") st.onsets[i].time = op.time; else if (op.op === "type") st.onsets[i].type = op.type;
+}
+function knownApply(op) {
+  if (op.op === "review") { const st = { onsets: [], reviewed: SY.knownRanges }; applyOp(st, op); SY.knownRanges = st.reviewed; return; }
+  if (op.op === "del") SY.known.delete(op.id);
+  else if (op.op === "add") SY.known.set(op.id, { time: op.time, type: op.type });
+  else if (SY.known.has(op.id)) { const k = SY.known.get(op.id); if (op.op === "move") k.time = op.time; else k.type = op.type; }
+}
+function scheduleSync() { clearTimeout(SY.timer); SY.timer = setTimeout(sendOps, 1000); updateStatus(); }
+async function sendOps() {
+  clearTimeout(SY.timer);
+  if (!S.meta || S.meta.error || !S.duration || SY.sending) return;
+  const ops = diffOps().slice(0, 500), stem = S.stem;
+  if (!ops.length) return updateStatus();
+  SY.sending = true; updateStatus();
+  try {
+    const r = await api(`/api/ops?stem=${encodeURIComponent(stem)}`, { tab: TAB, audio_sha256: S.meta.audio_sha256, duration: S.duration, ops });
+    if (S.stem === stem) { for (const op of ops) knownApply(op); SY.published = r.published; SY.unpublished = r.unpublished; SY.error = ""; }
+  } catch (e) {
+    SY.error = e.message;
+    if (e.status === 409) { const be = $("banner-err"); be.className = "banner err"; be.textContent = `${e.message}`; }
+    else toast(`not saved: ${e.message}`, 6000);
+  } finally {
+    SY.sending = false;
+    if (S.stem === stem && diffOps().length && !SY.error) scheduleSync();
+    updateStatus();
+  }
+}
+async function pullOps() {
+  if (!S.meta || SY.pulling || SY.sending || document.visibilityState !== "visible") return;
+  const stem = S.stem; SY.pulling = true;
+  try {
+    const r = await api(`/api/ops?stem=${encodeURIComponent(stem)}&since=${SY.rev}`);
+    if (S.stem !== stem) return;
+    SY.published = r.published; SY.unpublished = r.unpublished;
+    if (r.reset) {  // reloaded on the server (e.g. its file changed on main): start over from its state
+      const m = await api(`/api/track?stem=${encodeURIComponent(stem)}`);
+      if (S.stem !== stem) return;
+      S.meta = { ...S.meta, ...m };
+      S.onsets = m.onsets.map(o => ({ id: o.id, time: +o.time, type: o.type })); sortOnsets();
+      S.reviewed = mergeRanges(m.reviewed_ranges || []); S.undo = []; S.redo = []; S.sel.clear();
+      syncReset(m); drawAll(); updateInfo(); toast("this track was reloaded from the server"); return;
+    }
+    let changed = false;
+    for (const [rev, by, op] of r.ops) {
+      // Every operation goes through here in the server's order, our own included: then a slower
+      // edit of someone else's that the server applied before ours can't overwrite ours on this page.
+      // A hit we've changed but not sent yet keeps our version (ours goes up next and wins).
+      const mine = op.id && (() => { const k = SY.known.get(op.id), o = S.onsets.find(x => x.id === op.id); return (!!k !== !!o) || (k && o && (Math.abs(k.time - o.time) > 5e-5 || k.type !== o.type)); })();
+      knownApply(op);
+      if (mine) continue;
+      const st = { onsets: S.onsets, reviewed: S.reviewed }; applyOp(st, op); S.reviewed = st.reviewed;
+      if (by !== TAB) for (const snap of [...S.undo, ...S.redo]) applyOp(snap, op);  // undo never reverts others' edits
+      changed = true;
+    }
+    SY.rev = r.rev;
+    if (changed) { sortOnsets(); for (const id of [...S.sel]) if (!S.onsets.some(o => o.id === id)) S.sel.delete(id); drawAll(); updateInfo(); }
+    else updateStatus();
+  } catch (e) { /* offline for a moment: the next pull catches up */ } finally { SY.pulling = false; }
+}
+setInterval(pullOps, 3000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pullOps(); else if (syncPending()) sendOps(); });
+
+// ---------------------------------------------------------------- info panels
+function updateStatus() {
+  const st = $("status"), pending = syncPending();
+  st.className = pending || SY.error ? "dirty" : "";
+  st.textContent = !S.meta ? "" : SY.error ? `⚠ not saved: ${SY.error}` : pending ? "saving…"
+    : "saved" + (SY.unpublished ? " · publishing in a few minutes" : SY.published ? ` · published ${hhmm(SY.published)}` : "");
+  $("btn-undo").disabled = !S.undo.length; $("btn-redo").disabled = !S.redo.length;
+}
+function updateInfo() {
+  updateStatus();
+  if (!S.meta) return;
+  const nk = S.onsets.filter(o => o.type === "kick").length, ns = S.onsets.length - nk;
+  $("counts").innerHTML = `<span class="k">${nk} kicks</span> · <span class="s">${ns} snares</span>`;
+  const rs = reviewedSeconds(), share = S.duration ? 100 * rs / S.duration : 0;
+  const sf = S.meta.started_from || {};
+  $("info-track").innerHTML = `${S.duration ? fmtTime(S.duration) : "…"} · reviewed <b class="${isComplete() ? "ok" : ""}">${share.toFixed(1)}%</b>${isComplete() ? " (complete)" : ""}<br>started from: ${escapeHtml(String(sf.source || "?"))} ${sf.file ? `<span class="dim">${escapeHtml(sf.file)}</span>` : ""}<br><span class="dim">sha ${S.meta.audio_sha256.slice(0, 12)}…</span>`;
+  const sel = selected();
+  let si = sel.length ? `${sel.length} selected` : "none · Tab selects the next hit";
+  if (sel.length === 1) { const o = sel[0], s = snapTime(o.time, o.type); si = `<span class="${o.type[0]}">${o.type}</span> @ ${o.time.toFixed(4)} s<br>onset peak: ${s === null ? "none within ±25 ms" : fmtMs(s - o.time) + " (N snaps)"}`; }
+  if (S.region) si += `<br>region ${fmtTime(S.region[0])} – ${fmtTime(S.region[1])} (${((S.region[1] - S.region[0])).toFixed(3)} s)`;
+  if (S.lastSnap) si += `<br><span class="dim">last: ${escapeHtml(S.lastSnap)}</span>`;
+  $("info-sel").innerHTML = si;
+  const os = offsetStats();
+  $("info-offset").innerHTML = !os ? (S.analyzing || "…") : ["kick", "snare"].map(ty => { const x = os[ty]; return x.m ? `<span class="${ty[0]}">${ty}</span> median ${fmtMs(x.med)} (IQR ${fmtMs(x.q1)} … ${fmtMs(x.q3)}) · ${x.m}/${x.n} have a peak · ${x.far} > 10 ms off` : `<span class="${ty[0]}">${ty}</span> —`; }).join("<br>") + `<br><span class="dim">A consistent non-zero median means a systematic offset: look before snapping everything.</span>`;
+  const iss = findIssues();
+  $("info-checks").innerHTML = iss.length ? `<span class="bad">${iss.length} same-class pairs &lt; ${DUP_WIN * 1000} ms</span> · <a class="link" id="next-issue">next (I)</a>` : `<span class="ok">no same-class pairs &lt; ${DUP_WIN * 1000} ms</span>`;
+  const ni = $("next-issue"); if (ni) ni.onclick = nextIssue;
+}
+function nextIssue() {
+  const iss = findIssues(); if (!iss.length) return toast("no issues");
+  let k = iss.findIndex(x => x.t > S.cursor + 1e-4); if (k < 0) k = 0;
+  const it = iss[k]; S.sel = new Set(it.ids); S.cursor = it.t; setView(it.t - 0.5, Math.min(S.view.dur, 2)); updateInfo(); toast(it.text);
+}
+function nextUnreviewed() {
+  const m = mergeRanges(S.reviewed); let t = S.view.start + S.view.dur * 0.5;
+  const gapAt = (from) => { let p = from; for (const [a, b] of m) { if (b <= p) continue; if (a > p) return p; p = b; } return p < S.duration - 0.1 ? p : null; };
+  let g = gapAt(t); if (g === null) g = gapAt(0);
+  if (g === null) return toast("whole track reviewed");
+  S.cursor = g; setView(g - 0.1 * S.view.dur); updateInfo();
+}
+
+// ---------------------------------------------------------------- mouse
+function evPos(e) { const r = cvOv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+function hitMarker(x, lane) {
+  if (!["kick", "snare", "spec", "wave"].includes(lane)) return null;
+  const t0 = x2t(x - HIT_PX), t1 = x2t(x + HIT_PX); let best = null, bd = Infinity;
+  for (let i = lowerBound(t0); i < S.onsets.length && S.onsets[i].time <= t1; i++) {
+    const o = S.onsets[i]; if ((lane === "kick" || lane === "snare") && o.type !== lane) continue;
+    const d = Math.abs(t2x(o.time) - x); if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+cvOv.addEventListener("mousedown", (e) => {
+  if (!S.duration || e.button !== 0) return;
+  cvOv.focus();
+  const { x, y } = evPos(e), lane = laneAt(y), t = x2t(x), hit = hitMarker(x, lane);
+  if (hit) {
+    if (e.shiftKey) { S.sel.has(hit.id) ? S.sel.delete(hit.id) : S.sel.add(hit.id); }
+    else if (!S.sel.has(hit.id)) S.sel = new Set([hit.id]);
+    S.drag = { kind: "move", x0: x, hit, moved: false, orig: new Map(selected().map(o => [o.id, o.time])) };
+  } else S.drag = { kind: "region", x0: x, t0: t, lane, shift: e.shiftKey, moved: false };
+  drawAll(); updateInfo(); e.preventDefault();
+});
+window.addEventListener("mousemove", (e) => {
+  if (!S.duration) return;
+  const { x, y } = evPos(e), inside = x >= 0 && x <= W && y >= 0 && y <= STACK_H;
+  S.hover = inside ? { x, t: x2t(x), lane: laneAt(y) } : null;
+  const d = S.drag;
+  if (d && d.kind === "move") cvOv.style.cursor = "grabbing";
+  if (d && d.kind === "move") {
+    if (!d.moved && Math.abs(x - d.x0) > 2) { if (viewOnly()) { S.drag = null; drawOverlay(); return; } d.moved = true; checkpoint(); }
+    if (d.moved) { const dt = (x - d.x0) * S.view.dur / W; for (const o of S.onsets) if (d.orig.has(o.id)) o.time = clamp(d.orig.get(o.id) + dt, 0, S.duration); drawMain(); }
+  } else if (d && d.kind === "region") {
+    if (Math.abs(x - d.x0) > 3) { d.moved = true; const t = clamp(x2t(x), 0, S.duration); S.region = [Math.min(d.t0, t), Math.max(d.t0, t)]; drawMain(); }
+  }
+  drawOverlay();
+});
+window.addEventListener("mouseup", (e) => {
+  const d = S.drag; if (!d) return; S.drag = null;
+  if (d.kind === "move") {
+    if (d.moved) { edited(); const o = d.hit; S.lastSnap = `moved to ${o.time.toFixed(4)} s (N to snap)`; }
+    else { S.cursor = d.hit.time; if (P.playing) restartIfPlaying(d.hit.time - 0.5); }
+  } else if (d.moved) { selectInRange(S.region[0], S.region[1], d.lane, d.shift); }
+  else {
+    if (!d.shift) S.sel.clear();
+    S.region = null; S.cursor = clamp(d.t0, 0, S.duration); restartIfPlaying(S.cursor);
+  }
+  $("time").textContent = fmtTime(S.cursor);
+  drawAll(); updateInfo();
+});
+cvOv.addEventListener("dblclick", (e) => {
+  const { x, y } = evPos(e), lane = laneAt(y);
+  if (lane === "kick" || lane === "snare") addOnset(x2t(x), lane);
+});
+cvOv.addEventListener("mouseleave", () => { S.hover = null; S.hoverHit = null; drawOverlay(); });
+cvOv.addEventListener("wheel", (e) => {
+  if (!S.duration) return; e.preventDefault();
+  const { x } = evPos(e);
+  if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) setView(S.view.start + (e.deltaX || e.deltaY) * S.view.dur / W);
+  else zoomAt(Math.exp(e.deltaY * 0.0015), x2t(x));
+}, { passive: false });
+function overviewSeek(e) { const r = cvOver.getBoundingClientRect(), t = (e.clientX - r.left) / W * S.duration; setView(t - S.view.dur / 2); }
+cvOver.addEventListener("mousedown", (e) => { if (!S.duration) return; overviewSeek(e); const mv = (ev) => overviewSeek(ev), up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); }; window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up); });
+
+// ---------------------------------------------------------------- keyboard
+function addPoint() {
+  if (P.playing) return playPos();
+  if (S.hover) return S.hover.t;
+  return S.cursor;
+}
+function pageBy(f) { setView(S.view.start + f * S.view.dur * 0.9); S.cursor = S.view.start; restartIfPlaying(S.view.start); updateInfo(); }
+function toggleChk(id, label) { const c = $(id); c.checked = !c.checked; toast(`${label} ${c.checked ? "on" : "off"}`); savePrefs(); updateClicksChip(); }
+document.addEventListener("keydown", (e) => {
+  const tag = e.target.tagName;
+  if (tag === "INPUT" && e.target.type !== "checkbox" && e.target.type !== "range") return;
+  if ($("help").classList.contains("open")) { if (e.key === "Escape" || e.key === "?") { e.preventDefault(); closeModal("help"); } return; }
+  if ($("settings").classList.contains("open")) { if (e.key === "Escape") { e.preventDefault(); closeModal("settings"); } return; }
+  if ($("tracks").classList.contains("open")) { if (e.key === "Escape" || e.key === "t" || e.key === "T") closeTracks(); return; }
+  const k = e.key, ctrl = e.ctrlKey || e.metaKey, lk = k.length === 1 ? k.toLowerCase() : k;
+  if (ctrl) {
+    if (lk === "s") { e.preventDefault(); sendOps(); toast("everything saves by itself"); }
+    else if (lk === "z" && e.shiftKey) { e.preventDefault(); redo(); }
+    else if (lk === "z") { e.preventDefault(); undo(); }
+    else if (lk === "y") { e.preventDefault(); redo(); }
+    else if (lk === "a") { e.preventDefault(); const [a, b] = S.region || visibleRange(); selectInRange(a, b, null, false); drawAll(); updateInfo(); }
+    return;
+  }
+  if (e.altKey) return;
+  if (tag === "SELECT" || tag === "BUTTON" || tag === "INPUT") e.target.blur();
+  if (lk === "t") return openTracks();
+  if (lk === "?") { openModal("help"); return; }
+  if (!S.duration) return;
+  let handled = true;
+  switch (lk) {
+    case " ": togglePlay(); break;
+    case "k": if (e.shiftKey) toggleChk("click-kick", "kick clicks"); else addOnset(addPoint(), "kick"); break;
+    case "s": if (e.shiftKey) toggleChk("click-snare", "snare clicks"); else addOnset(addPoint(), "snare"); break;
+    case "n": snapSelected(); break;
+    case "c": toggleClass(); break;
+    case "x": case "Delete": case "Backspace": deleteSelected(); break;
+    case "ArrowLeft": case "ArrowRight": {
+      const sgn = k === "ArrowLeft" ? -1 : 1;
+      if (S.sel.size) nudge(sgn * (e.shiftKey ? 0.005 : 0.001)); else setView(S.view.start + sgn * S.view.dur * 0.1);
+      break;
+    }
+    case "Tab": stepSelect(e.shiftKey ? -1 : 1); break;
+    case "Escape": S.sel.clear(); S.region = null; drawAll(); updateInfo(); break;
+    case "r": markReviewed(!e.shiftKey); break;
+    case "Enter": { const [a, b] = visibleRange(); edit(() => addRange(a, b)); if (b >= S.duration - 0.01) toast(isComplete() ? "end of track · 100% reviewed: Save (Ctrl+S)" : "end of track · U finds unreviewed gaps"); else pageBy(1); break; }
+    case "PageDown": pageBy(1); break;
+    case "PageUp": pageBy(-1); break;
+    case "u": nextUnreviewed(); break;
+    case "i": nextIssue(); break;
+    case "l": toggleChk("loop", "loop"); restartIfPlaying(); break;
+    case "1": case "2": case "3": $("rate").value = { 1: "1", 2: "0.75", 3: "0.5" }[k]; toast(`rate ${$("rate").value}`); restartIfPlaying(); break;
+    case "b": { const sel = $("band"), o = ["full", "low", "mid"]; sel.value = o[(o.indexOf(sel.value) + 1) % 3]; toast(`band: ${sel.value}`); restartIfPlaying(); break; }
+    case "+": case "=": zoomAt(0.5, S.hover ? S.hover.t : S.cursor); break;
+    case "-": case "_": zoomAt(2, S.hover ? S.hover.t : S.cursor); break;
+    case "0": setView(0, S.duration); break;
+    case "z": {
+      const c = S.hover ? S.hover.t : (selected()[0] || {}).time ?? S.cursor;
+      if (S.view.dur > 1.01 || !S.prevZoom) { S.prevZoom = S.view.dur; setView(c - 0.5, 1); } else { setView(c - S.prevZoom / 2, S.prevZoom); S.prevZoom = null; }
+      break;
+    }
+    case "Home": S.cursor = 0; setView(0); restartIfPlaying(0); break;
+    case "End": setView(S.duration); S.cursor = Math.max(0, S.duration - S.view.dur); break;
+    default: handled = false;
+  }
+  if (handled) { e.preventDefault(); savePrefs(); }
+  if (!P.playing) $("time").textContent = fmtTime(S.cursor);
+  drawOverlay();
+});
+
+// ---------------------------------------------------------------- toolbar wiring
+$("btn-tracks").onclick = openTracks; $("btn-tracks-close").onclick = closeTracks;
+$("btn-play").onclick = togglePlay; $("btn-undo").onclick = undo; $("btn-redo").onclick = redo;
+$("btn-zin").onclick = () => zoomAt(0.5, S.view.start + S.view.dur / 2); $("btn-zout").onclick = () => zoomAt(2, S.view.start + S.view.dur / 2);
+$("btn-review").onclick = () => S.duration && markReviewed(true);
+$("btn-next").onclick = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+for (const id of ["rate", "loop", "band"]) $(id).addEventListener("change", (e) => { e.target.blur(); restartIfPlaying(); });
+$("ref").addEventListener("change", (e) => { e.target.blur(); drawMain(); });
+$("snap-ref").addEventListener("change", (e) => { e.target.blur(); updateInfo(); });
+$("show-hats").addEventListener("change", () => drawMain());
+// ---------------------------------------------------------------- settings, help, remembered prefs
+const PREF_IDS = ["rate", "follow", "click-kick", "click-snare", "click-vol", "music-vol", "band", "snap-add", "snap-ref", "ref", "show-hats"];
+const PREF_KEY = "drumReviewer.prefs.v1", HELP_KEY = "drumReviewer.helpSeen.v1";
+function loadPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREF_KEY) || "{}") || {}; } catch (e) { p = {}; }
+  for (const id of PREF_IDS) { if (!(id in p)) continue; const el = $(id); if (el.type === "checkbox") el.checked = !!p[id]; else el.value = p[id]; }
+}
+function savePrefs() {
+  const p = {};
+  for (const id of PREF_IDS) { const el = $(id); p[id] = el.type === "checkbox" ? el.checked : el.value; }
+  try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (e) { /* private window: prefs just aren't remembered */ }
+}
+function updateClicksChip() {
+  const k = $("click-kick").checked, sn = $("click-snare").checked;
+  $("clicks-chip").textContent = k && sn ? "label clicks: kick + snare" : k ? "label clicks: kick" : sn ? "label clicks: snare" : "label clicks: off";
+}
+function openModal(id) { $(id).classList.add("open"); }
+function closeModal(id) { $(id).classList.remove("open"); if (id === "help") { try { localStorage.setItem(HELP_KEY, "1"); } catch (e) { /* ignore */ } } }
+$("btn-settings").onclick = () => openModal("settings"); $("btn-settings-close").onclick = () => closeModal("settings");
+$("btn-help").onclick = () => openModal("help"); $("btn-help-close").onclick = () => closeModal("help");
+$("clicks-chip").onclick = () => openModal("settings");
+for (const id of ["settings", "help"]) $(id).addEventListener("mousedown", (e) => { if (e.target === $(id)) closeModal(id); });
+for (const id of PREF_IDS) $(id).addEventListener("change", () => { savePrefs(); updateClicksChip(); });
+loadPrefs(); updateClicksChip();
+$("click-vol").addEventListener("input", (e) => clickGain.gain.value = +e.target.value);
+$("music-vol").addEventListener("input", (e) => musicGain.gain.value = +e.target.value);
+clickGain.gain.value = +$("click-vol").value; musicGain.gain.value = +$("music-vol").value;
+window.addEventListener("resize", resize);
+window.addEventListener("beforeunload", (e) => { if (syncPending()) { sendOps(); e.preventDefault(); e.returnValue = ""; } });
+
+resize();
+// A page configured with an API URL is the hosted page even if the API is unreachable right now.
+api("/api/config").catch((e) => { toast(`can't reach the reviewer's server: ${e.message}`, 8000); return { hosted: !!API_BASE, seeds: [] }; }).then((c) => {
+  CFG = { ...CFG, ...c };
+  if (PAGE_VERSION && CFG.version && CFG.version !== "dev" && CFG.version !== PAGE_VERSION) {
+    const bw = $("banner-warn"); bw.className = "banner warn";
+    bw.textContent = `This page and the reviewer's server are different versions (page ${PAGE_VERSION.slice(0, 8)}, server ${CFG.version.slice(0, 8)}): reload the page. If this stays, one of them is still being updated; try again in a few minutes.`;
+  }
+  return loadTracks();
+}).then(() => {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h && S.tracks.some(t => t.stem === h)) openTrack(h); else openTracks();
+  let seen = null;
+  try { seen = localStorage.getItem(HELP_KEY); } catch (e) { seen = null; }
+  if (!seen) openModal("help");
+}).catch(e => toast(`could not list tracks: ${e.message}`, 8000));
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[Unit]
+Description=Check blinky_time master for a build-host deploy every 2 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+
+[Install]
+WantedBy=timers.target

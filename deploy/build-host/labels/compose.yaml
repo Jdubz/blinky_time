@@ -1,0 +1,79 @@
+# The labels service on the build host (project `blinky-labels`). Deployed by deploy.sh, which the
+# pull deployer (deploy/build-host/deployer) runs for a gated blinky_time master commit. RUNBOOK.md.
+#
+# The page is blinky-time.joshwentworth.com/labels/ (the site, built from this repo); this is its
+# API, reached ONLY through a Cloudflare tunnel whose connector joins the internal edge network. No
+# port is published. Egress is fenced by firewall.sh (TCP 443 to public addresses: fetching the
+# corpus from GitHub). It holds no credential: blinky-corpus's scheduled workflow labels-sync.yml
+# pulls the shared labels from GET /api/export and publishes them.
+# Every host-specific value comes from labels.env (gitignored; labels.env.example).
+#
+# The project, container, network and volume names are load-bearing: the state volume holds the
+# shared labels, and the tunnel's ingress names the container.
+name: blinky-labels
+
+services:
+  reviewer:
+    image: blinky-labels-reviewer:latest
+    build:
+      context: ../../../labels-service
+      args:
+        LABELS_SERVICE_VERSION: ${LABELS_SERVICE_VERSION:?deploy.sh sets it}
+    container_name: blinky-labels
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpuset: "${LABELS_CPUSET:?set in labels.env}"
+    cpu_shares: 256
+    mem_limit: ${LABELS_MEM:-512m}
+    memswap_limit: ${LABELS_MEM:-512m}
+    pids_limit: 128
+    command:
+      - --host=0.0.0.0
+      - --port=8766
+      - --state=/state
+      - --checkout=/corpus/blinky-corpus
+      - --git-url=https://github.com/Jdubz/blinky-corpus.git
+      - --allow-host=${LABELS_HOSTNAME:?}
+      - --cors-origin=${LABELS_SITE_ORIGIN:?}
+      - --page-url=${LABELS_PAGE_URL:?}
+      - --trust-cf-connecting-ip
+    volumes:
+      - state:/state
+      - corpus:/corpus
+    networks:
+      edge:
+        ipv4_address: ${LABELS_EDGE_IP:?}
+      egress:
+        ipv4_address: ${LABELS_EGRESS_IP:?}
+    # NO `ports:`. deploy.sh and verify.sh check it.
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "5" } }
+    labels:
+      - "com.centurylinklabs.watchtower.enable=false"
+      - "spark.protected=true"   # the host's docker-gc prunes what isn't labelled
+
+networks:
+  edge:
+    name: blinky-labels-edge
+    external: true   # network.sh: shared with the tunnel connector, so neither stack owns it
+  egress:
+    name: blinky-labels-egress
+    driver: bridge
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: br-blabels-out
+    ipam:
+      config:
+        - subnet: ${LABELS_EGRESS_SUBNET:?}
+          gateway: ${LABELS_EGRESS_GATEWAY:?}
+    labels:
+      spark.protected: "true"
+
+volumes:
+  state:
+    name: blinky-labels-state
+  corpus:
+    name: blinky-labels-corpus

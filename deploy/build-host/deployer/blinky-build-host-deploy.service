@@ -1,0 +1,21 @@
+# One pass of the build host's pull deployer (deploy/build-host/deployer/deployer.py), started by
+# blinky-build-host-deploy.timer. RUNBOOK (deploy/build-host/labels/RUNBOOK.md) installs it,
+# rewriting the paths and user to this host's.
+[Unit]
+Description=Deploy blinky_time services on the build host from master once CI and review pass
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+# The deployer runs from its own clone of blinky_time, so it too is reviewed code from master.
+WorkingDirectory=@CLONE@
+ExecStart=/usr/bin/python3 @CLONE@/deploy/build-host/deployer/deployer.py
+Environment=HOME=@HOME@
+# LOKI_PUSH_URL (optional): the deployer's log also goes to Loki.
+EnvironmentFile=-@HOME@/.config/blinky-build-host/deployer.env
+# A deploy (up to 40 min) and its rollback (as long again); the state is saved after every step.
+TimeoutStartSec=90min
+SyslogIdentifier=blinky-build-host-deploy
