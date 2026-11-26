@@ -518,8 +518,13 @@ class App:
         base = json.loads(main_text) if main_text else None
         return labelcheck.check_human_doc(self.c.edm, stem, json.loads(text), base, self.c.seeds())
 
-    def _adopt(self, path: str, main_text: str) -> None:
+    def _adopt(self, path: str, main_text: str | None) -> None:
+        """A track takes main's version (None: main has no file: back to its seed)."""
         stem = Path(path).name[: -len(labelcheck.HUMAN_SUFFIX)]
+        if main_text is None:
+            with self.rw.read():
+                self.store.reset(stem, initial_state(self.c, stem))
+            return
         doc = json.loads(main_text)
         self.store.reset(stem, {**doc, "seed": "human", "base_blob": hosted.git_blob_sha(main_text.encode())})
 

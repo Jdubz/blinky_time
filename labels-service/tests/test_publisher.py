@@ -207,6 +207,28 @@ def test_a_track_that_started_from_main_is_not_overwritten_by_it(env):
     assert not env.events("adopted_main") and len(env.branches()) == 1
 
 
+def test_reverting_a_published_batch_sticks(env):
+    """A revert on main is adopted, not re-published: for a track that started from main's human
+    file (the revert restores that file) and for one that started from a seed (it deletes the file)."""
+    env.push_to_main({A: human(env.edm, "a", KICKS)}, "a human file")
+    env.app.tick()
+    env.edit("a", {"op": "del", "id": "h1"})  # started from main's file
+    env.edit("b", {"op": "del", "id": "h1"})  # started from its seed
+    env.app.tick()
+    env.merge_branch()
+    env.app.tick()
+    assert env.branches() == [] and env.events("batch_landed")
+    before = git(env.work, "rev-parse", "HEAD").strip()
+    git(env.work, "revert", "--no-edit", before)  # the owner reverts the squash merge
+    git(env.work, "push", "-q", "origin", "HEAD:main")
+    env.app.tick()
+    adopted = {e["path"]: e.get("deleted", False) for e in env.events("adopted_main")}
+    assert adopted == {A: False, B: True}
+    assert len(env.app.store.view("a")["onsets"]) == 19 and env.app.store.view("b")["seed"] == "drums_adtof"
+    env.app.tick()
+    assert env.branches() == [], "the reverted labels must not be re-published"
+
+
 def test_vandalism_is_not_published(env):
     ids = [o["id"] for o in env.app.store.view("a")["onsets"]]
     env.edit("a", *({"op": "del", "id": i} for i in ids[:15]))  # deletes 15 of 19

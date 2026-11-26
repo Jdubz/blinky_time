@@ -340,10 +340,11 @@ class AutoPublisher:
         return {"published": rec[1] if rec else None, "unpublished": True}
 
     def tick(self, tracks: dict[str, tuple[str, str | None]], edited_at: float | None,
-             adopt: Callable[[str, str], None], check: Callable[[str, str, str | None], list[str]]) -> None:
+             adopt: Callable[[str, str | None], None], check: Callable[[str, str, str | None], list[str]]) -> None:
         """`tracks`: {path: (current file text, blob of main's file the state started from)} of every
-        edited track. `adopt(path, main_text)` makes a track take main's version.
-        `check(path, text, main_text)`: the label checks' problems."""
+        edited track. `adopt(path, main_text)` makes a track take main's version (None: main has no
+        file any more; the track goes back to its seed). `check(path, text, main_text)`: the label
+        checks' problems."""
         with self._lock:
             main = self._main()
             now = self.clock()
@@ -369,18 +370,31 @@ class AutoPublisher:
                     if pr and pr.get("state") == "closed" and not pr.get("merged_at"):
                         self.log.emit("batch_closed", branch=self.st["branch"], pr=pr["number"])
                         self._drop_branch()
-            # 2. A file changed on main from outside (not by us, and not what the state started from)
-            #    wins: an owner's edit or revert. Git history is the undo.
+            # 2. A file that changed on main from outside wins: an owner's edit or revert (git history
+            #    is the undo). "Ours" is the version we last published there, or, before we ever have,
+            #    the one the state started from. A file we published that main no longer has (its
+            #    creation reverted) sends the track back to its seed.
             current: dict[str, str] = {}
             for p, (text, base_blob) in tracks.items():
+                if p in files:
+                    current[p] = text
+                    continue  # our open batch: main catches up when it lands
                 mb = self._blob_at(main, p)
                 pub = self.st["published"].get(p)
-                known = {base_blob, pub[0] if pub else None}
-                if mb and mb not in known and p not in files and git_blob_sha(text.encode()) != mb:
+                ours = pub[0] if pub else base_blob
+                if mb == ours or (mb is None and pub is None):
+                    current[p] = text
+                    continue
+                if mb is None:
+                    adopt(p, None)
+                    del self.st["published"][p]
+                    self.log.emit("adopted_main", path=p, deleted=True)
+                    continue
+                if git_blob_sha(text.encode()) != mb:
                     text = self._git("cat-file", "blob", mb)
                     adopt(p, text)
-                    self.st["published"][p] = [mb, now_iso()]
                     self.log.emit("adopted_main", path=p)
+                self.st["published"][p] = [mb, now_iso()]
                 current[p] = text
             # 3. What differs from main now.
             changed = {p: t for p, t in current.items() if git_blob_sha(t.encode()) != self._blob_at(main, p)}
