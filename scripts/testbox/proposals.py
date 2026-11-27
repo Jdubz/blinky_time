@@ -10,8 +10,9 @@ anything but the box's own test chip.
 **The scores** are the staging quality suite's (blinky-server testing/staging.py), one line per
 run in ``staging-scores.jsonl`` in the server's data dir: per track and chip, drum F, kick and
 snare recall (±50 ms), on-drum share, the octave-tolerant tempo error (testing/tempo.py) and
-where the scorer's lag came from. repS (repetition consistency) is a metric of the comparison
-too, but the box doesn't measure it yet: it shows as "not measured" and counts neither way.
+where the scorer's lag came from, and repS (repetition consistency, label-free: blinky-server
+testing/repetition.py, against the corpus's per-track repetition maps). A line from before the
+box scored repS has none: against it, repS is "not measured" and counts neither way.
 
 **Health and smoothness are metrics too**, so a pure smoothness win can qualify: the longest
 frame, the lowest fps and the beat-pace error. Each
@@ -568,8 +569,7 @@ def body(
             for m in METRICS
             if noises[m.key].sd is not None
         )
-        + ". repS isn't measured by the box yet. No composite score: each metric is judged on "
-        "its own.",
+        + ". No composite score: each metric is judged on its own.",
     ]
     # Per metric: a track one metric leaves out (no tempo from an older firmware) still counts
     # for the others.

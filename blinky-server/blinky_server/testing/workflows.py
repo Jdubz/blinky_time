@@ -32,7 +32,7 @@ from dbos import DBOS
 
 from ..paths import data_dir
 from ..work import durable, jobs
-from . import detection_latency, leds, tempo
+from . import detection_latency, leds, repetition, tempo
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import audio_seconds, kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
@@ -318,6 +318,15 @@ async def validation_run(
         scores[device.id[:12]]["tempo"] = tempo.tempo_score(
             list(getattr(data, "music_states", None) or []),
             tempo.ground_truth_bpm(track["audio_file"]),
+        )
+        # Repetition consistency (testing/repetition.py, label-free): the proposals' repS, on
+        # the same detections and lag as the drum row.
+        scores[device.id[:12]]["repetition"] = repetition.repetition_score(
+            list(getattr(data, "transients", None) or []),
+            playback.audio_start_time_ms,
+            track,
+            duration_ms,
+            (scores[device.id[:12]].get("drums") or {}).get("lagMs"),
         )
         if persist_raw:
             path = _raw_path(track["name"], run, device.id[:12])

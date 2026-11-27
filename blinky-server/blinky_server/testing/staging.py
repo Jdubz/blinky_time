@@ -12,7 +12,8 @@ score the algorithm (the report comment and the score record; it never posts a f
    frame and overrun growth, non-blocking warnings until the owner makes them block).
 3. In a test session (runtime defaults, streaming), with the box speaker, every track is
    played once:
-   - validation: every edm/ track, scored like /api/test/validate (drum metrics);
+   - validation: every edm/ track, scored like /api/test/validate (drum metrics, tempo,
+     and repetition consistency: testing/repetition.py);
    - music and beat pace: the first track long enough to hold them goes on playing after its
      validation window: ``music_seconds`` of mean level and pulse-onset rate, then
      ``pace_seconds`` of beats counted against the tempo integrated over wall-clock time
@@ -387,12 +388,13 @@ def health_record(report: dict[str, Any]) -> dict[str, Any]:
 
 def score_record(report: dict[str, Any]) -> dict[str, Any]:
     """One line of the score record: the commit, version, corpus pin and setup, and each
-    track's drum scores per device with where its lag came from."""
+    track's drum, tempo and repetition scores per device with where its lag came from."""
     rows = []
     for r in (report.get("validation") or {}).get("results") or []:
         for dev, s in (r.get("scores") or {}).items():
             drums = s.get("drums") or {}
             tempo = s.get("tempo") or {}
+            rep = s.get("repetition") or {}
             rows.append(
                 {
                     "track": r.get("track"),
@@ -400,6 +402,10 @@ def score_record(report: dict[str, Any]) -> dict[str, Any]:
                     **{k: drums.get(k) for k in SCORE_FIELDS},
                     "tempoErr": tempo.get("err"),  # octave-tolerant (testing/tempo.py)
                     "tempoBpm": tempo.get("bpm"),
+                    # Repetition consistency, label-free (testing/repetition.py).
+                    "repS": rep.get("repS"),
+                    "repN": rep.get("n"),
+                    "repCoverage": rep.get("coverage"),
                 }
             )
     rec: dict[str, Any] = {
