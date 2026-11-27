@@ -281,6 +281,7 @@ class Worker:
             "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
+            **self.safe_directory(),
         }
         failed = False
         for step in plan:
@@ -309,12 +310,25 @@ class Worker:
                           "seconds": round(time.monotonic() - t, 1)})
         return "failure" if failed else "success"
 
+    def safe_directory(self):
+        """Git config, as environment (protected, like -c), that trusts the checkout: its
+        directory is root's (sticky, so a build can't swap .arduino: Dockerfile.worker) while
+        the repository in it is this user's, which git would otherwise refuse as "dubious
+        ownership". The build's own git calls (scripts/build.sh) need it too. The worker
+        rewrites .git/config before every sync, so trusting it adds nothing a build planted."""
+        return {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(self.cfg.src),
+        }
+
     def _git(self, logf, *args):
         cmd = ["git"]
         for c in SAFE_CONFIG:
             cmd += ["-c", c]
         cmd += ["-C", str(self.cfg.src), *map(str, args)]
-        r = subprocess.run(cmd, env=safe_env(), capture_output=True, text=True, timeout=600)
+        env = {**safe_env(), **self.safe_directory()}
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             logf.write(r.stdout + r.stderr)
             raise BuildFailed(f"git {args[0]} failed: {r.stderr.strip()[:300]}")
@@ -401,6 +415,7 @@ class Worker:
             "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
+            **self.safe_directory(),
         }
         out = self.cfg.output
         shutil.rmtree(out, ignore_errors=True)
