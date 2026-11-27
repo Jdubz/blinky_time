@@ -526,9 +526,15 @@ def body(
         + ". repS isn't measured by the box yet. No composite score: each metric is judged on "
         "its own.",
     ]
-    left = sorted({f"{t}: {why}" for r in results for t, why in r.left_out.items()})
+    # Per metric: a track one metric leaves out (no tempo from an older firmware) still counts
+    # for the others.
+    left = [
+        f"{r.metric.name}: " + "; ".join(f"{t} ({why})" for t, why in sorted(r.left_out.items()))
+        for r in results
+        if r.left_out
+    ]
     if left:
-        lines += ["", "<details><summary>Tracks left out</summary>", ""]
+        lines += ["", "<details><summary>Tracks left out, per metric</summary>", ""]
         lines += [f"- {x}" for x in left] + ["", "</details>"]
     lines += ["", "**Health** (any of these rules a candidate out):", ""]
     lines.append(f"- `{HW_CONTEXT}` on the staging commit")
