@@ -173,3 +173,25 @@ def test_services_json_names_real_scripts():
         if s["deploy"]:
             script = repo / s["deploy"][0]
             assert script.is_file() and script.stat().st_mode & 0o111, f"{s['name']}: {script} is not executable"
+
+
+def test_a_rollback_leaves_the_clone_at_the_deployers_own_commit(repo):
+    """A rollback checks out the service's older commit. If that predates the deployer's own
+    deployed code, and the deployer isn't due this pass, the timer would run the older deployer
+    from then on: the pass ends with the clone back at the deployer's commit."""
+    base = g(repo, "rev-parse", "HEAD")
+    dep_svc = {"name": "deployer", "paths": ["deploy/build-host/deployer/"], "required": ["Labels service"], "deploy": []}
+    newer_deployer = commit(repo, "deploy/build-host/deployer/deployer.py", "v2")
+    state = {"labels": {"deployed": base, "refused": {}},
+             "deployer": {"deployed": newer_deployer, "refused": {}}}
+    bad = commit(repo, "labels-service/server.py")
+    ran = []
+
+    def runner(cmd):
+        at = dep.git("rev-parse", "HEAD").strip()
+        ran.append(at)
+        return 1 if at == bad else 0
+
+    dep.deploy_pass([SVC, dep_svc], state, fake_fetch(), runner=runner, now=NOW)
+    assert ran == [bad, base] and state["labels"]["deployed"] == base  # rolled back
+    assert dep.git("rev-parse", "HEAD").strip() == newer_deployer
