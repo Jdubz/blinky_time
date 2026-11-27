@@ -276,6 +276,19 @@ def test_without_repeat_runs_the_stable_is_run_again_for_the_noise_up_to_a_cap()
     assert p.need is None
 
 
+def test_a_metric_the_stable_doesnt_report_never_waits_for_repeats() -> None:
+    cand = line(CAND_SHA, 0.6, run="c")
+    base = line(STABLE_SHA, 0.5, run="s", release="b217")
+    old = [base, jitter(base, 0.01)]
+    for r in old:
+        for t in r["tracks"]:
+            t["tempoErr"] = None  # an older firmware: no tempo
+    p = make_plan([cand, *old])
+    assert p.need is None
+    res = proposals.compare(p.cand, p.base, proposals.noise([cand, *old]))
+    assert verdicts(res)["tempoErr"] == "not measured"
+
+
 def test_a_run_that_keeps_ending_without_scores_is_given_up_on() -> None:
     p = make_plan([], failed={f"cand:{CAND_SHA}:{PIN}": 2})
     assert p.need is None and p.blocked and "given up" in p.blocked

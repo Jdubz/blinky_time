@@ -439,11 +439,13 @@ def plan(
     if not p.base:
         need(f"base:{stable}:{pin}:1", f"the stable {stable} under corpus {pin[:8]}", base_body)
         return p
-    measured = [
-        m.key
-        for m in METRICS
-        if any(_num(t.get(m.key)) is not None for r in p.cand for t in rows(r).values())
-    ]
+
+    def has(recs: list[dict[str, Any]], key: str) -> bool:
+        return any(_num(t.get(key)) is not None for r in recs for t in rows(r).values())
+
+    # Only metrics both sides measured need noise: one the stable firmware doesn't report
+    # (an older build without the field) is "not measured" and never waits for repeats.
+    measured = [m.key for m in METRICS if has(p.cand, m.key) and has(p.base, m.key)]
     short = [k for k in measured if noises[k].dof < MIN_NOISE_DOF]
     if short:
         n = len(base_all)
