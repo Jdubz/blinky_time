@@ -175,6 +175,9 @@ def state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "pr-queue.json"
 
 
+RUN_ONCE = prq.run_once
+
+
 def run(g: GitHub, srv: Server, b: Builds) -> dict[str, Any]:
     return prq.run_once(g, srv, lambda: b)
 
@@ -576,6 +579,20 @@ def test_github_down_is_a_retry_and_touches_nothing() -> None:
     g.fail_list = True
     state = run(g, srv, b)
     assert state["running"]["job"] == "job-1" and srv.cancelled == []
+    assert prq.PASS_ERROR and "can't list the open PRs" in prq.PASS_ERROR
+    g.fail_list = False
+    run(g, srv, b)
+    assert prq.PASS_ERROR is None
+
+
+def test_a_pass_github_failed_exits_1_so_the_unit_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BlinkyBoxRunnerFailing keys on the unit failing: a pass that GitHub broke exits 1 (the
+    queue still reported), a clean one 0."""
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    monkeypatch.setattr(prq, "run_once", lambda: RUN_ONCE(g, srv, lambda: b))
+    assert prq.main([]) == 0
+    g.fail_list = True
+    assert prq.main([]) == 1 and srv.queue  # reported all the same
 
 
 def test_an_unconfigured_build_service_builds_nothing() -> None:
@@ -680,3 +697,24 @@ def test_a_build_service_down_leaves_nothing_ready_so_staging_is_not_held() -> N
     b.get = real_get  # type: ignore[method-assign]
     srv.devices = [GRID]
     assert run(g, srv, b)["running"]["sha"] == A1 and b.submitted == [A1]  # same build
+
+
+def test_a_status_that_fails_after_the_submit_keeps_the_running_job() -> None:
+    """The job is submitted, then the pending status fails to post (GitHub flaking): the next
+    pass polls that job, never submits the head a second time (which would 409 until the
+    first finished, then test it again and lose the first's verdict)."""
+    g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
+    real = g.__call__
+
+    def flaky(*args: str, stdin: str | None = None) -> str:
+        if "state=pending" in args and "description=hardware checks on 1 test device(s)" in args:
+            raise RuntimeError("gh api -> 1: HTTP 502")
+        return real(*args, stdin=stdin)
+
+    prq.run_once(flaky, srv, lambda: b)
+    assert len(srv.submitted) == 1
+    assert prq.load_state()["running"]["job"] == "job-1"
+    srv.jobs["job-1"] = {"status": "complete", "result": GOOD}
+    run(g, srv, b)
+    assert len(srv.submitted) == 1
+    assert g.on(A1)[-1][0] == "success"
