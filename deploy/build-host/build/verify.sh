@@ -39,6 +39,11 @@ docker exec $W sh -c 'env | grep -qiE "token|secret|password" && exit 1 || exit 
   && ok "no credential in its environment" || bad "a credential-looking variable in the worker's environment"
 docker exec $W sh -c 'touch /opt/blinky/src/.arduino/x 2>/dev/null && exit 1 || exit 0' \
   && ok "toolchain not writable" || bad "the toolchain is writable"
+docker exec $W sh -c 'mv /opt/blinky/src/.arduino /opt/blinky/src/.arduino.x 2>/dev/null && { mv /opt/blinky/src/.arduino.x /opt/blinky/src/.arduino; exit 1; } || exit 0' \
+  && ok "toolchain can't be renamed" || bad "the toolchain directory can be renamed (and replaced)"
+docker exec $W sh -c 'rm -rf /opt/blinky/src/.arduino 2>/dev/null; test -d /opt/blinky/src/.arduino/data' \
+  && ok "toolchain can't be removed" || bad "the toolchain can be removed"
+is "checkout directory owner and mode" "$(docker exec $W stat -c '%u:%g %a' /opt/blinky/src)" "0:10001 1775"
 
 echo "== the api"
 is "read-only root filesystem" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' $A)" true

@@ -4,9 +4,11 @@
 Builds a real blinky-firmware commit through the SHA path, then a new commit on top of it
 through the bundle path, and verifies each package with blinky-server's own verifier
 (hosttools/firmware_release.py verify_dev_package, the checks download_staging runs).
-Also: health, auth, an untrusted commit (403), the cache, missing bundle prerequisites
-(409), and optionally that the manifest matches the staging build's artifact for that
-commit in everything but the file hashes (the hex embeds the build time).
+Then the tracker harness check of the same commit (POST /v1/checks: the commit's own
+pr-validation.yml job, in the worker's no-network sandbox, with the corpus it pins), which must
+pass, as it did on GitHub. Also: health, auth, an untrusted commit (403), the cache, missing
+bundle prerequisites (409), and optionally that the manifest matches the staging build's
+artifact for that commit in everything but the file hashes (the hex embeds the build time).
 
   e2e.py --url URL --sha SHA --firmware DIR --hosttools DIR [--staging-artifact DIR]
   (token in $BLINKY_BUILD_TOKEN; DIR = a blinky-firmware clone checked out at SHA)
@@ -70,11 +72,11 @@ class Api:
         ])
         return self.req("POST", "/v1/builds", body, f"multipart/form-data; boundary={b}")
 
-    def wait(self, build_id):
+    def wait(self, build_id, what="builds"):
         deadline = time.monotonic() + BUILD_DEADLINE_S
         last = None
         while time.monotonic() < deadline:
-            code, v = self.req("GET", f"/v1/builds/{build_id}")
+            code, v = self.req("GET", f"/v1/{what}/{build_id}")
             assert code == 200, (code, v)
             if v["state"] != last:
                 say(f"  {build_id}: {v['state']}")
@@ -187,7 +189,26 @@ def main():
     code, body = api.post_bundle(top, work / "orphan.bundle")
     assert code == 409 and "prerequisite" in body["error"], (code, body)
 
-    summary += ["- health, auth (401), untrusted commit (403), cache, "
+    say(f"check: tracker-harness of {args.sha}")
+    body = json.dumps(
+        {"repo": "Jdubz/blinky-firmware", "sha": args.sha, "check": "tracker-harness"}
+    ).encode()
+    code, c = api.req("POST", "/v1/checks", body, "application/json")
+    assert code == 202 and c["check"] == "tracker-harness", (code, c)
+    v3 = api.wait(c["id"], "checks")
+    assert v3["state"] == "done" and v3["conclusion"] == "success", v3
+    ran = ", ".join(
+        f"{s['name']} {s['seconds']}s" for s in v3["steps"] if s["outcome"] == "success"
+    )
+    say(f"  passed in {v3['duration_s']}s: {ran}")
+    summary += [f"- check `tracker-harness`: passed in **{v3['duration_s']}s** in the sandbox "
+                f"(corpus `{v3['corpus'][:12]}`): {ran}"]
+    code, body = api.req("POST", "/v1/checks", json.dumps(
+        {"repo": "Jdubz/blinky-firmware", "sha": secrets.token_hex(20), "check": "tracker-harness"}
+    ).encode(), "application/json")
+    assert code == 403, (code, body)
+
+    summary += ["- health, auth (401), untrusted commit (403, builds and checks), cache, "
                 "bundle prerequisite (409): ok"]
     print("\n".join(summary))
     say("e2e: all passed")

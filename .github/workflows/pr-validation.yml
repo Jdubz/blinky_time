@@ -449,7 +449,7 @@ jobs:
     - name: Lint and unit tests (trust check, bundles, auth, cache, toolchain mismatch)
       working-directory: build-service
       run: |
-        pip install ruff pytest
+        pip install ruff pytest pyyaml
         ruff check .
         python -m pytest -v tests
 
@@ -509,6 +509,11 @@ jobs:
         check "api cap_drop" "$(docker inspect -f '{{json .HostConfig.CapDrop}}' "$a")" '["ALL"]'
         # The toolchain is root-owned: a build can't change it for the next one.
         docker exec "$w" sh -c 'touch /opt/blinky/src/.arduino/x 2>/dev/null && exit 1 || echo "toolchain: not writable"'
+        # ...and the checkout directory is root's, group 10001, sticky: the build can't rename or
+        # replace .arduino with its own (it would be every later build's toolchain).
+        check "checkout directory owner and mode" "$(docker exec "$w" stat -c '%u:%g %a' /opt/blinky/src)" "0:10001 1775"
+        docker exec "$w" sh -c 'mv /opt/blinky/src/.arduino /opt/blinky/src/.arduino.x 2>/dev/null && exit 1 || echo "toolchain: not renamable"'
+        docker exec "$w" sh -c 'rm -rf /opt/blinky/src/.arduino 2>/dev/null; test -d /opt/blinky/src/.arduino/data && echo "toolchain: not removable"'
 
     - name: A blinky-firmware checkout to make bundles from
       run: |
@@ -533,7 +538,7 @@ jobs:
           echo "::notice title=Build service::no readable $name artifact; manifest comparison skipped"
         fi
 
-    - name: End to end (SHA path, bundle path, verified packages)
+    - name: End to end (SHA path, bundle path, verified packages, the tracker harness check)
       # `shell: bash` is `bash -eo pipefail`: without pipefail the step would take tee's status
       # and a failed e2e would pass.
       shell: bash
