@@ -150,6 +150,21 @@ def reset_wait(device: Any, now: float | None = None) -> float:
     return max(0.0, RESET_GAP_S - uptime)
 
 
+def require_reset_gap(devices: list[Any]) -> None:
+    """409 with Retry-After unless every chip has run RESET_GAP_S since its last reset: every
+    route that flashes the box's chips (a dev deploy, the hardware checks, the staging suite, a
+    staging deploy) keeps the firmware's 60 s rule between resets. Call it under
+    routes_firmware._deploy_lock, after the busy check."""
+    wait = max((reset_wait(d) for d in devices), default=0.0)
+    if wait > 0:
+        raise HTTPException(
+            409,
+            f"a chip reset {RESET_GAP_S - wait:.0f} s ago; the firmware's rule is "
+            f"{RESET_GAP_S:.0f} s between resets: retry in {wait:.0f} s",
+            headers={"Retry-After": str(int(wait) + 1)},
+        )
+
+
 def default_track_dir() -> Path:
     """The corpus beside the server's tree (corpus/edm), as the staging runner passes it."""
     return hosttools_dir().parent.parent / "corpus" / "edm"
@@ -213,15 +228,7 @@ async def dev_deploy(body: DevDeployRequest) -> dict[str, Any]:
         _require_dev()  # again under the lock: a switch to queue may have won it meanwhile
         if await routes_firmware._deploy_active():
             raise HTTPException(409, "A deploy or hardware test is already running")
-        devices = _targets(body.device_ids)
-        wait = max(reset_wait(d) for d in devices)
-        if wait > 0:
-            raise HTTPException(
-                409,
-                f"a chip reset {RESET_GAP_S - wait:.0f} s ago; the firmware's rule is "
-                f"{RESET_GAP_S:.0f} s between resets: retry in {wait:.0f} s",
-                headers={"Retry-After": str(int(wait) + 1)},
-            )
+        require_reset_gap(_targets(body.device_ids))
         job_id = await routes_firmware._submit(
             wf, body.build_id, body.device_ids, str(firmware_dir() / "dev-download")
         )
