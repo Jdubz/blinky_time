@@ -13,6 +13,17 @@ snare recall (±50 ms), on-drum share, the octave-tolerant tempo error (testing/
 where the scorer's lag came from. repS (repetition consistency) is a metric of the comparison
 too, but the box doesn't measure it yet: it shows as "not measured" and counts neither way.
 
+**Health and smoothness are metrics too**, so a pure smoothness win can qualify: the longest
+frame, the lowest fps and the beat-pace error. Each
+is one value per run, the strict rule's worst (testing/strict_rules.py; the worst chip's), from
+the line's ``health`` record. A line without it (before phase 3, or a firmware that doesn't
+report the field) is "not measured" for it; the staging report isn't used for these, as it is
+one file per commit and a second run of it overwrites the first's. Not metrics: audio overrun
+growth and stream lines dropped (counters that are almost always 0, so their measured noise is
+0 and a single count from a rig hiccup would read as beyond it; overrun_growth blocks at 0
+anyway), music level and onsets (the rig's volume), and detection latency (a drift from the
+rig's calibration, not better or worse by direction).
+
 **What is compared with what.** A candidate ``bN`` is a merge of a staging commit into master;
 its scores are that staging commit's (its tag's second parent, with the same tree). The stable
 release's are the suite run on the release itself (``release`` in the line). Only lines with
@@ -23,15 +34,19 @@ out are listed with the reason.
 
 **Noise.** Each metric's run-to-run noise is measured, not assumed: from builds the box ran more
 than once (same build, same pin and setup; a ``--retest``, or the extra baseline run below), the
-pooled within-build variance per track, over every pin (the noise is the rig's, not the pin's).
-A metric's difference is the mean over the tracks of candidate minus stable; it is beyond its
-noise when it exceeds K standard errors (K = 2: about 95% for a real difference). With too
-little repeat data for a metric (under MIN_NOISE_DOF degrees of freedom), it can't be judged.
+pooled within-build variance per track (per run for a health metric), over every pin (the noise
+is the rig's, not the pin's). A metric's difference is the mean over the tracks (the runs) of
+candidate minus stable; it is beyond its noise when it exceeds K standard errors (K = 2: about
+95% for a real difference). With too little repeat data for a metric (under MIN_NOISE_DOF
+degrees of freedom), it can't be judged.
 
 **Qualifies** when no metric is worse beyond its noise, at least one is better beyond it, every
-measured metric could be judged, and the candidate is healthy: its staging commit's ``Hardware
-test (staging)`` is ``success``, and no run of it rebooted or failed a strict rule that blocks
-now (testing/strict_rules.py, as the server has it). No composite score: each metric is shown.
+measured score metric could be judged, and the candidate is healthy: its staging commit's
+``Hardware test (staging)`` is ``success``, and no run of it rebooted or failed a strict rule
+that blocks now (testing/strict_rules.py, as the server has it). A health metric whose noise
+can't be judged yet counts neither way: it gets one degree of freedom per repeat run (a score
+metric gets one per track), so waiting for it would hold every proposal for weeks. No
+composite score: each metric is shown.
 
 **Runs it asks for**, queued behind every other box job and never preempting one (the staging
 runner submits them only when it has nothing of its own to run, in queue mode, with nothing of
@@ -82,10 +97,14 @@ Gh = Callable[..., str]
 
 @dataclass(frozen=True)
 class Metric:
-    key: str  # the score line's field
+    key: str  # the score line's track field, or for a health metric its strict rule
     name: str
     higher: bool  # True: higher is better
     fmt: str = "{:.3f}"
+    health: bool = False  # one value per run: the strict rule's worst, in the line's health
+
+
+RUN = ("the run", "worst chip")  # a health metric's one row per line
 
 
 METRICS: tuple[Metric, ...] = (
@@ -95,6 +114,9 @@ METRICS: tuple[Metric, ...] = (
     Metric("onDrum", "on-drum share", True),
     Metric("repS", "repS (repetition consistency)", True),
     Metric("tempoErr", "tempo error (octave-tolerant; lower is better)", False, "{:.4f}"),
+    Metric("frame_time", "longest frame (ms; lower is better)", False, "{:.1f}", True),
+    Metric("fps", "lowest fps", True, "{:.1f}", True),
+    Metric("beat_pace", "beat-pace error (lower is better)", False, "{:.3f}", True),
 )
 
 
@@ -142,6 +164,15 @@ def rows(rec: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     return {(str(t.get("track")), str(t.get("device"))): t for t in rec.get("tracks") or []}
 
 
+def cells(rec: dict[str, Any], m: Metric) -> dict[tuple[str, str], dict[str, Any]]:
+    """The line's rows for a metric, by (track, chip): its tracks, or for a health metric one
+    row for the run holding the strict rule's worst value (None: not measured)."""
+    if not m.health:
+        return rows(rec)
+    r = (((rec.get("health") or {}).get("strict") or {}).get(m.key)) or {}
+    return {RUN: {m.key: r.get("worst")}}
+
+
 def lag_comparable(group: list[dict[str, Any]]) -> str | None:
     """None if these rows' lags are comparable, else why not."""
     sources = {r.get("lagSource") for r in group}
@@ -162,8 +193,8 @@ class Noise:
 
 
 def noise(records: list[dict[str, Any]]) -> dict[str, Noise]:
-    """Each metric's run-to-run noise: the pooled within-build variance per track, over every
-    group of runs of one build with the same pin and setup."""
+    """Each metric's run-to-run noise: the pooled within-build variance per track (per run for
+    a health metric), over every group of runs of one build with the same pin and setup."""
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for rec in records:
         key = (build_key(rec), str(rec.get("corpus")), setup_key(rec))
@@ -175,11 +206,11 @@ def noise(records: list[dict[str, Any]]) -> dict[str, Noise]:
             if len(recs) < 2:
                 continue
             used = False
-            keys = set().union(*(rows(r).keys() for r in recs))
+            keys = set().union(*(cells(r, m).keys() for r in recs))
             for k in keys:
-                group = [rows(r)[k] for r in recs if k in rows(r)]
+                group = [cells(r, m)[k] for r in recs if k in cells(r, m)]
                 vals = [v for v in (_num(g.get(m.key)) for g in group) if v is not None]
-                if len(vals) < 2 or lag_comparable(group):
+                if len(vals) < 2 or (not m.health and lag_comparable(group)):
                     continue
                 mean = sum(vals) / len(vals)
                 ss += sum((v - mean) ** 2 for v in vals)
@@ -206,25 +237,27 @@ def compare(
     cand: list[dict[str, Any]], base: list[dict[str, Any]], noises: dict[str, Noise]
 ) -> list[Result]:
     """Each metric: the mean over comparable tracks of candidate minus stable, against its
-    noise. Several runs of one side are averaged per track first."""
+    noise. Several runs of one side are averaged per track first (a health metric: its one
+    value per run, averaged)."""
     results = []
     for m in METRICS:
         res = Result(m)
-        keys = sorted(set().union(*(rows(r).keys() for r in cand + base)))
+        keys = sorted(set().union(*(cells(r, m).keys() for r in cand + base)))
         diffs, inv = [], 0.0
         cs, ss = [], []
         for k in keys:
-            c = [rows(r)[k] for r in cand if k in rows(r)]
-            s = [rows(r)[k] for r in base if k in rows(r)]
+            c = [cells(r, m)[k] for r in cand if k in cells(r, m)]
+            s = [cells(r, m)[k] for r in base if k in cells(r, m)]
             cv = [v for v in (_num(g.get(m.key)) for g in c) if v is not None]
             sv = [v for v in (_num(g.get(m.key)) for g in s) if v is not None]
             if not cv and not sv:
                 continue
             name = k[0]
             if not cv or not sv:
-                res.left_out[name] = f"no score from the {'candidate' if not cv else 'stable'}"
+                what = "value" if m.health else "score"
+                res.left_out[name] = f"no {what} from the {'candidate' if not cv else 'stable'}"
                 continue
-            why = lag_comparable(c + s)
+            why = None if m.health else lag_comparable(c + s)
             if why:
                 res.left_out[name] = why
                 continue
@@ -314,14 +347,21 @@ def decide(results: list[Result], problems: list[str]) -> Decision:
     if problems:
         return Decision(False, "health: " + "; ".join(problems))
     worse = [r.metric.name for r in results if r.verdict == "worse"]
+    # A health metric's unknown noise counts neither way (module docstring, "Qualifies").
     unknown = [r.metric.name for r in results if r.verdict == "noise unknown"]
+    blocking = [
+        r.metric.name for r in results if r.verdict == "noise unknown" and not r.metric.health
+    ]
     better = [r.metric.name for r in results if r.verdict == "better"]
     if worse:
         return Decision(False, "worse beyond its noise: " + ", ".join(worse))
-    if unknown:
-        return Decision(False, "noise not measured yet for: " + ", ".join(unknown))
+    if blocking:
+        return Decision(False, "noise not measured yet for: " + ", ".join(blocking))
     if not better:
-        return Decision(False, "no metric better beyond its noise")
+        why = "no metric better beyond its noise"
+        if unknown:
+            why += " (noise not measured yet for: " + ", ".join(unknown) + ")"
+        return Decision(False, why)
     return Decision(True, "better beyond its noise: " + ", ".join(better))
 
 
@@ -440,12 +480,13 @@ def plan(
         need(f"base:{stable}:{pin}:1", f"the stable {stable} under corpus {pin[:8]}", base_body)
         return p
 
-    def has(recs: list[dict[str, Any]], key: str) -> bool:
-        return any(_num(t.get(key)) is not None for r in recs for t in rows(r).values())
+    def has(recs: list[dict[str, Any]], m: Metric) -> bool:
+        return any(_num(t.get(m.key)) is not None for r in recs for t in cells(r, m).values())
 
     # Only metrics both sides measured need noise: one the stable firmware doesn't report
     # (an older build without the field) is "not measured" and never waits for repeats.
-    measured = [m.key for m in METRICS if has(p.cand, m.key) and has(p.base, m.key)]
+    # Health metrics count here, so the stable's repeat runs (up to the cap) measure theirs.
+    measured = [m.key for m in METRICS if has(p.cand, m) and has(p.base, m)]
     short = [k for k in measured if noises[k].dof < MIN_NOISE_DOF]
     if short:
         n = len(base_all)
@@ -512,12 +553,16 @@ def body(
         m = r.metric
         lines.append(
             f"| {m.name} | {_fmt(m, r.stable)} | {_fmt(m, r.candidate)} | {_signed(m, r.diff)} | "
-            f"{_fmt(m, r.margin)} | {r.tracks or '—'} | {MARK[r.verdict]} |"
+            f"{_fmt(m, r.margin)} | {('per run' if m.health else r.tracks) if r.tracks else '—'} | "
+            f"{MARK[r.verdict]} |"
         )
     lines += [
         "",
         "Each value is the mean over the tracks both sides scored with comparable lags "
-        '(DEV_LOOP.md, "Lag"). The noise is measured from builds the box ran more than once: '
+        '(DEV_LOOP.md, "Lag"); for the health metrics (longest frame to beat-pace error), over '
+        "the runs, each run's value the strict rule's worst on the worst chip. A health metric "
+        "whose noise isn't measured yet counts neither way. "
+        "The noise is measured from builds the box ran more than once: "
         + ", ".join(
             f"{m.key} sd {noises[m.key].sd:.4f} ({noises[m.key].dof} dof)"
             for m in METRICS
