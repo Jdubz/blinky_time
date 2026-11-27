@@ -119,6 +119,20 @@ def verdicts(results: list[Any]) -> dict[str, str]:
     return {r.metric.key: r.verdict for r in results}
 
 
+def test_reps_is_judged_like_the_drum_metrics_once_both_sides_have_it() -> None:
+    base = [line(STABLE_SHA, {"drumF": 0.5, "repS": 0.60}, run="s", release="b217")]
+    cand = [line(CAND_SHA, {"drumF": 0.5, "repS": 0.70}, run="c")]
+    v = verdicts(proposals.compare(cand, base, noisy(0.05)))
+    assert v["repS"] == "better" and v["drumF"] == "within noise"
+    # A stable line from before the box scored repS: left out, never a zero.
+    old = [line(STABLE_SHA, {"drumF": 0.5}, run="s", release="b217")]
+    res = proposals.compare(cand, old, noisy(0.05))
+    reps = next(r for r in res if r.metric.key == "repS")
+    assert reps.verdict == "not measured" and set(reps.left_out.values()) == {
+        "no score from the stable"
+    }
+
+
 def test_a_lead_beyond_the_noise_is_better_and_one_inside_it_is_not() -> None:
     base = [line(STABLE_SHA, 0.50, run="s", release="b217")]
     cand = [
@@ -131,7 +145,7 @@ def test_a_lead_beyond_the_noise_is_better_and_one_inside_it_is_not() -> None:
     res = proposals.compare(cand, base, noisy(0.05))
     v = verdicts(res)
     assert v["drumF"] == "better" and v["kickR50"] == "within noise"
-    assert v["repS"] == "not measured"  # the box doesn't measure it: counts neither way
+    assert v["repS"] == "not measured"  # lines without it (before the box scored it): neither way
     drum = next(r for r in res if r.metric.key == "drumF")
     assert drum.diff == pytest.approx(0.10) and drum.tracks == 18
     # K standard errors of a mean over 18 tracks, one run a side: 2 * 0.05 * sqrt(2/18).
