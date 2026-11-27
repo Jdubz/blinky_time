@@ -563,8 +563,8 @@ def deploy_once(dry_run: bool = False) -> int:
     if not dry_run and target in seen:
         return 0
     if not dry_run and target in state["refused"]:
-        # Every pass while it holds, not once: the LGTM alert BlinkyDeployHeadRefused
-        # (Josh-Wentworth/observability) matches "master head refused" and resolves when master moves.
+        # Every pass while it holds, not once, so the journal shows it for as long as it lasts (no
+        # alert since 2026-11-27: `deploy.py --status` gives the reason).
         log(
             f"{target[:12]}: master head refused ({state['refused'][target]}); nothing deploys until "
             f"master moves or `deploy.py --accept {target[:12]} REASON`"

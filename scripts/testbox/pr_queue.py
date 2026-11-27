@@ -110,7 +110,7 @@ QUALITY_NOTE = (
 
 Server = Callable[..., Any]
 # Why the last pass couldn't finish (GitHub unreachable or failing), or None: main() then exits
-# 1, so the unit fails and the LGTM alert BlinkyBoxRunnerFailing sees a runner whose every pass
+# 1, so the unit fails and the LGTM alert BlinkyBoxNotTesting sees a runner whose every pass
 # fails (it keys on the unit never going back to inactive), not a string of quiet exits.
 PASS_ERROR: str | None = None
 

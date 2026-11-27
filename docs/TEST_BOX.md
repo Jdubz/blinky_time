@@ -321,24 +321,20 @@ python3 ~/blinky-deploy/scripts/testbox/dev.py test --hw [--phases upload,lights
 
 When the box, its runners or its chip break, an alert says so. The central LGTM stack evaluates them from what the box already ships (journal, node and systemd metrics, blinky-server's `/metrics`), so a dead box can't silence them. Firing alerts go through Alertmanager to the platform's triage agent, which files a GitHub issue (label `triage/auto`) in the private Josh-Wentworth/observability repo and closes it when the alert resolves. **Alerts arrive as GitHub notifications:** the issue is written by `github-actions[bot]` and mentions the owner, so GitHub notifies them like any other mention ("Participating"; by email if that's switched on in their GitHub notification settings). A re-firing alert reopens its issue with a new mention. If that workflow fails, triage still files the issue itself, marked as having notified nobody, and the `TriageNotifyFailed` alert says so. The rules are there too, group `blinky-testbox` in `prometheus/rules/alerts.yml` and `loki/rules/fake/log-alerts.yml` (the stack loads rules only from that repo), with a triage runbook per alert in `triage/runbooks/blinky-*.md`. Strict-rule warnings and quality scores are reports, never alerts.
 
+Every alert files an issue and notifies the owner, so there are only six, each a state the owner has to act on now (owner, 2026-11-27: "only alerts that ACTUALLY need immediate attention or action"). Everything else (heat, under-voltage, a chip without config, a refused deploy head, label-reviewer traffic) is for the dashboards, the journal and `deploy.py --status`, not an alert.
+
 | Alert | Fires when | Do |
 |---|---|---|
-| `BlinkyTestBoxOffline` | no node metrics from the box for 10 min | Power, network or Alloy. With `BlinkyTestBoxLogsSilent` too, the box is down; alone, `systemctl status alloy`. |
-| `BlinkyTestBoxLogsSilent` | no journal lines for 20 min | As above; alone, Alloy's log pipeline. |
-| `BlinkyServerDown` | blinky-server not answering `/metrics` for 10 min (a deploy's drain is ~5 min) | `systemctl status blinky-server`, `journalctl -u blinky-server`, `deploy.py --status`. |
-| `BlinkyServerCrashLooping` | more than 3 automatic restarts (crash or watchdog) in an hour | The traceback in `journalctl -u blinky-server`. |
-| `BlinkyBoxRunnerFailing` | `blinky-deploy`, `blinky-staging` or `blinky-pr-queue`: no successful pass for 45 min (muted while the server is down) | `journalctl -u <unit> -n 50` names the error. |
-| `BlinkyBoxRunnerTimerStopped` | a runner's timer stopped, or not triggered for an hour | `systemctl list-timers 'blinky-*'`, `sudo systemctl enable --now <timer>`. |
-| `BlinkyDeployHeadRefused` | the deployer has refused master's head for 15 min (red check, review findings, failed prepare, or rolled back) | `deploy.py --status` for the reason; fix master, or the owner's `deploy.py --accept SHA "reason"`. |
-| `BlinkyTestChipDown` | a chip connected in the last 7 days not connected for 45 min; the summary names its state (`dfu_recovery`, `error`, `disconnected`, or gone) | The USB auto-recovery had its chance (the 120 s park, the 30-min guard). `dev.py status`, then the recovery chain above: SWD restore, then both hub ports. |
-| `BlinkyTestChipUnconfigured` | a connected chip that had a device type in the last 7 days reports none for 30 min | An enrolled chip is configured by the server on connect ("Chip config from the box's entries"): its log says why not (`still differs`, `refused`). A chip not in the box's `box_chips.json` needs its entry enrolled there. |
+| `BlinkyTestBoxOffline` | no node metrics from the box for 10 min | Power, network or Alloy. If its journal still reaches Loki, only Alloy's metrics pipeline is broken: `systemctl status alloy`. |
+| `BlinkyServerDown` | blinky-server not answering `/metrics` for 10 min (a deploy's drain is ~5 min), or more than 3 automatic restarts (crash or watchdog) in an hour | `systemctl status blinky-server`, the traceback in `journalctl -u blinky-server`, `deploy.py --status`. |
+| `BlinkyBoxNotTesting` | per runner (`deploy`, `staging`, `pr-queue`): no successful pass for 45 min (muted while the server is down), or its timer stopped, disabled or not triggered for an hour. PRs need `Hardware test (PR)` to merge, so this blocks work | `journalctl -u blinky-<runner> -n 50` names the error; `systemctl list-timers --all 'blinky-*'`, `sudo systemctl enable --now blinky-<runner>.timer`. |
+| `BlinkyTestChipDown` | a chip connected in the last 7 days not connected for 45 min, so the box's own recovery failed; the summary names its state (`dfu_recovery`, `error`, `disconnected`, or gone) | The USB auto-recovery had its chance (the 120 s park, the 30-min guard). `dev.py status`, then the recovery chain above: SWD restore, then both hub ports. |
 | `BlinkyHardwareCheckRigError` | 6 rig errors in a row on one head (about an hour of the backoff); rig faults stay pending, never red | The runner's log names the fault (camera, speaker, build service, flash); then `--retest`. |
-| `BlinkyTestBoxHot` | the SoC above 80 °C for 10 min (throttles at 85; normal 45-55) | The fan, and what runs on the box: heavy work goes to CI or the Spark. |
-| `BlinkyTestBoxUndervoltage` | the Pi's under-voltage alarm on 3+ samples in 30 min | `vcgencmd get_throttled`; the supply or the powered hub (hardware, the owner). |
-| `BlinkyTestBoxSystemdMetricsAbsent` | node metrics arrive but no systemd ones for 30 min, so the runner alerts are blind | The `systemd` block in `alloy/testbox.alloy`; the deployer installs it (`journalctl -u blinky-deploy \| grep -i alloy`). |
-| `DiskFillingUp` (shared) | a filesystem under 10 % free for 10 min | `du -xh / \| sort -h \| tail`; captures and reports in the server's data dir. |
+| `BlinkyLabelsDown` | the public label reviewer logged nothing, not even its healthcheck, for 15 min | Its container's status and logs; redeploy with `deploy/build-host/labels/deploy.sh`. |
 
-Contracts with the rules, named in the code next to each: the `systemd` collector in `alloy/testbox.alloy`, the deployer's "master head refused" line (every pass while it holds), and the runners' "rig error N in a row". Test an alert with the stack's harness (observability `test/fire-alerts.sh alert --name ... --label host=...`), never by breaking the box or the chip.
+The stack's shared `DiskFillingUp` (a filesystem under 10 % free for 10 min) covers the box too: `du -xh / | sort -h | tail`; captures and reports in the server's data dir.
+
+Contracts with the rules, named in the code next to each: the `systemd` collector in `alloy/testbox.alloy` (`BlinkyBoxNotTesting` and the crash-loop half of `BlinkyServerDown` read it), and the runners' "rig error N in a row". Test an alert with the stack's harness (observability `test/fire-alerts.sh alert --name ... --label host=...`), never by breaking the box or the chip.
 
 ## Needed: per-server device ownership
 

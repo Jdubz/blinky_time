@@ -586,7 +586,7 @@ def test_github_down_is_a_retry_and_touches_nothing() -> None:
 
 
 def test_a_pass_github_failed_exits_1_so_the_unit_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """BlinkyBoxRunnerFailing keys on the unit failing: a pass that GitHub broke exits 1 (the
+    """BlinkyBoxNotTesting keys on the unit failing: a pass that GitHub broke exits 1 (the
     queue still reported), a clean one 0."""
     g, srv, b = GitHub([pr(5, A1)]), Server(), Builds()
     monkeypatch.setattr(prq, "run_once", lambda: RUN_ONCE(g, srv, lambda: b))
