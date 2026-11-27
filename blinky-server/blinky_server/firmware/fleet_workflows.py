@@ -113,10 +113,21 @@ async def flash_one(device_id: str, firmware: str, settle_after: bool) -> dict[s
             return {"device": short, "status": "ok", "note": "already at version (resumed)"}
     device = await _wait_for(fleet, device_id, lambda d: True)
     serial = device is not None and device.transport.transport_type == "serial"
+    # Each chip takes its own platform's image of the build (images.for_platform): the hex for
+    # an nRF52840, the stored ESP32-S3 companion for an ESP32-S3. A file outside the store goes
+    # as named; the orchestrator refuses it if its platform isn't the chip's.
+    target = Path(firmware)
+    if device is not None and image is not None:
+        chosen = images.for_platform(firmware, device.platform)
+        if chosen is None:
+            msg = f"the build {image.version} has no {device.platform} image"
+            log.error("Fleet flash: %s: %s", short, msg)
+            return {"device": short, "status": "error", "message": msg}
+        target = chosen.path
     result: dict[str, Any] = {"device": short, "status": "error", "message": "not scheduled"}
     async for _did, fjob, err in fleet.flash_fleet(
         device_ids=[device_id],
-        firmware_path=Path(firmware),
+        firmware_path=target,
         per_device_timeout=PER_DEVICE_TIMEOUT_S,
     ):
         if fjob is None:

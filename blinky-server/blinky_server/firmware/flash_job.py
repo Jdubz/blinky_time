@@ -60,6 +60,9 @@ class FlashTransport(enum.Enum):
 
     UF2 = "uf2"
     BLE_DFU = "ble_dfu"
+    # ESP32-S3 over its USB Serial/JTAG: esptool resets it into the ROM download mode (no
+    # BOOT button), writes and resets it back (firmware/esp32_flash.py).
+    ESPTOOL = "esptool"
 
 
 class VerifySubState(enum.Enum):
@@ -187,6 +190,14 @@ class TransportProbe:
     # USB-only host (the test box runs ``--no-ble``) recovers it.
     has_usb_dfu: bool = False
 
+    # The device's platform (USB VID/PID at discovery). An ESP32-S3 is flashed only by
+    # esptool, an nRF52840 never: the platform picks the path, never a guess.
+    platform: str = "nrf52840"
+
+    # An ESP32-S3 whose USB Serial/JTAG port is enumerated right now, answering or not: its
+    # ROM download mode is reachable through it whatever the firmware does (a crash too).
+    has_usb_esp32: bool = False
+
 
 def select_transport(probe: TransportProbe) -> FlashTransport:
     """Pick the flash transport for a job. Pinned for the job's lifetime.
@@ -208,7 +219,17 @@ def select_transport(probe: TransportProbe) -> FlashTransport:
     bug we're closing out (see [[project-deploy-flash-cascade-bug]])
     was caused by the two transports racing; collapsing the choice to
     USB-when-available is exactly the point.
+
+    An ESP32-S3 (``probe.platform``) takes esptool over its USB Serial/JTAG port, and nothing
+    else: no UF2 bootloader, no BLE-DFU. Without the port → ``NoReachableTransport``.
     """
+    if probe.platform == "esp32s3":
+        if probe.has_usb_esp32:
+            return FlashTransport.ESPTOOL
+        raise NoReachableTransport(
+            "ESP32-S3 not reachable: its USB Serial/JTAG port is not enumerated (esptool is "
+            "its only flash path). Defer until it reappears."
+        )
     if probe.has_usb_app or probe.has_usb_dfu:
         return FlashTransport.UF2
     if probe.has_ble_dfu_advert or probe.has_ble_app:

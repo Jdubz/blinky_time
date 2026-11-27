@@ -21,6 +21,7 @@ from ..firmware._guard import (
 )
 from ..firmware.anomalies import UF2_WRITE_RETRIED, UF2_WRITE_UNCONFIRMED, SignalHistory
 from ..firmware.anomalies import check_all as check_anomalies
+from ..firmware.esp32_flash import _esp32_write_impl_for_job
 from ..firmware.flash_job import (
     FlashConflict,
     FlashJob,
@@ -112,6 +113,13 @@ UF2_WRITE_HOLD_S = 600.0
 # job ecc8a4780e9f: a USB reset cut the copy short). The wait also keeps the reset that
 # the retry's completion causes at least 60 s after the bootloader entry.
 UF2_RETRY_SETTLE_S = 60.0
+# An ESP32-S3 has no bootloader to show up in: a firmware that crashes keeps its USB
+# Serial/JTAG port enumerated but never answers. One that has not answered for this long, port
+# present, is recovered by a full re-flash of the armed stable image (docs/TEST_BOX.md, "ESP32-S3
+# flash and recovery"). Longer than any reboot the box causes (a flash's verify, box_config's
+# reboot, the firmware's boot): those answer again within seconds.
+ESP32_RECOVERY_GRACE_S = 180.0
+ESP32_PLATFORM = "esp32s3"
 
 
 def _create_transport(disc: DiscoveredDevice) -> Transport:
@@ -183,6 +191,12 @@ class FleetManager:
         # the safety belt against flashing a dev unit that happens to be in
         # DFU at the same time the cart fleet is being deployed.
         self._recovery_device_ids: set[str] = set()
+        # The ESP32-S3's own armed image and whitelist (a stable deploy to it arms them): its
+        # recovery is a full re-flash through esptool, a separate image from the nRF52840's.
+        self._esp32_recovery_firmware_path: str | None = None
+        self._esp32_recovery_device_ids: set[str] = set()
+        # device_id → monotonic time an ESP32-S3 was first seen enumerated but not answering.
+        self._esp32_unresponsive_since: dict[str, float] = {}
         # Per-canonical auto-recovery retry state. The orchestrator's
         # `_run_flash_job` finally writes it; `should_attempt_auto_recovery`
         # reads it to enforce max attempts + exponential backoff for
@@ -974,6 +988,12 @@ class FleetManager:
         job.on_transition = self._audit_transition
         try:
             job.transition(FlashJobState.SELECTING_TRANSPORT)
+            mismatch = self._image_platform_mismatch(job)
+            if mismatch:
+                log.error("flash job %s refused: %s", job.job_id, mismatch)
+                job.set_error(mismatch)
+                job.transition(FlashJobState.FAILED)
+                return
             probe = self._build_transport_probe(job.device_id)
             try:
                 transport = select_transport(probe)
@@ -987,6 +1007,8 @@ class FleetManager:
                 await self._run_uf2_flash(job)
             elif transport is FlashTransport.BLE_DFU:
                 await self._run_ble_dfu_flash(job)
+            elif transport is FlashTransport.ESPTOOL:
+                await self._run_esp32_flash(job)
             else:
                 # Exhaustiveness guard — if FlashTransport gains a variant,
                 # we want a loud error, not a silent fallthrough.
@@ -1240,6 +1262,95 @@ class FleetManager:
         except TimeoutError:
             # Verify never converged. Surface as FAILED with the anomaly
             # set the detectors built up.
+            check_anomalies(job, history)
+            job.set_error("verify did not converge within 5 minutes")
+            job.transition(FlashJobState.FAILED)
+
+    def _image_platform_mismatch(self, job: FlashJob) -> str | None:
+        """Why this image must not go to this chip, or None. An ESP32-S3 takes only an ESP32-S3
+        image and an nRF52840 never one: the image's platform is read from its bytes
+        (``images.platform_of``), the chip's from its USB VID/PID. (An nRF52840 image that
+        isn't a hex is the UF2 tool's own validation to refuse.)"""
+        device = self._devices.get(job.device_id)
+        if device is None:
+            return None  # the transport branch fails it as gone
+        image = images.platform_of_file(job.firmware_path)
+        if device.platform == ESP32_PLATFORM and image != ESP32_PLATFORM:
+            return (
+                f"{job.firmware_path} is not an ESP32-S3 image ({image or 'unrecognised'}); "
+                f"{job.device_id[:17]} is an ESP32-S3"
+            )
+        if device.platform != ESP32_PLATFORM and image == ESP32_PLATFORM:
+            return (
+                f"{job.firmware_path} is an ESP32-S3 image; {job.device_id[:17]} is "
+                f"{device.platform}"
+            )
+        return None
+
+    async def _run_esp32_flash(self, job: FlashJob) -> None:
+        """esptool branch of ``_run_flash_job``: an ESP32-S3 over its USB Serial/JTAG.
+
+        The server holds its reconnect off the chip while the tool owns the port (as the UF2
+        branch does), the tool resets the chip into its ROM download mode, writes, verifies and
+        resets it into the app, then the hold is lifted and verify waits for the app to answer
+        with the expected version. Auto-recovery (``job.is_auto_recovery``) erases the whole
+        chip first; an operator's or a deploy's write keeps the NVS partition (the config).
+        """
+        device = self._devices.get(job.device_id)
+        if device is None:
+            job.set_error(f"device {job.device_id} disappeared between selection and write")
+            job.transition(FlashJobState.FAILED)
+            return
+        if device.transport.transport_type != "serial":
+            job.set_error(
+                f"esptool needs the USB serial port, got {device.transport.transport_type!r} "
+                "(transport selector bug)"
+            )
+            job.transition(FlashJobState.FAILED)
+            return
+        history = SignalHistory(
+            write_completed_at=_time.time(),
+            expected_version=job.expected_version,
+            previous_version=device.version,
+        )
+        signals = _FleetVerifySignals(fleet=self, device_id=job.device_id, history=history)
+        job.transition(FlashJobState.WRITING)
+        prior_hold = self._reconnect_blackout.get(job.device_id)
+        self.hold_reconnect(job.device_id, UF2_WRITE_HOLD_S)
+        write_hold = self._reconnect_blackout.get(job.device_id)
+        try:
+            write_ok = await _esp32_write_impl_for_job(
+                job,
+                serial_port=device.transport.address,
+                firmware_path=str(job.firmware_path),
+                transport=device.transport,
+                expect_mac=device.id.upper(),
+                full=job.is_auto_recovery,
+            )
+        finally:
+            if self._reconnect_blackout.get(job.device_id) == write_hold:
+                if prior_hold is not None and prior_hold > _time.monotonic():
+                    self._reconnect_blackout[job.device_id] = prior_hold
+                else:
+                    self.resume_reconnect(job.device_id)
+            # A chip that wasn't answering before (the recovery case) may have hit the serial
+            # retry limit: reconnect it at once rather than after the backoff.
+            self._reconnect_failures.pop(job.device_id, None)
+            self._backoff_skip.pop(job.device_id, None)
+        if not write_ok:
+            job.transition(FlashJobState.FAILED)
+            return
+        history.write_completed_at = job.write_completed_at or _time.time()
+        # esptool reset the chip itself (its output says so): the reboot is not a USB
+        # re-enumeration to wait for.
+        signals.assume_rebooted()
+        job.transition(FlashJobState.VERIFYING)
+        try:
+            await asyncio.wait_for(
+                self._verify_with_anomaly_checks(job, signals, history), timeout=300.0
+            )
+            job.transition(FlashJobState.COMPLETED)
+        except TimeoutError:
             check_anomalies(job, history)
             job.set_error("verify did not converge within 5 minutes")
             job.transition(FlashJobState.FAILED)
@@ -1589,11 +1700,19 @@ class FleetManager:
             and device.transport.transport_type == "serial"
             and self._in_usb_bootloader(device_id)
         )
+        has_usb_esp32 = (
+            device is not None
+            and device.platform == ESP32_PLATFORM
+            and device.transport.transport_type == "serial"
+            and Path(device.transport.address).exists()
+        )
         return TransportProbe(
             has_usb_app=has_usb_app,
             has_ble_dfu_advert=has_ble_dfu_advert,
             has_ble_app=has_ble_app,
             has_usb_dfu=has_usb_dfu,
+            platform=device.platform if device is not None else "nrf52840",
+            has_usb_esp32=has_usb_esp32,
         )
 
     async def start(self) -> None:
@@ -1629,6 +1748,15 @@ class FleetManager:
                 firmware_path,
                 ", ".join(sorted(device_ids)) or "<none>",
             )
+        persisted_esp32 = self._load_recovery_firmware(self._esp32_recovery_state_path())
+        if persisted_esp32:
+            fw, ids = persisted_esp32
+            image = images.load(fw)
+            if image is not None and image.platform == ESP32_PLATFORM:
+                self._esp32_recovery_firmware_path, self._esp32_recovery_device_ids = fw, ids
+                log.info("ESP32-S3 auto-recovery armed from persisted state: %s (%s)", fw, ids)
+            else:
+                log.error("[FALLBACK] %s is not an ESP32-S3 image: ESP32-S3 recovery not armed", fw)
         # L4: rebuild the dedup window from the persistent audit log so
         # a server restart doesn't erase "I just flashed this device" —
         # otherwise auto-recovery's first cycle after restart could
@@ -2731,6 +2859,14 @@ class FleetManager:
         return data_dir() / "recovery-firmware.json"
 
     @staticmethod
+    def _esp32_recovery_state_path() -> Path:
+        """The ESP32-S3's armed recovery image and whitelist, the same JSON format as
+        ``_recovery_state_path`` (a separate image: the nRF52840's is a hex)."""
+        from ..paths import data_dir
+
+        return data_dir() / "recovery-firmware-esp32s3.json"
+
+    @staticmethod
     def _identity_aliases_path() -> Path:
         """Persistent storage for ``_identity_groups``.
 
@@ -3095,6 +3231,11 @@ class FleetManager:
         """The image auto-recovery is armed with (None = disarmed)."""
         return self._recovery_firmware_path
 
+    @property
+    def recovery_firmware_paths(self) -> list[str]:
+        """Every armed recovery image (the nRF52840's and the ESP32-S3's): kept from pruning."""
+        return [p for p in (self._recovery_firmware_path, self._esp32_recovery_firmware_path) if p]
+
     def set_recovery_firmware(self, firmware_path: str, device_ids: list[str]) -> None:
         """Arm automatic DFU recovery, scoped to an explicit device whitelist.
 
@@ -3138,8 +3279,38 @@ class FleetManager:
                 "set_recovery_firmware: refusing to arm auto-recovery with "
                 f"{firmware_path}: not a verified stable-release image (#251)"
             )
+        if image.platform == ESP32_PLATFORM:
+            # The ESP32-S3's own arm: its image, its whitelist, and only its chips.
+            wrong = [d for d in device_ids if self._platform_of(d) not in (None, ESP32_PLATFORM)]
+            if wrong:
+                raise ValueError(
+                    f"set_recovery_firmware: {firmware_path} is an ESP32-S3 image; "
+                    f"{wrong} are not ESP32-S3s"
+                )
+            self._esp32_recovery_firmware_path = firmware_path
+            self._esp32_recovery_device_ids = set(device_ids)
+            self._persist_recovery(
+                self._esp32_recovery_state_path(), firmware_path, image, device_ids
+            )
+            return
+        wrong = [d for d in device_ids if self._platform_of(d) == ESP32_PLATFORM]
+        if wrong:
+            raise ValueError(
+                f"set_recovery_firmware: {firmware_path} is not an ESP32-S3 image; "
+                f"{wrong} are ESP32-S3s"
+            )
         self._recovery_firmware_path = firmware_path
         self._recovery_device_ids = set(device_ids)
+        self._persist_recovery(self._recovery_state_path(), firmware_path, image, device_ids)
+
+    def _platform_of(self, device_id: str) -> str | None:
+        device = self.get_device(device_id)
+        return device.platform if device is not None else None
+
+    @staticmethod
+    def _persist_recovery(
+        path: Path, firmware_path: str, image: images.FirmwareImage, device_ids: list[str]
+    ) -> None:
         state = {
             "firmware_path": firmware_path,
             "sha256": image.sha256,
@@ -3147,16 +3318,17 @@ class FleetManager:
             "device_ids": sorted(set(device_ids)),
         }
         try:
-            self._recovery_state_path().write_text(json.dumps(state))
+            path.write_text(json.dumps(state))
         except OSError:
-            log.warning("Failed to persist recovery-firmware state")
+            log.warning("Failed to persist recovery-firmware state at %s", path)
         log.info(
-            "Recovery firmware armed: %s (devices: %s)",
+            "Recovery firmware armed: %s (%s, devices: %s)",
             firmware_path,
+            image.platform,
             ", ".join(sorted(set(device_ids))) or "<none>",
         )
 
-    def _load_recovery_firmware(self) -> tuple[str, set[str]] | None:
+    def _load_recovery_firmware(self, path: Path | None = None) -> tuple[str, set[str]] | None:
         """Load persisted recovery firmware path + device whitelist.
 
         Returns (firmware_path, device_ids) on success. Returns None if the
@@ -3165,7 +3337,7 @@ class FleetManager:
         no whitelist — refusing those is safer than auto-flashing the wrong
         device).
         """
-        path = self._recovery_state_path()
+        path = path or self._recovery_state_path()
         try:
             raw = path.read_text().strip()
         except OSError:
@@ -3453,6 +3625,92 @@ class FleetManager:
                     job.error or "(none)",
                 )
 
+    def _esp32_recovery_candidates(self) -> list[Device]:
+        """Whitelisted ESP32-S3s that have stayed enumerated on USB without answering for
+        ``ESP32_RECOVERY_GRACE_S``. Tracks when each stopped answering; a chip that answers,
+        is held by an operator's release, is being flashed, or leaves USB starts over."""
+        now = _time.monotonic()
+        whitelist = {self.resolve_canonical(d) for d in self._esp32_recovery_device_ids}
+        out: list[Device] = []
+        seen: set[str] = set()
+        for device in list(self._devices.values()):
+            if device.platform != ESP32_PLATFORM:
+                continue
+            canonical = self.resolve_canonical(device.id)
+            held = self._reconnect_blackout.get(device.id, 0.0) > now
+            enumerated = (
+                device.transport.transport_type == "serial"
+                and Path(device.transport.address).exists()
+            )
+            answering = device.state is DeviceState.CONNECTED
+            if (
+                answering
+                or held
+                or not enumerated
+                or canonical in self._device_in_flight
+                or canonical not in whitelist
+            ):
+                continue
+            seen.add(device.id)
+            since = self._esp32_unresponsive_since.setdefault(device.id, now)
+            if now - since >= ESP32_RECOVERY_GRACE_S:
+                out.append(device)
+        for gone in set(self._esp32_unresponsive_since) - seen:
+            del self._esp32_unresponsive_since[gone]
+        return out
+
+    async def _auto_recover_esp32_devices(self) -> None:
+        """An ESP32-S3 that stopped answering (a crashing firmware, or a flash that left it
+        silent) is recovered by a full re-flash of its armed stable image: its ROM download
+        mode is always reachable over USB Serial/JTAG. Through ``flash_device(force=False)``,
+        so the dedup window (10 min since any flash of it), the backoff and the three-attempt
+        cap apply as for the nRF52840's USB recovery: resets stay minutes apart, never a loop.
+        One at a time, not waited on here (verify needs this loop's reconnect)."""
+        firmware_path = self._esp32_recovery_firmware_path
+        if not firmware_path or not self._esp32_recovery_device_ids:
+            return
+        candidates = self._esp32_recovery_candidates()
+        if not candidates or any(not w.done() for w in self._usb_recovery_watchers):
+            return
+        device = candidates[0]
+        canonical = self.resolve_canonical(device.id)
+        retry = self._recovery_retry_state.get(canonical)
+        if retry is not None and retry.fails >= MAX_AUTO_RECOVERY_ATTEMPTS:
+            if not retry.gave_up_logged:
+                log.error(
+                    "ESP32-S3 auto-recovery GIVING UP for %s after %d attempts: manual "
+                    "intervention required (a server restart clears the cap)",
+                    device.id,
+                    retry.fails,
+                )
+                retry.gave_up_logged = True
+            return
+        image = images.load(firmware_path)
+        if image is None or not image.stable or image.platform != ESP32_PLATFORM:
+            log.error(
+                "ESP32-S3 auto-recovery disarmed: %s is no longer a verified stable ESP32-S3 "
+                "image (#251)",
+                firmware_path,
+            )
+            self._esp32_recovery_firmware_path = None
+            self._esp32_recovery_device_ids = set()
+            return
+        job = await self.flash_device(device.id, Path(firmware_path), force=False)
+        if job is None:
+            return  # dedup window, backoff or in flight: next cycle
+        log.warning(
+            "ESP32-S3 %s has not answered for %.0f s with its USB port present: recovering it "
+            "with a full re-flash of %s (job %s, attempt %d/%d)",
+            device.id,
+            ESP32_RECOVERY_GRACE_S,
+            image.version,
+            job.job_id,
+            (retry.fails if retry else 0) + 1,
+            MAX_AUTO_RECOVERY_ATTEMPTS,
+        )
+        self._esp32_unresponsive_since.pop(device.id, None)
+        self._watch_usb_recovery(job, device.id)
+
     # Fallback ping cadence when systemd doesn't provide WATCHDOG_USEC
     # (running outside a unit, or WatchdogSec=0). 30s is conservative.
     WATCHDOG_PING_INTERVAL_FALLBACK_S = 30.0
@@ -3540,6 +3798,7 @@ class FleetManager:
                 # DFU recovery check every 6th cycle (~60s)
                 if cycle % 6 == 0:
                     await self._auto_recover_dfu_devices()
+                    await self._auto_recover_esp32_devices()
                 # Reap long-dead non-recoverable devices every 6th cycle (~60s)
                 if cycle % REAP_INTERVAL_CYCLES == 0:
                     await self._reap_stale_devices()
@@ -3639,6 +3898,11 @@ class _FleetVerifySignals:
         # discoverable line; the polling loop's existing forward
         # progress (or lack thereof) provides the rest of the signal.
         self._is_connected_warned: bool = False
+        self._assume_rebooted = False
+
+    def assume_rebooted(self) -> None:
+        """The writer reset the chip itself (esptool's hard reset): count the reboot as seen."""
+        self._assume_rebooted = True
 
     async def has_re_enumerated_since(self, device_id: str, since: float) -> bool:
         """True if the USB device number has changed since construction.
@@ -3656,6 +3920,10 @@ class _FleetVerifySignals:
         now (mid-reboot or stuck in bootloader) — the next poll will
         see the new devnum and fire.
         """
+        if self._assume_rebooted:
+            self._assume_rebooted = False
+            self.history.re_enum_timestamps.append(_time.time())
+            return True
         current_devnum = self._read_devnum_for_device()
         if current_devnum is None:
             # Device not currently enumerated. Could be mid-reboot or

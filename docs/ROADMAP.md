@@ -60,7 +60,7 @@ Heavy work runs on the Spark or the build host, never on the box.
 - **blinky_time and blinky-firmware are decoupled** (owner, 2026-11-24: "they need to be completely decoupled"): no submodule, no source dependency, and neither repo reads the other's tree (#411, #413, #414 and the submodule's removal). They share three things: blinky-firmware's published artifacts (releases `bN` and staging builds with their manifest), which blinky-server and the console mirror download through blinky-server's own host tools (`blinky-server/hosttools/`); the mel contract files (`ml-training/spec/mel_frontend_v1.json` and `mel_golden_v1.npz`), carried identically by both and checked on each side in CI; and service APIs (the box's `Hardware test (staging)` status and promotion PRs, firmware's `release_promote.py` dispatching the console deploy, its `uf2_upload.py` calling blinky-server's HTTP API). A model reaches the firmware by a blinky-firmware PR that copies ml-training's exported header in.
 
 **Next:**
-- The ESP32-S3 ([blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50)): its wiring and device config from the owner, a flash path on the box (P3 overlaps).
+- The ESP32-S3 ([blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50)): flash path and recovery built (esptool through the single flash entry point, `TEST_BOX.md`, "ESP32-S3 flash and recovery"); waiting for blinky-firmware's ESP32-S3 image, then the first flash, enrolment and its informational checks.
 - Per-server device ownership (`TEST_BOX.md`, "Needed: per-server device ownership"): each device belongs to exactly one server; BLE testing on the box waits on it.
 - Camera: the follow test against drum labels, sound-to-light, and a review attached to each staging report.
 - Run the release gate on the box through the server API.
@@ -90,7 +90,7 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 
 ## P3: ESP32-S3
 
-Umbrella: [blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50). Design: blinky-firmware `docs/NEXTGEN_ESP32S3_PLAN.md`. A XIAO ESP32-S3 is on the test box since 2026-11-24 (`TEST_BOX.md`): connected, unconfigured, old firmware; no flash path on the box yet.
+Umbrella: [blinky-firmware#50](https://github.com/Jdubz/blinky-firmware/issues/50). Design: blinky-firmware `docs/NEXTGEN_ESP32S3_PLAN.md`. A XIAO ESP32-S3 Sense (mic board and antenna fitted) is on the test box since 2026-11-24 (`TEST_BOX.md`): connected, unconfigured, old firmware. The box's flash path and recovery for it are built (esptool over USB Serial/JTAG, through the single flash entry point; a crashing S3 is recovered by a full re-flash: `TEST_BOX.md`, "ESP32-S3 flash and recovery"). Next: blinky-firmware's S3 image in its releases and staging builds (`blinky-things-b<N>-esp32s3.bin`, the merged image), the first flash, enrolment (`box_chips.json`), and its hardware checks as an informational board; later the S3 image from the build service for PR heads.
 - Bring the build back.
 - Split the work across the two cores: the renderer never waits on audio.
 - Answer whether a frame-level onset NN fits the audio core *and beats SuperFlux on accuracy*.

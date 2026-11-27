@@ -253,12 +253,17 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
       - Serial reachable → UF2 (preferred; safer protocol, faster)
       - BLE DFU bootloader advert observed → BLE DFU direct
       - BLE app-mode → BLE DFU after issuing ``bootloader ble`` over NUS
+      - ESP32-S3 → esptool over its USB Serial/JTAG (an ESP32-S3 image only; the
+        orchestrator refuses an image of the other platform either way)
     """
     from pathlib import Path
 
     device = _get_device_or_404(device_id)
 
-    if device.state not in (
+    # An ESP32-S3 is reachable through its USB Serial/JTAG port whatever its firmware does
+    # (its ROM download mode): one that stopped answering can still be flashed.
+    esp32_on_usb = device.platform == "esp32s3" and Path(device.transport.address).exists()
+    if not esp32_on_usb and device.state not in (
         DeviceState.CONNECTED,
         DeviceState.DFU_RECOVERY,
         DeviceState.PRESENT,
@@ -273,7 +278,7 @@ async def flash_device(device_id: str, body: FlashRequest) -> FlashResponse:
     if not firmware.is_file():
         raise HTTPException(400, f"Firmware file not found: {firmware}")
 
-    if device.platform != "nrf52840":
+    if device.platform not in ("nrf52840", "esp32s3"):
         raise HTTPException(400, f"Upload not yet supported for platform: {device.platform}")
 
     fleet = get_fleet()
