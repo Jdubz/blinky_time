@@ -122,8 +122,8 @@ class Device:
         self.alerts: collections.deque[str] = collections.deque(maxlen=ALERTS_KEEP)
 
         # Run by connect() once the device's info is in, before it counts as connected: the
-        # fleet manager's box-only LED reconcile (testing/leds.py). Its errors never fail a
-        # connect.
+        # fleet manager's box-only config and LED reconcile (testing/box_config.py, leds.py).
+        # Its errors never fail a connect.
         self.post_connect: Callable[[Device], Awaitable[None]] | None = None
 
         self.wire_protocol()

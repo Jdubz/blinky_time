@@ -2432,11 +2432,14 @@ class FleetManager:
                 )
 
     async def _post_connect(self, device: Device) -> None:
-        """Every connect, before the device counts as connected: on the test box (--staging),
-        its LEDs go back to their config brightness unless a test run holds them lit
-        (testing/leds.py). Elsewhere nothing: a fleet server never sends ``leds``."""
-        from ..testing import leds
+        """Every connect, before the device counts as connected, on the test box (--staging)
+        only: the chip's device config is checked against its registry entry and fixed if it
+        differs (testing/box_config.py), and its LEDs go back to their config brightness unless
+        a test run holds them lit (testing/leds.py). Elsewhere nothing: a fleet server never
+        writes a device config or sends ``leds``."""
+        from ..testing import box_config, leds
 
+        await box_config.reconcile(self, device)
         await leds.reconcile(device, staging=self.staging_enabled)
 
     def _refresh_dedup_exclusions(self) -> None:
