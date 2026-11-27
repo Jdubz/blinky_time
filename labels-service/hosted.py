@@ -248,7 +248,8 @@ class Publication:
                  clock: Callable[[], float] = time.time):
         self.co, self.base, self.quiet_s, self.max_wait_s = checkout, base, quiet_s, max_wait_s
         self.log, self.clock, self.state_file = log or JsonLog(), clock, state_file
-        self.st: dict[str, Any] = {"exported": {}, "published": {}, "refused": {}, "dirty_since": None}
+        self.st: dict[str, Any] = {"exported": {}, "published": {}, "refused": {}, "held": {},
+                                   "dirty_since": None}
         if state_file.is_file():
             self.st.update(json.loads(state_file.read_text()))
         self._lock = threading.Lock()
@@ -261,11 +262,13 @@ class Publication:
         return out[2] if len(out) >= 3 else None
 
     def status(self, path: str, text: str | None) -> dict[str, Any]:
-        """For the page: when this track's labels were published (landed on main)."""
+        """For the page: when this track's labels were published (landed on main), and whether the
+        last export held them back (`held`: the label checks' problems, else None)."""
         pub = self.st["published"].get(path)
         if text is None or (pub and pub[0] == git_blob_sha(text.encode())):
-            return {"published": pub[1] if pub else None, "unpublished": False}
-        return {"published": pub[1] if pub else None, "unpublished": True}
+            return {"published": pub[1] if pub else None, "unpublished": False, "held": None}
+        return {"published": pub[1] if pub else None, "unpublished": True,
+                "held": self.st.setdefault("held", {}).get(path)}
 
     def export(self, tracks: dict[str, str], edited_at: float | None,
                check: Callable[[str, str, str | None], list[str]]) -> dict[str, Any]:
@@ -280,7 +283,7 @@ class Publication:
                     continue
                 problems = check(p, text, self.co.git("cat-file", "blob", mb) if mb else None)
                 if problems:
-                    held[p] = problems
+                    held[p] = problems[:20]
                     if self.st["refused"].get(p) != b:  # log each refused version once
                         self.st["refused"][p] = b
                         self.log.emit("publish_refused", path=p, problems=problems)
@@ -296,6 +299,7 @@ class Publication:
                 self.st["dirty_since"] = None
             quiet = edited_at is None or now - edited_at >= self.quiet_s
             ready = bool(out) and (quiet or now - (self.st["dirty_since"] or now) >= self.max_wait_s)
+            self.st["held"] = held  # the page shows it: a held track never publishes until it's fixed
             self._save()
             return {"ready": ready, "tracks": out, "held": held}
 
@@ -313,35 +317,43 @@ class Publication:
         any more, so back to its seed)."""
         with self._lock:
             for p, (text, base_blob) in tracks.items():
-                mb = self._main_blob(p)
-                mine = git_blob_sha(text.encode())
-                pub = self.st["published"].get(p)
-                exported = self.st["exported"].get(p, [])
-                if mb == mine:  # main has exactly our labels: published
-                    if not pub or pub[0] != mb:
-                        self.st["published"][p] = [mb, now_iso()]
-                        self._landed(p, mb)
-                        self.log.emit("published", path=p)
-                    continue
-                if pub and mb == pub[0]:
-                    continue  # main still holds what we last published; our newer edits follow
-                if mb in exported:  # an export of ours newer than the last published one landed
-                    self.st["published"][p] = [mb, now_iso()]
-                    self._landed(p, mb)
-                    continue
-                if pub is None and mb == base_blob:
-                    continue  # main hasn't changed since the state started from it
-                if mb is None:
-                    if pub is not None:  # a file of ours was deleted on main: back to the seed
-                        adopt(p, None)
-                        self.st["published"].pop(p, None)
-                        self.st["exported"].pop(p, None)
-                        self.log.emit("adopted_main", path=p, deleted=True)
-                    continue
-                # Changed on main from outside (an owner's edit, or a revert to an older version):
-                # it wins.
-                adopt(p, self.co.git("cat-file", "blob", mb))
-                self.st["published"][p] = [mb, now_iso()]
-                self.st["exported"].pop(p, None)
-                self.log.emit("adopted_main", path=p)
+                try:
+                    self._tick_one(p, text, base_blob, adopt)
+                except Exception as e:  # one track's trouble must not stop the others landing
+                    self.log.emit("tick_failed", path=p, error=repr(e)[:400])
             self._save()
+
+    def _tick_one(self, p: str, text: str, base_blob: str | None,
+                  adopt: Callable[[str, str | None], None]) -> None:
+        mb = self._main_blob(p)
+        mine = git_blob_sha(text.encode())
+        pub = self.st["published"].get(p)
+        exported = self.st["exported"].get(p, [])
+        if mb == mine:  # main has exactly our labels: published
+            if not pub or pub[0] != mb:
+                self.st["published"][p] = [mb, now_iso()]
+                self._landed(p, mb)
+                self.log.emit("published", path=p)
+            return
+        if pub and mb == pub[0]:
+            return  # main still holds what we last published; our newer edits follow
+        if mb in exported:  # an export of ours newer than the last published one landed
+            self.st["published"][p] = [mb, now_iso()]
+            self._landed(p, mb)
+            return
+        if pub is None and mb == base_blob:
+            return  # main hasn't changed since the state started from it
+        if mb is None:
+            # Main had a file here (one of ours, or the one the state started from) and it was
+            # deleted from outside, e.g. reverting the batch that added it: back to the seed.
+            adopt(p, None)
+            self.st["published"].pop(p, None)
+            self.st["exported"].pop(p, None)
+            self.log.emit("adopted_main", path=p, deleted=True)
+            return
+        # Changed on main from outside (an owner's edit, or a revert to an older version):
+        # it wins.
+        adopt(p, self.co.git("cat-file", "blob", mb))
+        self.st["published"][p] = [mb, now_iso()]
+        self.st["exported"].pop(p, None)
+        self.log.emit("adopted_main", path=p)
