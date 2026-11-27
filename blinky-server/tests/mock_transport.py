@@ -33,7 +33,7 @@ class MockTransport(Transport):
         self._device_info = device_info or {
             "version": "1.0.1",
             "device": {
-                "id": "long_tube_v1",
+                "id": "long_tube",
                 "name": "Long Tube",
                 "width": 4,
                 "height": 60,

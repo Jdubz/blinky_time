@@ -60,7 +60,7 @@ def test_device_response_full() -> None:
         transport="serial",
         state="connected",
         version="1.0.1",
-        device_type="long_tube_v1",
+        device_type="long_tube",
         device_name="Long Tube",
         width=4,
         height=60,

@@ -35,7 +35,7 @@ def fp_status(description: str, state: str = "success") -> dict[str, Any]:
     return {"context": staging.FINGERPRINT_CONTEXT, "state": state, "description": description}
 
 
-HAT = {"id": "C04C56F9", "state": "connected", "platform": "nrf52840", "device_type": "hat_v1"}
+HAT = {"id": "C04C56F9", "state": "connected", "platform": "nrf52840", "device_type": "porkpie_hat"}
 LAMP = {"id": "AAAA", "state": "connected", "platform": "nrf52840", "device_type": "lamp"}
 
 

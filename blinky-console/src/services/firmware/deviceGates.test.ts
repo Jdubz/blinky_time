@@ -17,7 +17,7 @@ function info(overrides: Partial<FlashInfo> = {}): FlashInfo {
     sn: 'D63BD31605B36A15',
     ble: 'C2:11:22:33:44:55',
     millis: PREFLIGHT_UPTIME_MS + 1,
-    device: { id: 'hat_v1', name: 'Hat', configured: true },
+    device: { id: 'porkpie_hat', name: 'Hat', configured: true },
     fps: 160,
     audioOverruns: 0,
     audioSamplesLost: 0,

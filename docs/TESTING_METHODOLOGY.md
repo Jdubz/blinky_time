@@ -56,7 +56,7 @@ Tier 4: Full Validation (~50 min)
 ### Tier 0: Host Harness (no device, no speaker)
 **When:** Any change to `AudioTracker`, `SharedSpectralAnalysis` or `AdaptiveMic`.
 
-blinky-firmware's `tests/tracker/` runs the firmware's real audio code on the host against the edm/ corpus, with a simulated main loop and a CPU cost model calibrated to hat_v1. It reports the drum metrics, onset F1 and rhythm metrics, and can compare two builds. Build and run instructions: blinky-firmware's `tests/tracker/README.md`.
+blinky-firmware's `tests/tracker/` runs the firmware's real audio code on the host against the edm/ corpus, with a simulated main loop and a CPU cost model calibrated to porkpie_hat. It reports the drum metrics, onset F1 and rhythm metrics, and can compare two builds. Build and run instructions: blinky-firmware's `tests/tracker/README.md`.
 
 ```bash
 # in a blinky-firmware checkout

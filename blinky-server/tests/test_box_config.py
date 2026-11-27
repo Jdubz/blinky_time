@@ -18,7 +18,7 @@ from blinky_server.device.device import DeviceState
 from blinky_server.testing import box_config, leds
 
 GRID = "87DE9B58C90AFE2D"
-ENTRY = json.loads((box_config.REGISTRY_DIR / "testbox_grid_v1.json").read_text())
+ENTRY = json.loads((box_config.REGISTRY_DIR / "testbox_grid.json").read_text())
 
 
 def full_config(entry: dict[str, Any]) -> dict[str, Any]:

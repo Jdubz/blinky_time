@@ -63,7 +63,7 @@ from ..device.device import alerts_since
 from ..firmware import deploy_pipeline
 from ..paths import data_dir, firmware_dir
 from ..work import durable, jobs
-from . import leds, stimulus, strict_rules
+from . import box_config, leds, stimulus, strict_rules
 from .audio_player import kill_orphan_audio, play_audio, stop_audio
 from .test_runner import _configure_device, _start_streaming, _stop_streaming, _sync_clock
 from .workflows import _connected, _fleet, lit, reserve
@@ -105,7 +105,7 @@ class Board:
 # Per board. The ESP32-S3 on the box (fw#50) has no device config and no flash path yet; its
 # entry comes with them (P3).
 BOARDS: dict[str, Board] = {
-    "testbox_grid_v1": Board(
+    "testbox_grid": Board(
         platform="nrf52840",
         leds=64,
         regions="~/.local/share/blinky-camera/regions-grid-1000us.npz",
@@ -255,8 +255,10 @@ async def preflight(regions: list[str], need_audio: bool) -> dict[str, Any]:
 
 @durable.step
 async def boards(device_ids: list[str]) -> dict[str, str | None]:
-    """Each chip's device type (its board), from the fleet."""
-    return {d.id: d.device_type for d in await _connected(device_ids)}
+    """Each chip's board: the registry entry the box keeps it on (box_config.BOX_CHIPS), else the
+    device type it reports. The entry first: when an entry's id changes, the chip reports the old
+    id until a reboot applies the new config, and that reboot may be this job's flash."""
+    return {d.id: box_config.entry_name(d) or d.device_type for d in await _connected(device_ids)}
 
 
 @durable.step

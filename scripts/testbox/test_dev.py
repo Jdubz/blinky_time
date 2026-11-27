@@ -318,7 +318,7 @@ class Box:
                     "id": "87DE9B58C90AFE2D",
                     "state": "connected",
                     "platform": "nrf52840",
-                    "device_type": "testbox_grid_v1",
+                    "device_type": "testbox_grid",
                     "version": "b211",
                 },
                 {"id": "ESP", "state": "connected", "platform": "esp32s3", "device_type": None},
@@ -568,7 +568,7 @@ def test_status_shows_what_waits_behind_dev_mode(capsys: pytest.CaptureFixture[s
     out = capsys.readouterr().out
     assert "box: DEV mode since" in out and "waiting behind dev mode: 1" in out
     assert "staging: ssssssssssss" in out and "preempted" in out and "dev.py mode queue" in out
-    assert "chip 87DE9B58C90A testbox_grid_v1: connected, b211" in out
+    assert "chip 87DE9B58C90A testbox_grid: connected, b211" in out
     assert "  frame_time: warn, streak 5/5: READY to block" in out
     assert "  fps: warn, streak 0/5, last warning b220-dev-abcdef01" in out
 

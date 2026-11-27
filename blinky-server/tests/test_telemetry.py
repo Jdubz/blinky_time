@@ -63,7 +63,7 @@ def _device(**kw: Any) -> SimpleNamespace:
     base = {
         "id": "87DE9B58C90AFE2D",
         "state": SimpleNamespace(value="connected"),
-        "device_type": "testbox_grid_v1",
+        "device_type": "testbox_grid",
         "version": "b217",
         "platform": "nrf52840",
         "transport": SimpleNamespace(transport_type="serial"),
@@ -91,7 +91,7 @@ def test_device_health_comes_from_the_last_json_info() -> None:
     assert v("blinky_device_fps", {"device": "OTHER"}) is None  # never answered: no number
     info = {
         "device": live.id,
-        "device_type": "testbox_grid_v1",
+        "device_type": "testbox_grid",
         "version": "b217",
         "platform": "nrf52840",
         "transport": "serial",

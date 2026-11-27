@@ -622,7 +622,7 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
         "blinky-console/src/App.tsx",
         "blinky-console/src/café del mar.ts",  # non-ASCII and spaces
         "scripts/testbox/deploy.py",
-        "devices/registry/testbox_grid_v1.json",
+        "devices/registry/testbox_grid.json",
         "corpus",
     ],
 )
