@@ -196,6 +196,39 @@ def test_a_warning_never_fails_a_run_and_a_blocking_rule_does(
     assert not dev_run.verdict({"checks": [], "final": {}, "strict": blocked})
 
 
+def test_a_blocking_window_rule_the_firmware_does_not_report_fails_the_hardware_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No silent pass: json info answered but without maxFrameMs, so a blocking frame_time has
+    nothing to judge. That's the firmware's (the reads came back), a failing check, not a pass."""
+    block(monkeypatch, "frame_time")
+    block(monkeypatch, "beat_pace")  # measured only by the quality suite: no data is expected
+    ws = [win(T0), win(T0 + 5)]
+    for w in ws:
+        w["max_frame_ms"] = None
+    got = strict_rules.report({"C": ws})
+    assert strict_rules.failures(got) == []
+    (u,) = strict_rules.unmeasured(got)
+    assert (u["rule"], u["device"], u["status"]) == ("frame_time", "C", strict_rules.NO_DATA)
+    hw = {"rig_error": None, "plan": ["upload"], "phases": [{"name": "upload", "result": "yes"}]}
+    assert not hardware_checks.verdict({**hw, "strict": got})
+    (c,) = hardware_checks.strict_checks(got)
+    assert (c["phase"], c["name"], c["result"], c["device"]) == ("strict", "frame_time", "no", "C")
+    assert "maxFrameMs" in c["evidence"]
+    # Measured: nothing unmeasured, and the run passes.
+    fine = strict_rules.report({"C": [win(T0), win(T0 + 5)]})
+    assert strict_rules.unmeasured(fine) == []
+    assert hardware_checks.verdict({**hw, "strict": fine})
+    assert hardware_checks.strict_checks(fine) == []
+
+
+def test_the_real_blocking_rules_are_all_measured_from_the_windows() -> None:
+    """Every rule the real table blocks is one the hardware checks' reads measure, so an
+    unmeasured one is the firmware's, never a rule the checks can't see."""
+    blocking = {r.name for r in REAL_RULES if r.mode == strict_rules.BLOCK}
+    assert blocking <= set(strict_rules.WINDOW_FIELDS)
+
+
 def test_the_metrics_carry_each_rule() -> None:
     strict_rules.judge({"C": [win(T0, frame=150), win(T0 + 4, fps=55)]}, "dev")
 
