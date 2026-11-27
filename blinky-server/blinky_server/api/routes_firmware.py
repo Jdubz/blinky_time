@@ -445,6 +445,9 @@ async def fleet_deploy_staging(body: StagingDeployRequest) -> dict[str, Any]:
             deploy_pipeline.require_test_devices(get_fleet(), devices)
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
+        from . import routes_dev
+
+        routes_dev.require_reset_gap(devices)  # the firmware's 60 s rule between resets
         job_id = await _submit(
             wf, body.sha, body.device_ids, str(firmware_dir() / "staging-download")
         )
