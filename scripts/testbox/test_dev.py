@@ -132,6 +132,9 @@ def test_checks_parse() -> None:
     for bad in ("validate", "camera", "cmd="):
         with pytest.raises(dev.DevError, match="unknown check"):
             dev.parse_checks([bad])
+    # A typo is one line from dev.py, not a traceback.
+    with pytest.raises(dev.DevError, match="the minutes are a number"):
+        dev.parse_checks(["health=2m"])
 
 
 # -- git: dirty trees and --wip ----------------------------------------------------------------
