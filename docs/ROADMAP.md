@@ -100,6 +100,7 @@ Training as a Spark gpu_task (#305) and the mel front end (blinky-firmware#21) b
 ## Later: after P1–P3
 
 - **Record mode (#243):** wanted, but only after a pass at audio, smoothness and ESP32-S3 support (owner, 2026-11-23). Start with the #243 re-scope; its phone checks are listed there.
+  - **It no longer fits on the nRF52840, and may be ESP32-S3 only** (owner, 2026-11-26: accepted for now). Record mode allocates one 32 KB block (`RecordStream.cpp`). The free heap fell from about 39 KB to about 25 KB this month: blinky-firmware#61's exact ACF tables took about 27 KB, #85 shrank the heap by about 8 KB, and #89 added the LED staging copy. So `record` now refuses to start with a `[FALLBACK]` error, loudly, not silently. Either it moves to the ESP32-S3 (8 MB PSRAM), or the nRF52 path gets a smaller buffer (under about 24 KB) or RAM back from elsewhere. Decide when #243 is picked up.
 
 ## Product: two UIs and the hosted tools (owner, 2026-11-25; the label reviewer is prioritised now, the rest isn't top priority)
 
