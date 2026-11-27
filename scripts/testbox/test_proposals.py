@@ -191,6 +191,85 @@ def test_qualifies_only_with_no_regression_and_at_least_one_gain() -> None:
     assert proposals.decide(same, []).why == "no metric better beyond its noise"
 
 
+# -- health and smoothness as metrics ----------------------------------------------------------
+
+
+def healthy(rec: dict[str, Any], **worst: float | None) -> dict[str, Any]:
+    """The line with these strict rules' worst values in its health record."""
+    rec["health"]["strict"].update(
+        {k: {"status": "pass", "worst": v, "mode": "warn"} for k, v in worst.items()}
+    )
+    return rec
+
+
+def test_health_noise_is_the_spread_of_one_value_per_run() -> None:
+    a = healthy(line("x" * 40, 0.5, run="1", build="b"), frame_time=18.0)
+    b = healthy(line("x" * 40, 0.5, run="2", build="b"), frame_time=22.0)
+    c = healthy(line("y" * 40, 0.5, run="3"), frame_time=15.0)  # no repeat: no noise
+    nz = proposals.noise([a, b, c])["frame_time"]
+    assert nz.dof == 1 and nz.builds == 1 and nz.sd == pytest.approx(8**0.5)
+    assert proposals.noise([a, b, c])["fps"].dof == 0  # not in the lines: not measured
+
+
+def test_a_pure_smoothness_win_qualifies() -> None:
+    # b228 vs b217: the scores the same within noise, the longest frame 19 ms vs 91-109 ms.
+    base = [
+        healthy(line(STABLE_SHA, 0.5, run=f"s{i}", release="b217"), frame_time=ms, fps=60.0)
+        for i, ms in enumerate((91.0, 109.0))
+    ]
+    cand = [healthy(line(CAND_SHA, 0.5, run="c"), frame_time=19.0, fps=60.0)]
+    noises = {**noisy(), "frame_time": proposals.Noise(5.0, 12, 6)}
+    res = proposals.compare(cand, base, noises)
+    frame = next(r for r in res if r.metric.key == "frame_time")
+    assert frame.stable == 100.0 and frame.candidate == 19.0 and frame.diff == -81.0
+    assert frame.tracks == 1 and frame.left_out == {}  # no lag check: it isn't a track score
+    # K standard errors of one run against the mean of two: 2 * 5 * sqrt(1 + 1/2).
+    assert frame.margin == pytest.approx(2 * 5 * 1.5**0.5)
+    v = verdicts(res)
+    assert (
+        v["frame_time"] == "better" and v["fps"] == "within noise" and v["drumF"] == "within noise"
+    )
+    assert v["beat_pace"] == "not measured"
+    d = proposals.decide(res, [])
+    assert d.qualifies and d.why == "better beyond its noise: longest frame (ms; lower is better)"
+
+
+def test_a_smoothness_regression_blocks_like_any_other() -> None:
+    base = [healthy(line(STABLE_SHA, 0.5, run="s", release="b217"), fps=95.0)]
+    up = {"drumF": 0.6, "kickR50": 0.5, "snareR50": 0.5, "onDrum": 0.5, "tempoErr": 0.5}
+    cand = [healthy(line(CAND_SHA, up, run="c"), fps=70.0)]
+    d = proposals.decide(proposals.compare(cand, base, noisy(1.0)), [])
+    assert not d.qualifies and d.why == "worse beyond its noise: lowest fps"
+
+
+def test_a_health_metric_without_measured_noise_counts_neither_way() -> None:
+    base = [healthy(line(STABLE_SHA, 0.5, run="s", release="b217"), frame_time=100.0)]
+    cand = [healthy(line(CAND_SHA, 0.5, run="c"), frame_time=19.0)]
+    noises = {**noisy(), "frame_time": proposals.Noise(5.0, 2, 1)}
+    res = proposals.compare(cand, base, noises)
+    assert verdicts(res)["frame_time"] == "noise unknown"
+    d = proposals.decide(res, [])
+    assert not d.qualifies
+    assert d.why == (
+        "no metric better beyond its noise "
+        "(noise not measured yet for: longest frame (ms; lower is better))"
+    )
+    # It doesn't hold back a candidate that leads on a score metric.
+    up = {"drumF": 0.6, "kickR50": 0.5, "snareR50": 0.5, "onDrum": 0.5, "tempoErr": 0.5}
+    cand = [healthy(line(CAND_SHA, up, run="c"), frame_time=19.0)]
+    assert proposals.decide(proposals.compare(cand, base, noises), []).qualifies
+
+
+def test_the_stable_runs_again_for_a_health_metrics_noise() -> None:
+    cand = healthy(line(CAND_SHA, 0.6, run="c"), frame_time=19.0)
+    base = healthy(line(STABLE_SHA, 0.5, run="s", release="b217"), frame_time=20.0)
+    again = healthy(jitter(base, 0.01), frame_time=21.0)
+    # The track scores have their noise from the pair; frame_time has 1 dof of 12.
+    p = make_plan([cand, base, again])
+    assert p.need is not None and p.need["key"] == f"base:b217:{PIN}:3"
+    assert "frame_time" in p.need["what"] and "drumF" not in p.need["what"]
+
+
 # -- health ------------------------------------------------------------------------------------
 
 
