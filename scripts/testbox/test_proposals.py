@@ -173,7 +173,7 @@ def test_qualifies_only_with_no_regression_and_at_least_one_gain() -> None:
     assert d.qualifies and "drum F" in d.why
     mixed = {**up, "onDrum": 0.4}
     d = proposals.decide(proposals.compare([line(CAND_SHA, mixed, run="c")], base, noisy()), [])
-    assert not d.qualifies and "worse beyond its noise: on-drum share" == d.why
+    assert not d.qualifies and d.why == "worse beyond its noise: on-drum share"
     same = proposals.compare([line(CAND_SHA, 0.5, run="c")], base, noisy())
     assert proposals.decide(same, []).why == "no metric better beyond its noise"
 
