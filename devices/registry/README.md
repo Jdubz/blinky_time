@@ -120,6 +120,7 @@ intent unambiguous.
 `device upload` writes the config to flash, so it is a device-mutating command.
 
 - **Fleet devices (through blinky-server):** `device upload` and `reboot` on `/api/devices/{id}/command` are gated on the `X-Deploy-Tool` header, which only `scripts/deploy.sh` sets. A direct `curl` returns 403, and that's intended. Don't script config changes over the API. Never loop config flips across fleet devices. See CLAUDE.md ("Only stable releases reach fleet and new devices" and the 60-second rule) and `docs/SAFETY.md`.
+- **The test box's chips:** the box's server uploads each one's entry itself when it differs (`BOX_CHIPS` in `blinky-server/blinky_server/testing/box_config.py`, `docs/TEST_BOX.md`). Change the entry by PR; never upload a box chip's config by hand.
 - **A bench device on this machine's USB:** send `device upload <json>` over its serial port (e.g. the blinky-console serial terminal), where `<json>` is the file's contents on one line (`jq -c . devices/registry/<id>.json`). Never do this on an enrolled fleet device.
 
 After an upload, wait at least 75 s of uptime before any reset, so `markStable()` fires (CLAUDE.md's 60-second rule). Then one verification reboot is fine; wait another 75 s after it.
