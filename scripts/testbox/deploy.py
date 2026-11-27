@@ -91,8 +91,6 @@ SERVER_PATHS = (
     "blinky-server/",
     "blinky-console/",  # the web UI the server serves
     "scripts/testbox/",  # this deployer and the units
-    # The box's chips take their device config from here on connect (testing/box_config.py).
-    "devices/registry/",
     # The corpus submodule (a gitlink, so no trailing slash; blinky_time#357): the Spark
     # client's default audio root, and the blinky_scoring the server imports. The repo has no
     # firmware submodule since the 2026-11-24 decoupling; the server runs its own host tools

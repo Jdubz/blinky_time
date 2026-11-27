@@ -315,7 +315,7 @@ class Box:
         if path == "/api/devices":
             return [
                 {
-                    "id": "87DE9B58C90AFE2D",
+                    "id": "0123456789ABCDEF",
                     "state": "connected",
                     "platform": "nrf52840",
                     "device_type": "testbox_grid",
@@ -339,7 +339,7 @@ class Box:
                     "steps": {
                         "flash": {
                             "per_device": {
-                                "87DE9B58C90A": {"flash": "ok", "version": "b220-dev-abcdef01"}
+                                "0123456789AB": {"flash": "ok", "version": "b220-dev-abcdef01"}
                             }
                         }
                     },
@@ -360,7 +360,7 @@ class Box:
         raise AssertionError(path)
 
 
-DEV = "87DE9B58C90AFE2D"
+DEV = "0123456789ABCDEF"
 HW_REPORT: dict[str, Any] = {
     "passed": True,
     "rig_error": None,
@@ -489,8 +489,8 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
     assert "acfUs=7185, plpUs=589, heapPeak=9" in report  # the named timers first
     assert "drumF=0.71" in report and "verdict (health + asserts): PASSED" in report
     # Each validated track's detection latency, and the run's median (detection_latency).
-    assert "techno 87DE9B58C90A: drumF=0.71, kickR50=0.9, latency +1.2 ms" in report
-    assert "detection latency 87DE9B58C90A: median +1.2 ms over 1 of 1 tracks" in report
+    assert "techno 0123456789AB: drumF=0.71, kickR50=0.9, latency +1.2 ms" in report
+    assert "detection latency 0123456789AB: median +1.2 ms over 1 of 1 tracks" in report
     assert "box: DEV mode since" in report
     # The strict rules: a warning is shown, never a failure (the verdict above passed).
     assert "⚠ strict rules (non-blocking):" in report
@@ -512,7 +512,7 @@ def test_try_hw_runs_the_hardware_checks_against_the_flashed_version(
     assert hw[2] == {"device_ids": [DEV], "expected_version": "b220-dev-abcdef01"}
     assert not any(c[1] == "/api/dev/run" for c in box.calls)  # nothing else was asked for
     out = capsys.readouterr().out
-    assert "phase lights: yes 14 s" in out and "lights/walk 87DE9B58: yes: 64/64" in out
+    assert "phase lights: yes 14 s" in out and "lights/walk 01234567: yes: 64/64" in out
     assert "hardware checks: PASSED" in out
     box.hw = {**HW_REPORT, "passed": False, "rig_error": "preflight: camera: busy"}
     assert dev.cmd_try(args, box, svc, repo) == 1
@@ -568,7 +568,7 @@ def test_status_shows_what_waits_behind_dev_mode(capsys: pytest.CaptureFixture[s
     out = capsys.readouterr().out
     assert "box: DEV mode since" in out and "waiting behind dev mode: 1" in out
     assert "staging: ssssssssssss" in out and "preempted" in out and "dev.py mode queue" in out
-    assert "chip 87DE9B58C90A testbox_grid: connected, b211" in out
+    assert "chip 0123456789AB testbox_grid: connected, b211" in out
     assert "  frame_time: warn, streak 5/5: READY to block" in out
     assert "  fps: warn, streak 0/5, last warning b220-dev-abcdef01" in out
 

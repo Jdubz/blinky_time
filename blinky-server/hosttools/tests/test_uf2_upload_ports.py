@@ -29,7 +29,7 @@ def ports(tmp_path: Path) -> tuple[str, str]:
     """A stand-in tty node and a by-id style symlink to it."""
     tty = tmp_path / "ttyACM0"
     tty.write_text("")
-    by_id = tmp_path / "usb-Seeed_XIAO_nRF52840_Sense_87DE9B58C90AFE2D-if00"
+    by_id = tmp_path / "usb-Seeed_XIAO_nRF52840_Sense_0123456789ABCDEF-if00"
     by_id.symlink_to(tty)
     return str(tty), str(by_id)
 
@@ -53,7 +53,7 @@ class _Server:
     def __call__(self, req: Any, timeout: float = 0) -> io.BytesIO:
         url = req.full_url
         if url.endswith("/api/devices"):
-            return io.BytesIO(json.dumps([{"id": "87DE9B58C90AFE2D", "port": self.port}]).encode())
+            return io.BytesIO(json.dumps([{"id": "0123456789ABCDEF", "port": self.port}]).encode())
         self.posts.append((url, json.loads(req.data or b"{}")))
         return io.BytesIO(b"{}")
 
@@ -66,7 +66,7 @@ def test_release_matches_the_servers_by_id_port_given_the_tty(
     monkeypatch.setattr(uf2_upload, "urlopen", server)
     assert uf2_upload._request_server_release(tty, hold_seconds=90)
     assert server.posts == [
-        (f"{uf2_upload.BLINKY_SERVER_URL}/api/devices/87DE9B58C90AFE2D/release", {"hold_seconds": 90})
+        (f"{uf2_upload.BLINKY_SERVER_URL}/api/devices/0123456789ABCDEF/release", {"hold_seconds": 90})
     ]
 
 
@@ -78,7 +78,7 @@ def test_reconnect_matches_the_servers_by_id_port_given_the_tty(
     monkeypatch.setattr(uf2_upload, "urlopen", server)
     uf2_upload._request_server_reconnect(tty)
     assert [u for u, _ in server.posts] == [
-        f"{uf2_upload.BLINKY_SERVER_URL}/api/devices/87DE9B58C90AFE2D/reconnect"
+        f"{uf2_upload.BLINKY_SERVER_URL}/api/devices/0123456789ABCDEF/reconnect"
     ]
 
 
@@ -127,7 +127,7 @@ def _bootloader_entry(monkeypatch: pytest.MonkeyPatch, fail_on: str, drives: lis
     monkeypatch.setattr(uf2_upload, "_request_server_release", lambda *a, **k: True)
     monkeypatch.setattr(serial_lock, "acquire", lambda *a, **k: True)
     monkeypatch.setattr(uf2_upload, "_check_port_available", lambda *a, **k: True)
-    monkeypatch.setattr(uf2_upload, "get_serial_number", lambda _p: "87DE9B58C90AFE2D")
+    monkeypatch.setattr(uf2_upload, "get_serial_number", lambda _p: "0123456789ABCDEF")
     monkeypatch.setattr(uf2_upload, "_find_usb_hub_port", lambda _p: (None, None))
     monkeypatch.setattr(uf2_upload, "_get_usb_block_devices", lambda: set())
     monkeypatch.setattr(uf2_upload, "find_port_by_serial", lambda *a, **k: "/dev/ttyACM0")
@@ -143,7 +143,7 @@ def test_an_error_after_sending_bootloader_still_checks_for_the_drive(
 ) -> None:
     """The chip took `bootloader`, reset and broke the port mid-flush: its drive is there."""
     serial, opened = _bootloader_entry(monkeypatch, "flush", drives=[True])
-    assert serial == "87DE9B58C90AFE2D"
+    assert serial == "0123456789ABCDEF"
     assert len(opened) == 1 and opened[0].writes == [b"bootloader\n"]
 
 

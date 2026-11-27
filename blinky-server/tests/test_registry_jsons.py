@@ -9,8 +9,12 @@ correctly refused to construct (PR 142 buffer-overflow fix), the setup()
 haltWithError loop tripped the WDT, and after three boot cycles the
 device fell into recovery.
 
-This module pins the rule for every JSON in `devices/registry/` so a
-"next 12390" typo is caught before it lands on a device. The check
+This module pins the rule for every device config entry so a "next 12390"
+typo is caught before it lands on a device: the repo's made-up
+`devices/registry/example.json` everywhere, and the real entries where
+they are, in `~/.config/blinky/devices/` (the box's own, and `fleet/`).
+Real entries are private and never in the repo, so CI checks the
+example only. The check
 mirrors the firmware validation in `DeviceConfigLoader::validate()` and
 `Nrf52PwmLedStrip` ctor exactly.
 """
@@ -22,14 +26,26 @@ from pathlib import Path
 
 import pytest
 
-REGISTRY_DIR = Path(__file__).resolve().parents[2] / "devices" / "registry"
+from blinky_server.testing import box_config
+
+EXAMPLE = Path(__file__).resolve().parents[2] / "devices" / "registry" / "example.json"
+LOCAL_DIR = box_config.CONFIG_DIR  # ~/.config/blinky/devices: the box's entries
+FLEET_DIR = LOCAL_DIR / "fleet"  # the fleet's entries, where this machine holds them
+
+
+def _local_entries(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob("*.json") if p.name != box_config.CHIPS_FILE)
+
+
+def _id(path: Path) -> str:
+    return f"{path.parent.name}/{path.name}"
 
 
 def _registry_json_files() -> list[Path]:
-    """Every non-status JSON in the registry. Sorted for deterministic ids."""
-    if not REGISTRY_DIR.is_dir():
-        pytest.skip(f"registry dir missing: {REGISTRY_DIR}")
-    return sorted(p for p in REGISTRY_DIR.glob("*.json") if "_status" not in p.name)
+    """The example, then every local entry. Sorted for deterministic ids."""
+    return [EXAMPLE, *_local_entries(LOCAL_DIR), *_local_entries(FLEET_DIR)]
 
 
 def _decode_offsets(led_type: int) -> tuple[int, int, int]:
@@ -46,7 +62,7 @@ def _decode_offsets(led_type: int) -> tuple[int, int, int]:
     return r, g, b
 
 
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_ledtype_is_buildable(registry_path: Path) -> None:
     """Every registry JSON must have a ledType the firmware will accept.
 
@@ -86,7 +102,7 @@ def test_registry_json_ledtype_is_buildable(registry_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_required_fields_present(registry_path: Path) -> None:
     """Every registry JSON must declare the fields the firmware's
     ``SerialConsole::handleDeviceUpload`` reads. Missing fields fall
@@ -116,7 +132,7 @@ def test_registry_json_required_fields_present(registry_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_device_id_matches_filename(registry_path: Path) -> None:
     """The fleet manager + deploy.sh both key off the filename stem,
     while the firmware reads ``deviceId`` from the JSON body. If the
@@ -135,7 +151,7 @@ def test_registry_json_device_id_matches_filename(registry_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_led_dimensions_are_positive(registry_path: Path) -> None:
     """``ledWidth * ledHeight`` is the total LED count. Zero in either
     dimension defaults the renderer to a no-op pixel matrix — the
@@ -165,7 +181,7 @@ def test_registry_json_led_dimensions_are_positive(registry_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> None:
     """``orientation`` and ``layoutType`` are firmware enums. Out-of-
     range values silently cast and dispatch to a default branch, which
@@ -191,41 +207,22 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
         )
 
 
-# Every fleet entry's brightness as it stood when the test box's entry went dark (owner,
-# 2026-11-24): only the test chip defaults to off; every other device keeps booting lit at its
-# configured brightness (None: no key, the firmware's default of 100). A change here is a
-# deliberate per-device retune, never a side effect.
-FLEET_BRIGHTNESS = {
-    "big_bucket.json": 100,
-    "bucket.json": 80,
-    "cart_inner.json": 200,
-    "cart_outer.json": 200,
-    "cart_umbrella.json": 200,
-    "display.json": 150,
-    "porkpie_hat.json": None,
-    "long_tube.json": 80,
-    "scarf.json": None,
-    "shannon_hat.json": None,
-    "sourpuss_hat.json": None,
-    "tube.json": 120,
-}
-# The test box's chips: the grid's nRF52840 and the ESP32-S3 wired to the same 8x8 layout.
-TEST_BOX_ENTRIES = {"testbox_grid.json", "testbox_esp32.json"}
+def test_only_the_box_entries_are_dark() -> None:
+    """Where the real entries are: the box's enrolled chips have brightness 0 (lit only while a
+    test runs, testing/leds.py), and every enrolled chip has its entry; no fleet entry is 0 (a
+    fleet device that boots dark looks dead)."""
+    chips = box_config.box_chips()
+    fleet = _local_entries(FLEET_DIR)
+    if not chips and not fleet:
+        pytest.skip(f"no local device config in {LOCAL_DIR}")
+    for name in set(chips.values()):
+        cfg = json.loads((LOCAL_DIR / f"{name}.json").read_text())
+        assert cfg["deviceId"] == name and cfg.get("brightness") == 0, name
+    for path in fleet:
+        assert json.loads(path.read_text()).get("brightness", 100) != 0, path.name
 
 
-def test_only_the_test_box_entries_are_dark() -> None:
-    """The test box's chips have brightness 0 (lit only while a test runs, testing/leds.py);
-    every fleet entry keeps its brightness, and none is 0."""
-    entries = {p.name: json.loads(p.read_text()) for p in _registry_json_files()}
-    for name in TEST_BOX_ENTRIES:
-        assert entries[name].get("brightness") == 0, name
-    fleet = {
-        name: cfg.get("brightness") for name, cfg in entries.items() if name not in TEST_BOX_ENTRIES
-    }
-    assert fleet == FLEET_BRIGHTNESS
-
-
-@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
+@pytest.mark.parametrize("registry_path", _registry_json_files(), ids=_id)
 def test_registry_json_names_fit_the_firmware(registry_path: Path) -> None:
     """The firmware stores ``deviceId`` in 16 bytes and ``deviceName`` in 32 (blinky-firmware's
     ConfigStorage::StoredDeviceConfig, NUL-terminated): a longer id comes back cut short from

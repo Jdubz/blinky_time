@@ -1,37 +1,15 @@
 # Device Registry
 
-This directory contains JSON configuration files for different Blinky hardware devices. Each JSON file defines a complete device configuration that is uploaded to the firmware with the `device upload <json>` console command.
+The format of a Blinky device config: one JSON entry per physical device, uploaded to the firmware with the `device upload <json>` console command.
 
-**Source of truth:** these files are the intended-canonical config for each
-physical device. To push a registry entry to a connected device today, send
-its full contents as a single `device upload <json>` command via the
-`X-Deploy-Tool`-gated fleet-API endpoint. There is no `deploy-config.sh`
-wrapper yet — that's a planned addition so the registry can be enforced
-in the same way `deploy.sh` enforces firmware. Until that lands, treat
-`git diff` of this directory against the live device's `device show`
-output as the audit path; any drift wants fixing on one side or the
-other.
+**Real entries are private and never go in this repo.** They are custom to each physical device. The repo holds only this format doc and the made-up [`example.json`](example.json); `.gitignore` ignores every other JSON here. Where the real entries live:
 
-## Available Devices
+- **The test box's chips:** on the box, in `~/.config/blinky/devices/` (directory 700, files 600, like the rest of `~/.config/blinky`), with `box_chips.json` mapping each chip's USB serial to its entry. The box's server reads them on every connect (`blinky-server/blinky_server/testing/box_config.py`, `docs/TEST_BOX.md`).
+- **The fleet:** on the box too for now, in `~/.config/blinky/devices/fleet/`, until they sync with the production setup.
 
-| Device ID | Description | LEDs | Layout | File |
-|-----------|-------------|------|--------|------|
-| `porkpie_hat` | Porkpie Hat | 89 (linear string) | LINEAR, single strand on D10. Battery-powered. A test device for candidates and `--dev` builds (blinky-firmware's `devices/test_devices.json`). | `porkpie_hat.json` |
-| `sourpuss_hat` | Sourpuss Hat | 70 (linear string) | LINEAR, single strand on D10. Battery-powered. New hat, distinct from `porkpie_hat`. | `sourpuss_hat.json` |
-| `scarf` | Scarf | 141 (linear string) | LINEAR, single strand on D0. Battery-powered. | `scarf.json` |
-| `shannon_hat` | Shannon Hat | 79 (linear string) | LINEAR, single strand on D0. Battery-powered. Same build as `scarf` apart from LED count. | `shannon_hat.json` |
-| `tube` | Tube Light | 60 (4×15 matrix) | MATRIX, vertical zigzag on D10. Battery-powered. | `tube.json` |
-| `bucket` | Bucket Totem | 128 (16×8 matrix) | MATRIX, horizontal row-major on D10. Z-inverted. | `bucket.json` |
-| `big_bucket` | Big Bucket | 112 (14×8 matrix) | MATRIX, horizontal zigzag (serpentine) on D0. A generator-cycle button is wired on D1 but disabled (`buttonPin=0`) because of ghost presses (#222). **Outlier:** `ledType=6` (NEO_RGB) because the LED part is wired native RGB, not the fleet-standard GRB. | `big_bucket.json` |
-| `cart_inner` | Cart Inner | 104 (linear, two 52-LED strands) | LINEAR, strand 1 on D10 + strand 2 on D9; firmware splits the 104-pixel buffer in half across the two pins. | `cart_inner.json` |
-| `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
-| `long_tube` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube.json` |
-| `cart_umbrella` | Cart Umbrella | 104 (8×13 matrix) | MATRIX, `VERTICAL_FIRST_DOWN` (orientation 4) on D10. Confirmed against hardware 2026-05-18. | `cart_umbrella.json` |
-| `testbox_grid` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The test box's entries are the only ones with brightness 0. | `testbox_grid.json` |
-| `testbox_esp32` | Test Box Grid ESP32-S3 | 64 (8×8 matrix) | The test box's XIAO ESP32-S3, wired to the same layout as `testbox_grid` (orientation 5, GRB, `brightness: 0`) with LED data on D0, which is `ledPin: 1` (GPIO1, see `ledPin` below). Not in `BOX_CHIPS` until the box can flash current ESP32 firmware (`docs/TEST_BOX.md`). | `testbox_esp32.json` |
-| `display` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today (next gen: `docs/NEXTGEN_ESP32S3_PLAN.md`). | `display.json` |
+The registry test (`blinky-server/tests/test_registry_jsons.py`) checks the example in CI, and every entry in those local directories where they exist.
 
-**Ids carry no version.** A device is one physical object, and the firmware has its own versions. The version suffixes were dropped on 2026-11-27: `hat_v1` is now `porkpie_hat`, and `bucket_v3`, `big_bucket_v1`, `tube_v2`, `long_tube_v1`, `cart_umbrella_v1`, `display_v1` and `testbox_grid_v1` lost their suffixes. A fleet device reports its old id until its entry is uploaded again (see "Uploading a Device Config" below). Until then the old id only shows as its device type: blinky-server keys devices by chip, never by this id. Past runs, reports and issues keep the old names. The test box's chip takes its new entry by itself.
+**Ids carry no version.** A device is one physical object, and the firmware has its own versions. The version suffixes were dropped on 2026-11-27: `hat_v1` is now `porkpie_hat`, and `bucket_v3`, `big_bucket_v1`, `tube_v2`, `long_tube_v1`, `cart_umbrella_v1`, `display_v1` and `testbox_grid_v1` lost their suffixes. A fleet device reports its old id until its entry is uploaded again (see "Uploading a Device Config" below). Until then the old id only shows as its device type: blinky-server keys devices by chip, never by this id. Past runs, reports and issues keep the old names.
 
 ## JSON Schema
 
@@ -125,15 +103,15 @@ intent unambiguous.
 `device upload` writes the config to flash, so it is a device-mutating command.
 
 - **Fleet devices (through blinky-server):** `device upload` and `reboot` on `/api/devices/{id}/command` are gated on the `X-Deploy-Tool` header, which only `scripts/deploy.sh` sets. A direct `curl` returns 403, and that's intended. Don't script config changes over the API. Never loop config flips across fleet devices. See CLAUDE.md ("Only stable releases reach fleet and new devices" and the 60-second rule) and `docs/SAFETY.md`.
-- **The test box's chips:** the box's server uploads each one's entry itself when it differs (`BOX_CHIPS` in `blinky-server/blinky_server/testing/box_config.py`, `docs/TEST_BOX.md`). Change the entry by PR; never upload a box chip's config by hand.
-- **A bench device on this machine's USB:** send `device upload <json>` over its serial port (e.g. the blinky-console serial terminal), where `<json>` is the file's contents on one line (`jq -c . devices/registry/<id>.json`). Never do this on an enrolled fleet device.
+- **The test box's chips:** the box's server uploads each one's entry itself when it differs (`blinky-server/blinky_server/testing/box_config.py`, `docs/TEST_BOX.md`). Change the entry in the box's `~/.config/blinky/devices/`; never upload a box chip's config by hand.
+- **A bench device on this machine's USB:** send `device upload <json>` over its serial port (e.g. the blinky-console serial terminal), where `<json>` is the file's contents on one line (`jq -c . <id>.json`). Never do this on an enrolled fleet device.
 
 After an upload, wait at least 75 s of uptime before any reset, so `markStable()` fires (CLAUDE.md's 60-second rule). Then one verification reboot is fine; wait another 75 s after it.
 
 ## Creating a Custom Device Config
 
-1. Copy an existing JSON file (e.g., `porkpie_hat.json`)
-2. Rename it with a unique device ID (e.g., `custom_hat.json`)
+1. Copy [`example.json`](example.json) to wherever that device's entries are kept (never this repo)
+2. Name it after a unique device ID (e.g., `custom_hat.json`); `deviceId` must match the file name and fit in 15 characters
 3. Modify the values:
    - Update `deviceId` and `deviceName`
    - Set `ledWidth` and `ledHeight` to match your LED count
@@ -168,7 +146,7 @@ Invalid configurations are rejected with a log message. A non-standard sample ra
 - Config may have failed validation
 - Or the reboot-counter quarantine fired after too many fast resets (CLAUDE.md, 60-second rule)
 - Check serial console for error messages
-- Re-upload that device's own registry config, then wait 75 s before any reset
+- Re-upload that device's own entry, then wait 75 s before any reset
 
 ## Notes
 
@@ -180,4 +158,4 @@ Invalid configurations are rejected with a log message. A non-standard sample ra
 
 ---
 
-**Last Updated**: October 2026
+**Last Updated**: November 2026

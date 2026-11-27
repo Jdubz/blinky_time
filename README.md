@@ -26,7 +26,7 @@ blinky_time/
 ├── blinky-serial-mcp/    # MCP server for AI-assisted testing and tuning
 ├── blinky-test-player/   # Test audio player and tuning history
 ├── ml-training/          # Onset model training (runs on the DGX Spark as gpu_task jobs)
-├── devices/registry/     # Per-device configs (layout, LED pin, LED count)
+├── devices/registry/     # The device config format and a made-up example (real configs are private)
 ├── scripts/              # deploy.sh (fleet deploys), testbox/ (deployer, staging runner)
 ├── tools/                # Fleet and analysis tools (BLE DFU push, device eval, visual metrics)
 ├── docs/                 # Tooling docs (see docs/README.md)
@@ -41,7 +41,7 @@ blinky_time/
 - **Fleet devices:** `./scripts/deploy.sh --devices=<id>` (latest stable release, with version check). `--devices=list` shows the candidates.
 - **Building, test devices and releases** are blinky-firmware's: see its [README](https://github.com/Jdubz/blinky-firmware#readme) and [RELEASE_PROCESS.md](https://github.com/Jdubz/blinky-firmware/blob/master/docs/RELEASE_PROCESS.md).
 
-A new chip boots unconfigured until it receives its config from `devices/registry/<id>.json` through `device upload <json>` (on a fleet device, through `deploy.sh` only). See [devices/registry/README.md](devices/registry/README.md).
+A new chip boots unconfigured until it receives its device config (a private JSON entry, kept off the repo in `~/.config/blinky/devices/`) through `device upload <json>` (on a fleet device, through `deploy.sh` only). See [devices/registry/README.md](devices/registry/README.md).
 
 ## Development
 

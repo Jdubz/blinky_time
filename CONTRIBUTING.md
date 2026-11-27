@@ -38,7 +38,7 @@ All work branches from `master` and merges back by pull request. See [.github/BR
 
 - **No silent fallbacks**: invalid state fails loudly (CLAUDE.md, "No Silent Fallbacks").
 - **Long server jobs are durable workflows** with a restart test (CLAUDE.md, "blinky-server work survives any restart").
-- **Device configs** are JSON in `devices/registry/`, uploaded at runtime, never compiled in.
+- **Device configs** are JSON uploaded at runtime, never compiled in. The format is `devices/registry/README.md`; real entries are private and never committed (they live in `~/.config/blinky/devices/` on the box).
 - **Docs** only with future value: plans, specs, guides, outstanding-action lists (CLAUDE.md, "Documentation Guidelines"). Index: [docs/README.md](docs/README.md).
 - **Commit messages**: say what changed and why; reference the issue.
 
