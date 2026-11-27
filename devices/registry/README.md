@@ -27,7 +27,8 @@ other.
 | `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
 | `long_tube_v1` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube_v1.json` |
 | `cart_umbrella_v1` | Cart Umbrella | 104 (8×13 matrix) | MATRIX, `VERTICAL_FIRST_DOWN` (orientation 4) on D10. Confirmed against hardware 2026-05-18. | `cart_umbrella_v1.json` |
-| `testbox_grid_v1` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The only entry with brightness 0. | `testbox_grid_v1.json` |
+| `testbox_grid_v1` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The test box's entries are the only ones with brightness 0. | `testbox_grid_v1.json` |
+| `testbox_esp32` | Test Box Grid ESP32-S3 | 64 (8×8 matrix) | The test box's XIAO ESP32-S3, wired to the same layout as `testbox_grid_v1` (orientation 5, GRB, `brightness: 0`) with LED data on D0, which is `ledPin: 1` (GPIO1, see `ledPin` below). Not in `BOX_CHIPS` until the box can flash current ESP32 firmware (`docs/TEST_BOX.md`). | `testbox_esp32.json` |
 | `display_v1` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today (next gen: `docs/NEXTGEN_ESP32S3_PLAN.md`). | `display_v1.json` |
 
 ## JSON Schema
@@ -45,16 +46,18 @@ These must be present:
 
 ```json
 {
-  "deviceId":   "string",  // unique ID (alphanumeric + underscore)
+  "deviceId":   "string",  // unique ID (alphanumeric + underscore, max 15 chars)
   "deviceName": "string",  // human-readable name (max 31 chars)
   "ledWidth":   number,    // matrix width, or total count for linear strips
   "ledHeight":  number,    // matrix height; 1 for linear strips
-  "ledPin":     number,    // GPIO pin for LED data (0-47 on nRF52840; default 10 if omitted)
+  "ledPin":     number,    // LED data pin, the Arduino pin number (default 10 if omitted; see below)
   "ledType":    number,    // see ledType constants below
   "orientation": number,   // see orientation values below
   "layoutType": number     // 0=MATRIX, 1=LINEAR, 2=RANDOM
 }
 ```
+
+`ledPin` is the number the firmware hands the LED driver. On the XIAO nRF52840 that is the D number (D0 = 0, D10 = 10; 0-47). On the XIAO ESP32-S3 it is the GPIO number (0-48), not the D number: D0 = GPIO1, so a strand on D0 is `ledPin: 1` (Seeed's XIAO ESP32-S3 pin map: D0-D5 = GPIO1-6, D6 = 43, D7 = 44, D8-D10 = GPIO7-9).
 
 ### Optional fields (with firmware defaults)
 
@@ -141,7 +144,7 @@ After an upload, wait at least 75 s of uptime before any reset, so `markStable()
 
 The firmware validates every stored configuration (`DeviceConfigLoader::validate`):
 - LED count must be 1-2048
-- `ledPin`, `ledPin2` and `buttonPin` must be 0-47 on nRF52840, and must all differ; a two-strand config needs an even LED count
+- `ledPin`, `ledPin2` and `buttonPin` must be 0-47 on nRF52840 (0-48 on ESP32-S3), and must all differ; a two-strand config needs an even LED count
 - `ledType`'s R/G/B byte offsets must be in range and distinct
 - `orientation` 0-5, `layoutType` 0-2, `brightness` ≤ 255
 
