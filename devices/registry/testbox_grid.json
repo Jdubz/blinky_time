@@ -1,5 +1,5 @@
 {
-  "deviceId": "testbox_grid_v1",
+  "deviceId": "testbox_grid",
   "deviceName": "Test Box Grid",
   "ledWidth": 8,
   "ledHeight": 8,

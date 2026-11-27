@@ -1,6 +1,6 @@
 """The test box's LEDs: dark unless a test runs (owner, 2026-11-24; docs/TEST_BOX.md).
 
-The box's chip boots and idles dark: its device config (devices/registry/testbox_grid_v1.json)
+The box's chip boots and idles dark: its device config (devices/registry/testbox_grid.json)
 has brightness 0. A test run lights it with the firmware's runtime-only ``leds`` override
 (blinky-firmware render/LedBrightness.h), and drops the override when it ends, however it ends
 (``leds config``: back to the stored config's brightness, what a reboot applies). The override

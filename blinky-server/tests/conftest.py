@@ -101,7 +101,7 @@ async def fleet_with_devices() -> AsyncGenerator[FleetManager, None]:
                 {
                     "version": "1.0.1",
                     "device": {
-                        "id": "long_tube_v1",
+                        "id": "long_tube",
                         "name": "Long Tube",
                         "width": 4,
                         "height": 60,

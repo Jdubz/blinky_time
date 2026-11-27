@@ -119,7 +119,7 @@ describe('FirmwarePage', () => {
     vi.mocked(releases.loadOtaRelease).mockResolvedValue(rel);
     vi.mocked(ota.updateDevice).mockResolvedValue({
       version: 'b216-aaaaaaaa',
-      device: { configured: true, id: 'hat_v1', name: 'Hat' },
+      device: { configured: true, id: 'porkpie_hat', name: 'Hat' },
     } as never);
     render(<FirmwarePage />);
     await screen.findByRole('button', { name: 'Update to b216' });
@@ -152,7 +152,7 @@ describe('FirmwarePage', () => {
       u.settling?.(w);
       return {
         version: 'b216-aaaaaaaa',
-        device: { configured: true, id: 'hat_v1', name: 'Hat' },
+        device: { configured: true, id: 'porkpie_hat', name: 'Hat' },
       } as never;
     });
     const { unmount } = render(<FirmwarePage />);

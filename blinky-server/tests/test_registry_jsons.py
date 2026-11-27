@@ -152,7 +152,7 @@ def test_registry_json_led_dimensions_are_positive(registry_path: Path) -> None:
         f"{registry_path.name}: ledWidth={w} x ledHeight={h} = "
         f"{w * h} LEDs. Both dimensions must be ≥1."
     )
-    # Sanity cap. The largest device in the fleet today is display_v1
+    # Sanity cap. The largest device in the fleet today is display
     # (32x32 = 1024). A 4-digit total likely indicates a typo (the
     # earlier ``ledType: 12390`` bug pattern in 4-digit territory was
     # already silently flashed and bricked two carts). 2048 leaves
@@ -196,21 +196,21 @@ def test_registry_json_orientation_and_layout_in_range(registry_path: Path) -> N
 # configured brightness (None: no key, the firmware's default of 100). A change here is a
 # deliberate per-device retune, never a side effect.
 FLEET_BRIGHTNESS = {
-    "big_bucket_v1.json": 100,
-    "bucket_v3.json": 80,
+    "big_bucket.json": 100,
+    "bucket.json": 80,
     "cart_inner.json": 200,
     "cart_outer.json": 200,
-    "cart_umbrella_v1.json": 200,
-    "display_v1.json": 150,
-    "hat_v1.json": None,
-    "long_tube_v1.json": 80,
+    "cart_umbrella.json": 200,
+    "display.json": 150,
+    "porkpie_hat.json": None,
+    "long_tube.json": 80,
     "scarf.json": None,
     "shannon_hat.json": None,
     "sourpuss_hat.json": None,
-    "tube_v2.json": 120,
+    "tube.json": 120,
 }
 # The test box's chips: the grid's nRF52840 and the ESP32-S3 wired to the same 8x8 layout.
-TEST_BOX_ENTRIES = {"testbox_grid_v1.json", "testbox_esp32.json"}
+TEST_BOX_ENTRIES = {"testbox_grid.json", "testbox_esp32.json"}
 
 
 def test_only_the_test_box_entries_are_dark() -> None:
@@ -225,19 +225,13 @@ def test_only_the_test_box_entries_are_dark() -> None:
     assert fleet == FLEET_BRIGHTNESS
 
 
-# Entries whose deviceId is already longer than the firmware stores; the device reports it cut
-# to 15 characters. Not renamed here: that's a fleet device's identity.
-TRUNCATED_ON_DEVICE = {"cart_umbrella_v1.json"}
-
-
 @pytest.mark.parametrize("registry_path", _registry_json_files(), ids=lambda p: p.name)
 def test_registry_json_names_fit_the_firmware(registry_path: Path) -> None:
     """The firmware stores ``deviceId`` in 16 bytes and ``deviceName`` in 32 (blinky-firmware's
     ConfigStorage::StoredDeviceConfig, NUL-terminated): a longer id comes back cut short from
     ``device show``, and the box's server would never see its chip match the entry."""
     cfg = json.loads(registry_path.read_text())
-    if registry_path.name not in TRUNCATED_ON_DEVICE:
-        assert len(cfg["deviceId"]) <= 15, f"{registry_path.name}: deviceId over 15 characters"
+    assert len(cfg["deviceId"]) <= 15, f"{registry_path.name}: deviceId over 15 characters"
     assert len(cfg["deviceName"]) <= 31, f"{registry_path.name}: deviceName over 31 characters"
 
 

@@ -22,7 +22,7 @@ async def test_connect_populates_info(mock_transport: MockTransport) -> None:
     assert device.state == DeviceState.CONNECTED
     assert device.version == "1.0.1"
     assert device.device_name == "Long Tube"
-    assert device.device_type == "long_tube_v1"
+    assert device.device_type == "long_tube"
     assert device.width == 4
     assert device.height == 60
     assert device.leds == 240

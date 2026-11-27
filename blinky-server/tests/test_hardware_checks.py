@@ -192,7 +192,7 @@ def test_a_deploy_failure_before_the_flash_is_a_rig_error() -> None:
 
 
 def test_json_info_sanity() -> None:
-    board = hc.BOARDS["testbox_grid_v1"]
+    board = hc.BOARDS["testbox_grid"]
     info = {
         "version": "b221",
         "platform": "nrf52840",
@@ -440,3 +440,21 @@ async def test_a_chip_that_disconnected_is_never_dropped_silently(
     got = await hc._guard("response", ["grid", "other"], body())
     assert {c["result"] for c in got["checks"]} == {hc.NO} and got["rig_error"] is None
     assert "not connected: other" in got["checks"][0]["evidence"]
+
+
+async def test_an_enrolled_chip_is_checked_as_its_registry_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A renamed entry: the grid's chip still reports its old id until a reboot applies the new
+    config (maybe this job's flash), so its board is the entry the box keeps it on."""
+
+    async def connected(ids: list[str]) -> list[Any]:
+        return [
+            SimpleNamespace(id="87DE9B58C90AFE2D", hardware_sn=None, device_type="testbox_grid_v1"),
+            SimpleNamespace(id="other", hardware_sn="OTHER", device_type="bench_chip"),
+        ]
+
+    monkeypatch.setattr(hc, "_connected", connected)
+    got = await hc.boards.__wrapped__(["87DE9B58C90AFE2D", "other"])  # type: ignore[attr-defined]
+    assert got == {"87DE9B58C90AFE2D": "testbox_grid", "other": "bench_chip"}
+    assert got["87DE9B58C90AFE2D"] in hc.BOARDS

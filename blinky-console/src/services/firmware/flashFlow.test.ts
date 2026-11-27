@@ -45,7 +45,7 @@ class FakeDevice implements Transport {
           ble: 'C2:11:22:33:44:55',
           millis: Date.now() - this.bootedAt,
           device: this.configured
-            ? { id: 'hat_v1', name: 'Hat', configured: true }
+            ? { id: 'porkpie_hat', name: 'Hat', configured: true }
             : { configured: false, safeMode: true },
           fps: 160,
           audioOverruns: 0,

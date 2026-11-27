@@ -347,7 +347,7 @@ async def cleanup_stale_ble_connections() -> None:
                 name = " ".join(parts[2:]) if len(parts) > 2 else ""
                 # Only disconnect Blinky/AdaDFU devices (not other BLE peripherals).
                 # Match by prefix — configured devices use names like
-                # "Blinky-hat_v1-84" once a device_type has been written.
+                # "Blinky-porkpie_hat-84" once a device_type has been written.
                 if name.startswith("Blinky") or name.startswith("AdaDFU"):
                     subprocess.run(
                         ["bluetoothctl", "disconnect", addr],

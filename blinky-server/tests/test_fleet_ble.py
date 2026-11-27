@@ -51,7 +51,7 @@ async def _make_fleet_with_sn() -> FleetManager:
             "sn": sn,
             "ble": f"AA:BB:CC:DD:EE:{i:02X}",
             "device": {
-                "id": "long_tube_v1",
+                "id": "long_tube",
                 "name": "Long Tube",
                 "width": 4,
                 "height": 60,
@@ -175,7 +175,7 @@ async def test_dedup_only_by_hardware_sn() -> None:
         "sn": "CCCC3333",  # Different hardware_sn
         "ble": "FF:FF:FF:FF:FF:01",
         "device": {
-            "id": "long_tube_v1",  # Same device type
+            "id": "long_tube",  # Same device type
             "name": "Long Tube",
             "width": 4,
             "height": 60,
@@ -703,7 +703,7 @@ async def test_discovery_plumbs_last_cmd_id_to_new_ble_device(
         platform="nrf52840",
         transport_type="ble",
         address="AA:BB:CC:DD:EE:01",
-        description="Blinky-tube_v2-01",
+        description="Blinky-tube-01",
         rssi=-55,
         extra={"last_cmd_id": 42},
     )

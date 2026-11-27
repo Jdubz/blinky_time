@@ -1,6 +1,6 @@
 {
-  "deviceId": "hat_v1",
-  "deviceName": "Hat Display",
+  "deviceId": "porkpie_hat",
+  "deviceName": "Porkpie Hat",
   "ledWidth": 89,
   "ledHeight": 1,
   "ledPin": 10,

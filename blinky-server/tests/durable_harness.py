@@ -111,7 +111,8 @@ devices = {
         alerts=[],
         subscribe_stream=subscribe_stream,
         unsubscribe_stream=lambda q: None,
-        device_type="testbox_grid_v1",
+        device_type="testbox_grid",
+        hardware_sn=None,
         ble_address="",
     )
     for d in DEVICES
@@ -355,7 +356,7 @@ async def hw_info(device: Any) -> dict[str, Any]:
         "audioOverruns": 0,
         "audioSamplesLost": 0,
         "device": {
-            "id": "testbox_grid_v1",
+            "id": "testbox_grid",
             "width": 8,
             "height": 8,
             "leds": 64,

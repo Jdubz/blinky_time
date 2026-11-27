@@ -1,6 +1,6 @@
 {
   "_status": "ESP32-S3 platform retired 2026-03 per CLAUDE.md; hardware exists but no firmware path today",
-  "deviceId": "display_v1",
+  "deviceId": "display",
   "deviceName": "Display",
   "ledWidth": 32,
   "ledHeight": 32,

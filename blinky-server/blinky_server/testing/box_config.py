@@ -42,7 +42,7 @@ log = logging.getLogger(__name__)
 
 # The box's chips, by USB serial: the registry entry each one runs.
 BOX_CHIPS = {
-    "87DE9B58C90AFE2D": "testbox_grid_v1",  # the permanent test chip, the 8x8 grid
+    "87DE9B58C90AFE2D": "testbox_grid",  # the permanent test chip, the 8x8 grid
     # The ESP32-S3 (testbox_esp32) is added once the box can flash current ESP32 firmware: its
     # 1.0.1 build refuses the entry (orientation 5), so it would only log a refused upload.
 }
@@ -106,9 +106,14 @@ def _save_state(state: dict[str, str]) -> None:
     state_path().write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
 
 
+def entry_name(device: Device) -> str | None:
+    """The registry entry the chip runs (its deviceId), or None for a chip that isn't enrolled."""
+    return BOX_CHIPS.get(device.id) or BOX_CHIPS.get(device.hardware_sn or "")
+
+
 def entry_for(device: Device) -> dict[str, Any] | None:
     """The chip's registry entry, or None for a chip that isn't enrolled."""
-    name = BOX_CHIPS.get(device.id) or BOX_CHIPS.get(device.hardware_sn or "")
+    name = entry_name(device)
     if name is None:
         return None
     return dict(json.loads((REGISTRY_DIR / f"{name}.json").read_text()))

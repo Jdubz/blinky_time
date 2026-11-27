@@ -16,20 +16,22 @@ other.
 
 | Device ID | Description | LEDs | Layout | File |
 |-----------|-------------|------|--------|------|
-| `hat_v1` | Festival Hat v1 | 89 (linear string) | LINEAR, single strand on D10. Battery-powered. A test device for candidates and `--dev` builds (blinky-firmware's `devices/test_devices.json`). | `hat_v1.json` |
-| `sourpuss_hat` | Sourpuss Hat | 70 (linear string) | LINEAR, single strand on D10. Battery-powered. New hat, distinct from `hat_v1`. | `sourpuss_hat.json` |
+| `porkpie_hat` | Porkpie Hat | 89 (linear string) | LINEAR, single strand on D10. Battery-powered. A test device for candidates and `--dev` builds (blinky-firmware's `devices/test_devices.json`). | `porkpie_hat.json` |
+| `sourpuss_hat` | Sourpuss Hat | 70 (linear string) | LINEAR, single strand on D10. Battery-powered. New hat, distinct from `porkpie_hat`. | `sourpuss_hat.json` |
 | `scarf` | Scarf | 141 (linear string) | LINEAR, single strand on D0. Battery-powered. | `scarf.json` |
 | `shannon_hat` | Shannon Hat | 79 (linear string) | LINEAR, single strand on D0. Battery-powered. Same build as `scarf` apart from LED count. | `shannon_hat.json` |
-| `tube_v2` | Tube Light v2 | 60 (4×15 matrix) | MATRIX, vertical zigzag on D10. Battery-powered. | `tube_v2.json` |
-| `bucket_v3` | Bucket Totem v3 | 128 (16×8 matrix) | MATRIX, horizontal row-major on D10. Z-inverted. | `bucket_v3.json` |
-| `big_bucket_v1` | Big Bucket | 112 (14×8 matrix) | MATRIX, horizontal zigzag (serpentine) on D0. A generator-cycle button is wired on D1 but disabled (`buttonPin=0`) because of ghost presses (#222). **Outlier:** `ledType=6` (NEO_RGB) because the LED part is wired native RGB, not the fleet-standard GRB. | `big_bucket_v1.json` |
+| `tube` | Tube Light | 60 (4×15 matrix) | MATRIX, vertical zigzag on D10. Battery-powered. | `tube.json` |
+| `bucket` | Bucket Totem | 128 (16×8 matrix) | MATRIX, horizontal row-major on D10. Z-inverted. | `bucket.json` |
+| `big_bucket` | Big Bucket | 112 (14×8 matrix) | MATRIX, horizontal zigzag (serpentine) on D0. A generator-cycle button is wired on D1 but disabled (`buttonPin=0`) because of ghost presses (#222). **Outlier:** `ledType=6` (NEO_RGB) because the LED part is wired native RGB, not the fleet-standard GRB. | `big_bucket.json` |
 | `cart_inner` | Cart Inner | 104 (linear, two 52-LED strands) | LINEAR, strand 1 on D10 + strand 2 on D9; firmware splits the 104-pixel buffer in half across the two pins. | `cart_inner.json` |
 | `cart_outer` | Cart Outer | 96 (linear single strand) | LINEAR, single strand on D10. | `cart_outer.json` |
-| `long_tube_v1` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube_v1.json` |
-| `cart_umbrella_v1` | Cart Umbrella | 104 (8×13 matrix) | MATRIX, `VERTICAL_FIRST_DOWN` (orientation 4) on D10. Confirmed against hardware 2026-05-18. | `cart_umbrella_v1.json` |
-| `testbox_grid_v1` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The test box's entries are the only ones with brightness 0. | `testbox_grid_v1.json` |
-| `testbox_esp32` | Test Box Grid ESP32-S3 | 64 (8×8 matrix) | The test box's XIAO ESP32-S3, wired to the same layout as `testbox_grid_v1` (orientation 5, GRB, `brightness: 0`) with LED data on D0, which is `ledPin: 1` (GPIO1, see `ledPin` below). Not in `BOX_CHIPS` until the box can flash current ESP32 firmware (`docs/TEST_BOX.md`). | `testbox_esp32.json` |
-| `display_v1` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today (next gen: `docs/NEXTGEN_ESP32S3_PLAN.md`). | `display_v1.json` |
+| `long_tube` | Long Tube | 240 (4×60 matrix) | MATRIX, vertical zigzag on D10. | `long_tube.json` |
+| `cart_umbrella` | Cart Umbrella | 104 (8×13 matrix) | MATRIX, `VERTICAL_FIRST_DOWN` (orientation 4) on D10. Confirmed against hardware 2026-05-18. | `cart_umbrella.json` |
+| `testbox_grid` | Test Box Grid | 64 (8×8 matrix) | MATRIX, `HORIZONTAL_ROTATED_180` (orientation 5) on D10. The test box's chip (Sense Plus 87DE9B58C90AFE2D, a test device). **`brightness: 0`:** the grid is dark at boot and while idle; blinky-server lights it with the firmware's runtime `leds` override only while a test runs (`docs/TEST_BOX.md`). The test box's entries are the only ones with brightness 0. | `testbox_grid.json` |
+| `testbox_esp32` | Test Box Grid ESP32-S3 | 64 (8×8 matrix) | The test box's XIAO ESP32-S3, wired to the same layout as `testbox_grid` (orientation 5, GRB, `brightness: 0`) with LED data on D0, which is `ledPin: 1` (GPIO1, see `ledPin` below). Not in `BOX_CHIPS` until the box can flash current ESP32 firmware (`docs/TEST_BOX.md`). | `testbox_esp32.json` |
+| `display` | Display | 1024 (32×32 panel grid) | MATRIX, PANEL_GRID orientation on D10. **ESP32-S3 platform retired 2026-03** — hardware exists but no firmware path today (next gen: `docs/NEXTGEN_ESP32S3_PLAN.md`). | `display.json` |
+
+**Ids carry no version.** A device is one physical object, and the firmware has its own versions. The version suffixes were dropped on 2026-11-27: `hat_v1` is now `porkpie_hat`, and `bucket_v3`, `big_bucket_v1`, `tube_v2`, `long_tube_v1`, `cart_umbrella_v1`, `display_v1` and `testbox_grid_v1` lost their suffixes. A fleet device reports its old id until its entry is uploaded again (see "Uploading a Device Config" below). Until then the old id only shows as its device type: blinky-server keys devices by chip, never by this id. Past runs, reports and issues keep the old names. The test box's chip takes its new entry by itself.
 
 ## JSON Schema
 
@@ -67,17 +69,17 @@ Add only when this device needs a non-default value:
 |---|---|---|
 | `ledPin2` | `0` (single-strand) | Multi-strand devices (e.g. cart_inner has two 52-LED strands on pins 10 + 9; firmware splits the buffer in half) |
 | `brightness` | `100` | Per-device tuning. `0` only for the test box's chip (dark unless a test runs) |
-| `battery` | `false` | Battery-equipped devices only (today: tube_v2, hat_v1, sourpuss_hat, scarf, shannon_hat). When `true`, the firmware enables battery monitoring + fast charge and applies the **static** `Platform::Battery::*` thresholds (LiPo: low=3.5V, critical=3.3V, min=3.0V, max=4.2V). These values are NOT configurable per device — they are chemistry-derived constants in `blinky-things/hal/PlatformConstants.h`. When `false`/omitted, battery code paths are skipped entirely. |
+| `battery` | `false` | Battery-equipped devices only (today: tube, porkpie_hat, sourpuss_hat, scarf, shannon_hat). When `true`, the firmware enables battery monitoring + fast charge and applies the **static** `Platform::Battery::*` thresholds (LiPo: low=3.5V, critical=3.3V, min=3.0V, max=4.2V). These values are NOT configurable per device — they are chemistry-derived constants in `blinky-things/hal/PlatformConstants.h`. When `false`/omitted, battery code paths are skipped entirely. |
 | `upVectorX` / `upVectorY` / `upVectorZ` | `0` / `0` / `1` | When the device is mounted with a non-vertical "up" |
 | `rotationDegrees` | `0` | When the device's "north" is rotated relative to the chip |
-| `invertZ` | `false` | LEDs facing downward (bucket_v3) |
+| `invertZ` | `false` | LEDs facing downward (bucket) |
 | `swapXY` | `false` | LED data path runs columns-as-rows |
 | `invertX` / `invertY` | `false` | Strip wired right-to-left or bottom-to-top |
 | `baudRate` | `115200` | Never — universal |
 | `initTimeoutMs` | `2000` | Never — universal |
 | `sampleRate` | `16000` | Never — universal (other valid: 8000/32000/44100/48000) |
 | `bufferSize` | `32` | Never — universal |
-| `buttonPin` | `0` (no button) | When a physical generator-cycle button is wired and wanted (big_bucket_v1 has one on D1, currently disabled). Must differ from `ledPin` / `ledPin2` |
+| `buttonPin` | `0` (no button) | When a physical generator-cycle button is wired and wanted (big_bucket has one on D1, currently disabled). Must differ from `ledPin` / `ledPin2` |
 
 ### ledType constants
 
@@ -86,7 +88,7 @@ allocates 3 bytes per pixel, so NEO_RGBW-style values (any offset > 2)
 are rejected at construction with an `[ERROR]` log.
 
 - `82` = `NEO_GRB + NEO_KHZ800` — standard WS2812B (fleet default for new configs)
-- `6` = `NEO_RGB` — used by big_bucket_v1 because that panel's LED part is wired in native RGB order
+- `6` = `NEO_RGB` — used by big_bucket because that panel's LED part is wired in native RGB order
 
 **Do NOT use `12390` (0x3066).** Earlier revisions of this doc claimed `12390 = NEO_GRB + NEO_KHZ800`. That's incorrect — `NEO_GRB + NEO_KHZ800` is `0x52 = 82`. The lower byte of 12390 is `0x66 = 0b01100110`, which the firmware decodes as `rOffset=2, gOffset=1, bOffset=2`. With R and B both at byte-offset 2, every pixel write puts R and B at the same byte slot (visible as blue-channel-missing colors on pre-`752ebc16` builds). Post-`752ebc16` the driver validates and refuses to construct, the `if (!asyncStrip->isValid())` check in setup hits `haltWithError`, the WDT trips, and after 3 boot failures the device falls into BLE-DFU recovery — exactly the configured-boot crash observed 2026-05-18 on cart_inner and cart_outer.
 
@@ -96,13 +98,13 @@ are rejected at construction with an `[ERROR]` log.
 - `1` = VERTICAL — column-major zigzag (data snakes column-by-column, common for vertical tube fixtures)
 - `2` = PANEL_GRID — 2×2 of equal sub-panels chained TL→TR→BL→BR, each sub-panel row serpentine
 - `3` = HORIZONTAL_ZIGZAG — row-major serpentine: row 0 L→R, row 1 R→L, row 2 L→R, … (single strip snaked back and forth, big-bucket-style hand-wired panels)
-- `4` = VERTICAL_FIRST_DOWN — column-major, NO zigzag. Column 0 data enters at the TOP and flows down. Columns 1..N each have data entering at the BOTTOM, flowing up — ALL in the same direction (no alternation between adjacent columns). Used on `cart_umbrella_v1`: the first spoke's data comes off the controller down the canopy-to-tip leg; from the tip a long jumper runs to each subsequent spoke's tip, so every other spoke is wired bottom→top.
-- `5` = HORIZONTAL_ROTATED_180 — HORIZONTAL turned 180°: data enters at the bottom-right LED, each row runs right to left, rows go bottom to top, no serpentine. Used on `testbox_grid_v1`.
+- `4` = VERTICAL_FIRST_DOWN — column-major, NO zigzag. Column 0 data enters at the TOP and flows down. Columns 1..N each have data entering at the BOTTOM, flowing up — ALL in the same direction (no alternation between adjacent columns). Used on `cart_umbrella`: the first spoke's data comes off the controller down the canopy-to-tip leg; from the tip a long jumper runs to each subsequent spoke's tip, so every other spoke is wired bottom→top.
+- `5` = HORIZONTAL_ROTATED_180 — HORIZONTAL turned 180°: data enters at the bottom-right LED, each row runs right to left, rows go bottom to top, no serpentine. Used on `testbox_grid`.
 
 ### Battery support
 
 A single boolean field — `"battery": true` — switches on monitoring +
-fast charge for battery-equipped devices (tube_v2, hat_v1, sourpuss_hat,
+fast charge for battery-equipped devices (tube, porkpie_hat, sourpuss_hat,
 scarf, shannon_hat today). The
 threshold values are NOT configurable per device; they're chemistry-
 constants in blinky-firmware's `blinky-things/hal/PlatformConstants.h`:
@@ -130,8 +132,8 @@ After an upload, wait at least 75 s of uptime before any reset, so `markStable()
 
 ## Creating a Custom Device Config
 
-1. Copy an existing JSON file (e.g., `hat_v1.json`)
-2. Rename it with a unique device ID (e.g., `custom_hat_v2.json`)
+1. Copy an existing JSON file (e.g., `porkpie_hat.json`)
+2. Rename it with a unique device ID (e.g., `custom_hat.json`)
 3. Modify the values:
    - Update `deviceId` and `deviceName`
    - Set `ledWidth` and `ledHeight` to match your LED count

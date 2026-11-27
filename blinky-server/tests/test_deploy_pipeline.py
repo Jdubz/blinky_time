@@ -100,7 +100,7 @@ class FakeJob:
 def _fleet() -> FakeFleet:
     return FakeFleet(
         [
-            FakeDevice("hat_v1"),
+            FakeDevice("porkpie_hat"),
             FakeDevice("ble_lamp", state=DeviceState.PRESENT),
             FakeDevice("stuck", state=DeviceState.DFU_RECOVERY),
             FakeDevice("gone", state=DeviceState.DISCONNECTED),
@@ -114,12 +114,12 @@ def _fleet() -> FakeFleet:
 
 def test_all_means_connected_or_present_nrf52840_only() -> None:
     ids = [d.id for d in dp.resolve_targets(_fleet(), "all")]
-    assert ids == ["hat_v1", "ble_lamp"]
+    assert ids == ["porkpie_hat", "ble_lamp"]
 
 
 def test_explicit_list_may_name_a_device_in_its_bootloader() -> None:
-    ids = [d.id for d in dp.resolve_targets(_fleet(), ["stuck", "hat_v1", "hat_v1"])]
-    assert ids == ["stuck", "hat_v1"]  # de-duplicated, order kept
+    ids = [d.id for d in dp.resolve_targets(_fleet(), ["stuck", "porkpie_hat", "porkpie_hat"])]
+    assert ids == ["stuck", "porkpie_hat"]  # de-duplicated, order kept
 
 
 @pytest.mark.parametrize(
@@ -222,7 +222,7 @@ async def test_restore_then_save_and_stop_on_failure() -> None:
     assert fleet.broadcasts == ["restore_runtime_settings", "save"]
 
     fleet = _fleet()
-    fleet.broadcast_result = {"broadcast": "OK", "hat_v1": "ERR"}
+    fleet.broadcast_result = {"broadcast": "OK", "porkpie_hat": "ERR"}
     with pytest.raises(DeployError, match="restore_runtime_settings did not land"):
         await dp.restore_and_save(fleet)
     assert fleet.broadcasts == ["restore_runtime_settings"]  # never saved half-restored state
@@ -232,8 +232,8 @@ async def test_restore_then_save_and_stop_on_failure() -> None:
 
 
 async def test_assertion_passes_on_the_right_version() -> None:
-    rows = await dp.assert_post_deploy(_fleet(), ["hat_v1", "ble_lamp"], STABLE_VERSION)
-    assert rows["hat_v1"]["ok"] and rows["ble_lamp"]["ok"]
+    rows = await dp.assert_post_deploy(_fleet(), ["porkpie_hat", "ble_lamp"], STABLE_VERSION)
+    assert rows["porkpie_hat"]["ok"] and rows["ble_lamp"]["ok"]
 
 
 @pytest.mark.parametrize(
@@ -241,14 +241,17 @@ async def test_assertion_passes_on_the_right_version() -> None:
     [
         (
             FakeDevice(
-                "hat_v1",
+                "porkpie_hat",
                 info={"version": "b214-7a4664d6", "audioOverruns": 0, "audioSamplesLost": 0},
             ),
             "version",
         ),
-        (FakeDevice("hat_v1", info={"version": STABLE_VERSION, "fps": 140.0}), "overrun counters"),
-        (FakeDevice("hat_v1", state=DeviceState.DFU_RECOVERY), "dfu_recovery"),
-        (FakeDevice("hat_v1", info=TimeoutError("no reply")), "unreachable"),
+        (
+            FakeDevice("porkpie_hat", info={"version": STABLE_VERSION, "fps": 140.0}),
+            "overrun counters",
+        ),
+        (FakeDevice("porkpie_hat", state=DeviceState.DFU_RECOVERY), "dfu_recovery"),
+        (FakeDevice("porkpie_hat", info=TimeoutError("no reply")), "unreachable"),
     ],
 )
 async def test_assertion_fails_loudly(
@@ -256,7 +259,7 @@ async def test_assertion_fails_loudly(
 ) -> None:
     monkeypatch.setattr(dp, "JSON_INFO_RETRY_S", 0.0)
     with pytest.raises(DeployError) as e:
-        await dp.assert_post_deploy(FakeFleet([device]), ["hat_v1"], STABLE_VERSION)
+        await dp.assert_post_deploy(FakeFleet([device]), ["porkpie_hat"], STABLE_VERSION)
     assert match in json.dumps(e.value.detail)
 
 
@@ -292,7 +295,7 @@ async def _deploy(
         fleet,
         FakeJob(),
         release_tag=None,
-        device_ids=["hat_v1"],
+        device_ids=["porkpie_hat"],
         download_dir=tmp_path,
         store_firmware=lambda p, tag: stored,
         flash=flash,
@@ -306,10 +309,10 @@ async def test_deploy_runs_every_step(monkeypatch: pytest.MonkeyPatch, tmp_path:
     result, flashed = await _deploy(fleet, monkeypatch, tmp_path)
     assert result["status"] == "ok", result
     assert list(result["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
-    assert flashed == [(["hat_v1"], tmp_path / "firmware.hex")]
+    assert flashed == [(["porkpie_hat"], tmp_path / "firmware.hex")]
     assert fleet.recovery == (
         str(tmp_path / "firmware.hex"),
-        ["hat_v1"],
+        ["porkpie_hat"],
     )  # armed for exactly the targets
     assert fleet.broadcasts == ["restore_runtime_settings", "save"]
 
@@ -339,7 +342,7 @@ STAGING_VERSION = f"b215-dev-{STAGING_SHA[:8]}"
 
 
 def _staging_run(tmp_path: Path, rel: dict[str, Any] | None = None) -> Any:
-    """firmware_release.py as subprocess: hat_v1 is the only test device; download-staging
+    """firmware_release.py as subprocess: porkpie_hat is the only test device; download-staging
     answers with ``rel``."""
     hex_path = tmp_path / "blinky-things-b215.hex"
     hex_path.write_text(":00000001FF\n")
@@ -367,12 +370,12 @@ async def _staging_deploy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     *,
-    device_ids: Any = ("hat_v1",),
+    device_ids: Any = ("porkpie_hat",),
     rel: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[Any], list[Any]]:
     monkeypatch.setattr(dp.subprocess, "run", _staging_run(tmp_path, rel))
     for d in fleet.devices.values():
-        if d.id == "hat_v1":
+        if d.id == "porkpie_hat":
             d.protocol.info = {**d.protocol.info, "version": STAGING_VERSION}  # type: ignore[dict-item]
     flashed: list[Any] = []
     stored: list[Any] = []
@@ -407,16 +410,16 @@ async def test_staging_deploy_runs_every_step_and_never_arms_recovery(
     assert result["status"] == "ok" and result["version"] == STAGING_VERSION, result
     assert result["steps"]["store"]["flash_t"] > 0  # the staging suite's alert window opens here
     assert list(result["steps"]) == ["targets", "release", "store", "flash", "settings", "verify"]
-    assert flashed == [(["hat_v1"], tmp_path / "staging.hex")] and stored == [STAGING_VERSION]
+    assert flashed == [(["porkpie_hat"], tmp_path / "staging.hex")] and stored == [STAGING_VERSION]
     assert fleet.recovery is None  # #251: only a stable image arms auto-recovery
     # Settings on the target only: nothing is broadcast to the rest of the fleet.
     assert fleet.broadcasts == []
-    hat = fleet.devices["hat_v1"].protocol.sent
+    hat = fleet.devices["porkpie_hat"].protocol.sent
     assert [c for c in hat if c != "json info"] == ["restore_runtime_settings", "save"]
     assert all(
         c == "json info"
         for d in fleet.devices.values()
-        if d.id != "hat_v1"
+        if d.id != "porkpie_hat"
         for c in d.protocol.sent
     )
 
@@ -435,7 +438,7 @@ async def test_staging_deploy_refuses_unless_the_server_is_the_test_box(
     ("device_ids", "match"),
     [
         (["unconfigured"], "unconfigured chips"),
-        (["hat_v1", "unconfigured"], "unconfigured chips"),
+        (["porkpie_hat", "unconfigured"], "unconfigured chips"),
         ("all", "explicit list of test devices"),
     ],
 )
@@ -458,14 +461,14 @@ async def test_staging_deploy_takes_any_configured_chip_on_the_box(
 ) -> None:
     # No test-device list on the box: a chip configured as anything is a test chip there.
     fleet = _fleet()
-    grid = FakeDevice("testbox_grid_v1")
+    grid = FakeDevice("testbox_grid")
     fleet.devices[grid.id] = grid
     grid.protocol.info = {**grid.protocol.info, "version": STAGING_VERSION}  # type: ignore[dict-item]
     result, flashed, _ = await _staging_deploy(
-        fleet, monkeypatch, tmp_path, device_ids=["testbox_grid_v1"]
+        fleet, monkeypatch, tmp_path, device_ids=["testbox_grid"]
     )
     assert result["status"] == "ok", result
-    assert flashed == [(["testbox_grid_v1"], tmp_path / "staging.hex")]
+    assert flashed == [(["testbox_grid"], tmp_path / "staging.hex")]
 
 
 @pytest.mark.parametrize(
@@ -545,7 +548,7 @@ async def test_staging_route_is_off_unless_the_server_runs_with_staging(
     client: AsyncClient,
 ) -> None:
     r = await client.post(
-        "/api/fleet/deploy-staging", json={"sha": STAGING_SHA, "device_ids": ["hat_v1"]}
+        "/api/fleet/deploy-staging", json={"sha": STAGING_SHA, "device_ids": ["porkpie_hat"]}
     )
     assert r.status_code == 403 and "--staging" in r.text
 
@@ -555,7 +558,7 @@ async def test_staging_route_validates_its_request(client: AsyncClient) -> None:
 
     get_fleet().staging_enabled = True
     for body in (
-        {"sha": STAGING_SHA[:12], "device_ids": ["hat_v1"]},  # not a full sha
+        {"sha": STAGING_SHA[:12], "device_ids": ["porkpie_hat"]},  # not a full sha
         {"sha": STAGING_SHA, "device_ids": []},  # no scope
         {"sha": STAGING_SHA, "device_ids": "all"},  # never "all"
     ):
