@@ -594,7 +594,7 @@ def test_deploys_into_the_other_slot_then_switches(box: dict[str, Any]) -> None:
     [
         ["ml-training/train.py"],
         ["tools/device_eval.py", "docs/x.md", "ml-training/configs/x.yaml"],
-        [".github/workflows/pr-validation.yml", "devices/registry/hat_v1.json", "CLAUDE.md"],
+        [".github/workflows/pr-validation.yml", "docs/DEVICES.md", "CLAUDE.md"],
         # A firmware pin bump: the server reads nothing from the firmware checkout.
         ["firmware"],
         ["firmware", "docs/TEST_BOX.md"],
@@ -622,6 +622,7 @@ def test_a_commit_outside_the_server_moves_the_ref_and_restarts_nothing(
         "blinky-console/src/App.tsx",
         "blinky-console/src/café del mar.ts",  # non-ASCII and spaces
         "scripts/testbox/deploy.py",
+        "devices/registry/testbox_grid_v1.json",
         "corpus",
     ],
 )

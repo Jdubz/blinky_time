@@ -55,7 +55,7 @@ From its schematic and firmware; details and sources in blinky-firmware's [SWD_R
 
 The grid is lit only while a test runs (owner, 2026-11-24). Only the box's chip works this way; every fleet device keeps booting lit, in Fire, at its configured brightness.
 
-- **Idle and at boot: dark.** The chip's device config, `devices/registry/testbox_grid_v1.json`, has `brightness: 0`. A reboot, a flash or a deploy leaves it dark.
+- **Idle and at boot: dark.** The chip's device config, `devices/registry/testbox_grid_v1.json`, has `brightness: 0`, and the server keeps the chip on it (see "Chip config from the registry"). A reboot, a flash or a deploy leaves it dark.
 - **During a run: lit at 40.** Test runs light the chip with the firmware's runtime-only `leds` override (blinky-firmware `render/LedBrightness.h`; `leds 0-255 | off | config | status`, never saved), at `TEST_BRIGHTNESS` (`blinky_server/testing/leds.py`): the brightness the camera's exposure and gain were set for (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Levels"). It is a box setting, not a device one: any chip in the grid's place needs the camera's level.
 - **After a run, however it ends** (pass, failure, cancel, a drain's stop): `leds config`, back to the config's brightness (dark).
 - **Restarts.** Lighting is per-run setup in the workflow body, so a job recovered after a restart lights the chip again. When the chip (re)connects, the server sets it back to its config brightness unless a run in this process holds it lit, so a run cut off by a crash doesn't leave it lit.
@@ -72,6 +72,18 @@ Per run type:
 | Camera calibration (`camera_calibrate.py`, `--brightness`, default 40) | for the script | yes | the script refuses |
 
 A camera survey (`camera_capture.py survey`) runs outside any job: light the chip first (`leds 40` through `POST /api/devices/{id}/command`) and send `leds config` after.
+
+## Chip config from the registry
+
+The box's server keeps each enrolled chip on its registry entry (`blinky_server/testing/box_config.py`). Nobody uploads a box chip's config by hand.
+
+- **Which entry.** `BOX_CHIPS` maps a chip's USB serial to its entry: the grid's chip, `87DE9B58C90AFE2D`, runs `testbox_grid_v1`. A chip that isn't listed is left alone and logged (`no registry entry for this chip`): today the ESP32-S3, until its wiring and entry are known.
+- **When.** On every connect, before the chip counts as connected: a boot, a flash, a reconnect, a server restart. That is the one code path. Every run flashes first, so every run starts on a checked config.
+- **Compare first.** `device show` (the stored config, with the firmware's defaults for the fields the entry leaves out) and `json info` (the running one) against the entry. A match writes nothing and costs one command.
+- **Upload, then reboot once.** If the stored config differs, the server sends `device upload <entry>` (straight to the chip, #382: no deploy header). An upload applies at the next boot, so the server reboots the chip once it has been up 75 s (past markStable: the 60-second rule) and only if nothing uses it then: no test job, no flash, no run holding its LEDs, no held work. Busy, it is left for its next reboot (a run's flash).
+- **No loops.** Each reboot is recorded against the entry's hash (`~/.local/share/blinky-server/box-config.json`). A chip that still differs after a reboot for the same entry gets an ERROR in the log (`still differs from its registry entry`) and is left alone until the entry changes or the chip matches. A match clears the record, so a later drift (the reboot-counter quarantine, a hand upload) is fixed again.
+- **Changing an entry** restarts the server (`devices/registry/` is in the deployer's SERVER_PATHS), and the chips reconnect onto it.
+- **Logs.** `journalctl -u blinky-server | grep -i "registry entry"`: `matches its registry entry`, `uploading its registry entry` (with the fields that differed), `rebooting to apply`.
 
 ## Audio start
 
@@ -151,7 +163,7 @@ Three behaviours to expect: the server doesn't auto-recover a device within 30 m
    defaults.ctl.!card Pebbles
    ```
    Check with `ffplay -nodisp -autoexit <track>.mp3`. `BLINKY_AUDIO_PCM` in the server's environment names another PCM for the player.
-5. **Enroll a chip** with its device config through `device upload` (on the box, straight to the chip, #382), and respect the 60-second rule between resets. The grid's chip takes `devices/registry/testbox_grid_v1.json` (brightness 0: see "LEDs: dark unless a test runs").
+5. **Enroll a chip** by PR: its registry entry in `devices/registry/` and its USB serial in `BOX_CHIPS` (`blinky_server/testing/box_config.py`). The server configures it when it connects (see "Chip config from the registry"). The grid's chip takes `devices/registry/testbox_grid_v1.json` (brightness 0: see "LEDs: dark unless a test runs").
 
 ## Build service client
 
@@ -317,7 +329,7 @@ When the box, its runners or its chip break, an alert says so. The central LGTM 
 | `BlinkyBoxRunnerTimerStopped` | a runner's timer stopped, or not triggered for an hour | `systemctl list-timers 'blinky-*'`, `sudo systemctl enable --now <timer>`. |
 | `BlinkyDeployHeadRefused` | the deployer has refused master's head for 15 min (red check, review findings, failed prepare, or rolled back) | `deploy.py --status` for the reason; fix master, or the owner's `deploy.py --accept SHA "reason"`. |
 | `BlinkyTestChipDown` | a chip connected in the last 7 days not connected for 45 min; the summary names its state (`dfu_recovery`, `error`, `disconnected`, or gone) | The USB auto-recovery had its chance (the 120 s park, the 30-min guard). `dev.py status`, then the recovery chain above: SWD restore, then both hub ports. |
-| `BlinkyTestChipUnconfigured` | a connected chip that had a device type in the last 7 days reports none for 30 min | `device upload` its registry entry, 60 s after its last reset. |
+| `BlinkyTestChipUnconfigured` | a connected chip that had a device type in the last 7 days reports none for 30 min | An enrolled chip is configured by the server on connect ("Chip config from the registry"): its log says why not (`still differs`, `refused`). A chip not in `BOX_CHIPS` needs its entry enrolled. |
 | `BlinkyHardwareCheckRigError` | 6 rig errors in a row on one head (about an hour of the backoff); rig faults stay pending, never red | The runner's log names the fault (camera, speaker, build service, flash); then `--retest`. |
 | `BlinkyTestBoxHot` | the SoC above 80 °C for 10 min (throttles at 85; normal 45-55) | The fan, and what runs on the box: heavy work goes to CI or the Spark. |
 | `BlinkyTestBoxUndervoltage` | the Pi's under-voltage alarm on 3+ samples in 30 min | `vcgencmd get_throttled`; the supply or the powered hub (hardware, the owner). |
