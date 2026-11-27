@@ -138,7 +138,7 @@ Today one app, blinky-console ("Blinky Fleet"), is both the fleet UI (blinky-ser
 
 Decided 2026-11-23: the old SWD Pi is retired; SWD recovery is the test box's XIAO Debug Mate only. Record mode waits until after P1–P3.
 
-Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate observability. What P0 uses from the platform (surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7123790919)): box logs, metrics and traces go to the existing Grafana stack on the NAS, reports and captures go to the artifact store, and heavy analysis runs as Spark jobs.
+Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate observability. What P0 uses from the platform (surveyed in [#386](https://github.com/Jdubz/blinky_time/issues/386#issuecomment-7225694177)): box logs, metrics and traces go to the existing Grafana stack on the NAS, reports and captures go to the artifact store, and heavy analysis runs as Spark jobs.
 
 Still open:
 
