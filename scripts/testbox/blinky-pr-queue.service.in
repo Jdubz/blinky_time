@@ -16,7 +16,7 @@ ExecStart=/usr/bin/python3 @DEPLOY_DIR@/scripts/testbox/pr_queue.py
 # gh's auth, ~/.blinky-api-key, ~/.config/blinky/build.env and the state file live in the
 # user's home.
 Environment=HOME=@HOME_DIR@
-# A pass only submits builds and the smoke test, or polls them (the test runs in blinky-server
+# A pass only submits builds and the hardware checks, or polls them (the checks run in blinky-server
 # as a durable job, the build on the build service).
 TimeoutStartSec=5min
 SyslogIdentifier=blinky-pr-queue

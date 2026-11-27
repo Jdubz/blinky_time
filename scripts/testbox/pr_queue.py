@@ -109,6 +109,10 @@ QUALITY_NOTE = (
 )
 
 Server = Callable[..., Any]
+# Why the last pass couldn't finish (GitHub unreachable or failing), or None: main() then exits
+# 1, so the unit fails and the LGTM alert BlinkyBoxRunnerFailing sees a runner whose every pass
+# fails (it keys on the unit never going back to inactive), not a string of quiet exits.
+PASS_ERROR: str | None = None
 
 
 class Builds(Protocol):
@@ -469,6 +473,9 @@ def submit(gh_: Gh, server: Server, state: dict[str, Any], mode: dict[str, Any])
         "rig_errors": item.get("rig_errors") or 0,
     }
     del queue[number]
+    # Saved before anything is posted: a status that fails to post (GitHub flaking) must not
+    # lose the job, or the next pass would submit the head again (staging.py saves first too).
+    save_state(state)
     status(gh_, item["sha"], "pending", f"hardware checks on {len(devices)} test device(s)")
     log(f"{item['sha'][:12]} (#{number}): hardware checks {job['job_id']} on {devices}")
 
@@ -487,11 +494,13 @@ def report_queue(server: Server, state: dict[str, Any]) -> None:
 
 
 def _pass(gh_: Gh, server: Server, builds: Callable[[], Builds]) -> dict[str, Any]:
+    global PASS_ERROR
     state = load_state()
     try:
         prs = open_prs(gh_)
     except (RuntimeError, ValueError) as e:
-        log(f"can't list the open PRs ({str(e)[:200]}); next pass")
+        PASS_ERROR = f"can't list the open PRs ({str(e)[:200]})"
+        log(f"{PASS_ERROR}; next pass")
         return state
     state.setdefault("queue", {})
     # Settled heads of PRs no longer open: forgotten.
@@ -538,12 +547,15 @@ def build_service() -> Builds:
 def run_once(
     gh_: Gh = gh, server: Server = http, builds: Callable[[], Builds] = build_service
 ) -> dict[str, Any]:
+    global PASS_ERROR
+    PASS_ERROR = None
     try:
         state = _pass(gh_, server, builds)
     except (RuntimeError, subprocess.TimeoutExpired) as e:
         # GitHub failing mid-pass (a status or comment that didn't post): what was saved
         # stands, and what wasn't is done again next pass. The queue is still reported.
-        log(f"GitHub: {str(e)[:300]}; next pass")
+        PASS_ERROR = f"GitHub: {str(e)[:300]}"
+        log(f"{PASS_ERROR}; next pass")
         state = load_state()
     report_queue(server, state)
     return state
@@ -581,7 +593,7 @@ def main(argv: list[str] | None = None) -> int:
         log(retest(str(int(args.retest))))
         return 0
     run_once()
-    return 0
+    return 1 if PASS_ERROR else 0
 
 
 if __name__ == "__main__":
