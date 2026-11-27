@@ -666,7 +666,7 @@ def test_unhealthy_switches_back_and_refuses_the_commit(box: dict[str, Any]) -> 
 def test_a_refused_head_is_logged_every_pass(
     box: dict[str, Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The alert BlinkyDeployHeadRefused matches this line while it holds, so it repeats."""
+    """The refusal is logged on every pass while it holds, not once."""
     box["healthy"] = [False, True]
     assert deploy.deploy_once() == 1
     capsys.readouterr()
