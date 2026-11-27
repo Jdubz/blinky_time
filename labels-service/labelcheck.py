@@ -298,8 +298,8 @@ def check_schema(doc: Any, stem: str, audio_sha256: str, mdur: float | None) -> 
     extra = sorted(set(doc) - set(HUMAN_KEYS) - {NOTES_KEY})
     if missing:
         p.append(f"missing keys: {', '.join(missing)}")
-    if extra:
-        p.append(f"unknown keys: {', '.join(extra)}")
+    if extra:  # the keys are untrusted text: repr, so a newline can't start a workflow command
+        p.append(f"unknown keys: {', '.join(repr(k)[:80] for k in extra[:20])}")
     if missing:
         return p
     if doc["schema"] != SCHEMA:
@@ -535,6 +535,12 @@ def check_all(repo: Path) -> list[str]:
     return p
 
 
+def gh_escape(text: str) -> str:
+    """Text for a GitHub workflow command (::error::...): a problem can quote untrusted label-file
+    content, and a raw line break in it would start a command of its own."""
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     g = ap.add_mutually_exclusive_group(required=True)
@@ -550,7 +556,7 @@ def main(argv: list[str] | None = None) -> int:
     problems = check_all(args.repo) if args.all else check_pr(args.repo, args.base, args.seeds,
                                                               args.override, args.only_labels)
     for x in problems:
-        print(f"::error::{x}" if "GITHUB_ACTIONS" in __import__("os").environ else x,
+        print(f"::error::{gh_escape(x)}" if "GITHUB_ACTIONS" in __import__("os").environ else x,
               file=sys.stderr)
     return 1 if problems else 0
 
