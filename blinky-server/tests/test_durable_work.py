@@ -235,7 +235,15 @@ def test_a_schema_bump_retires_unfinished_workflows_loudly(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     "workflow",
-    ["param-sweep", "tune-threshold", "capture-nn", "staging", "dev-run", "hardware-checks"],
+    [
+        "param-sweep",
+        "tune-threshold",
+        "capture-nn",
+        "staging",
+        "staging-release",  # the suite on a stable release (the stable proposals' baseline)
+        "dev-run",
+        "hardware-checks",
+    ],
 )
 def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow: str) -> None:
     """The other test jobs, as validate above: crashed in the middle of a unit, then started
@@ -263,9 +271,11 @@ def test_every_test_job_resumes_after_a_crash_mid_unit(tmp_path: Path, workflow:
         res = json.loads(r.stdout.strip().splitlines()[-1])
         res.pop("output_path", None)  # each run writes its capture in its own dir
         res.pop("path", None)  # the staging report, likewise
-        if workflow == "staging":  # measured, so not equal run to run; the verdict must be
+        if workflow in ("staging", "staging-release"):
+            # Measured, so not equal run to run; the verdict must be.
             assert res["passed"] is True, res
-            res = {k: res[k] for k in ("sha", "version", "passed")} | {
+            assert res["run"], res  # the job's id: a second run of a build is a second line
+            res = {k: res.get(k) for k in ("sha", "version", "passed", "release")} | {
                 "played": res["validation"]["played"]
             }
         if workflow == "hardware-checks":  # likewise: the verdict, each phase and each check

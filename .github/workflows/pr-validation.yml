@@ -172,9 +172,10 @@ jobs:
         venv/bin/python -m ruff format --check --line-length 100 ../scripts/testbox/
         venv/bin/python -m mypy --strict --ignore-missing-imports \
           ../scripts/testbox/deploy.py ../scripts/testbox/staging.py ../scripts/testbox/dev.py \
-          ../scripts/testbox/pr_queue.py
+          ../scripts/testbox/pr_queue.py ../scripts/testbox/proposals.py
         venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py ../scripts/testbox/test_staging.py \
-          ../scripts/testbox/test_dev.py ../scripts/testbox/test_pr_queue.py
+          ../scripts/testbox/test_dev.py ../scripts/testbox/test_pr_queue.py \
+          ../scripts/testbox/test_proposals.py
 
   testbox-camera:
     name: Test box camera analysis

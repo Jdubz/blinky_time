@@ -79,6 +79,12 @@ class StagingSuiteRequest(BaseModel):
         description="The PR head whose tree this commit has (the same firmware build): the "
         "strict rules' readiness counts the two as one build",
     )
+    release: str | None = Field(
+        None,
+        pattern=r"^b\d+$",
+        description="A stable release (b217): the suite on it instead of the staging build, "
+        "``sha`` its commit; the stable proposals' baseline (docs/DEV_LOOP.md)",
+    )
 
 
 class HardwareChecksRequest(BaseModel):
@@ -163,7 +169,8 @@ async def validate(body: ValidateRequest) -> dict[str, Any]:
 @router.post("/staging", dependencies=[Depends(require_api_key)])
 async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     """The staging hardware suite (#349, testing/staging.py): deploy the staging build of
-    ``sha`` to the test devices, then health, music, beat pace, validation and timing.
+    ``sha`` to the test devices, then health, music, beat pace, validation and timing. With
+    ``release``, the same suite on that stable release (the stable proposals' baseline).
 
     Refused unless the server runs with --staging (the test box). Returns a job_id; poll
     /test/jobs/{id}. The result is the report, ``passed`` its verdict.
@@ -178,6 +185,8 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     unknown = sorted(set(body.limits or {}) - set(DEFAULTS))
     if unknown:
         raise HTTPException(422, f"unknown limits: {unknown}")
+    if body.release and body.build_of:
+        raise HTTPException(422, "a stable release run has no build_of")
     from ..testing import box_mode
     from . import routes_firmware
 

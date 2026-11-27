@@ -61,7 +61,15 @@ section, and a status's description says how many warned. After each quality sui
 reads each rule's readiness (GET /api/test/strict-rules): a rule that has passed on enough
 builds in a row is said in the report, and gets ONE blinky_time issue, "Ready to enable strict
 rule: X", never a second (the state's ``strict_issues`` and a title search). Switching a rule to
-block stays the owner's call. State is in
+block stays the owner's call.
+
+When it has nothing of its own to run (the head settled, its quality suite done), the runner
+compares blinky-firmware's newest release candidate with the stable release (proposals.py;
+docs/DEV_LOOP.md, "Stable candidates from scores"): ONE "Propose bN for stable" issue per
+candidate in blinky_time when it leads without a health problem. The quality-suite runs that
+comparison needs (the candidate's staging commit or the stable release under the current corpus
+pin, a repeat for the noise) are submitted then too, last in line: queue mode, nothing of the PR
+queue waiting, never preempting. State is in
 ~/.local/share/blinky-server/staging.json; the log goes to the journal
 (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
 """
@@ -82,6 +90,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import proposals
 import strict
 from deploy import review_verdict  # the deployer's parser: one reading of the verdict comment
 
@@ -1166,10 +1175,107 @@ def _poll(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> dict[st
         return _pass(gh_, server)
     if kind == "hw":
         finish_hw(gh_, state, job)
+    elif kind == "proposal":
+        finish_proposal_run(state, job)
     else:
         finish_quality(gh_, state, job, server)
     save_state(state)
     return state
+
+
+# -- stable proposals (proposals.py) -----------------------------------------------------------
+
+
+def finish_proposal_run(state: dict[str, Any], job: dict[str, Any]) -> None:
+    """A run the comparison asked for ended: its scores are in the record (the server wrote
+    them); one that ended without scores counts towards giving up on it."""
+    run = state.pop("running")
+    st = state.setdefault("proposal", {})
+    report = job.get("result") if job.get("status") == "complete" else None
+    scored = isinstance(report, dict) and bool((report.get("validation") or {}).get("results"))
+    if not scored:
+        failed = st.setdefault("failed", {})
+        failed[run["key"]] = int(failed.get(run["key"], 0)) + 1
+        log(f"stable proposal run {run['key']} ended without scores ({job.get('status')})")
+    else:
+        log(f"stable proposal run {run['key']} done")
+    st.pop("stamp", None)  # evaluate again on the next idle pass
+
+
+def propose(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> None:
+    """Compare the newest candidate with the stable release, update its proposal issue, and
+    submit the next run the comparison needs. Re-evaluated when the scores or the pin change,
+    else at most every proposals.RECHECK_S."""
+    st = state.setdefault("proposal", {})
+    pin = proposals.corpus_pin(LINK / "corpus")
+    if pin is None:
+        log("stable proposal: the deployed corpus pin is unreadable; skipped")
+        return
+    scores = STATE.parent / "staging-scores.jsonl"
+    stamp = f"{pin}:{scores.stat().st_mtime if scores.exists() else 0}"
+    fresh = (
+        st.get("stamp") == stamp and time.time() - float(st.get("at") or 0) < proposals.RECHECK_S
+    )
+    if not fresh:
+        try:
+            blocking = proposals.blocking_rules(server)
+            out = proposals.evaluate(
+                gh_,
+                st,
+                proposals.load_records(scores),
+                pin,
+                blocking,
+                STATE.parent / "staging-reports",
+            )
+            proposals.apply(gh_, st, out)
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
+            log(f"stable proposal: not evaluated now ({e})")  # URLError is an OSError
+            return
+        st.update(stamp=stamp, at=time.time(), last=out.message)
+        st["need"] = out.plan.need if out.plan else None
+        log(f"stable proposal: {out.message}")
+    if st.get("need"):
+        proposal_run(server, state, st["need"])
+
+
+def proposal_run(server: Callable[..., Any], state: dict[str, Any], need: dict[str, Any]) -> None:
+    """Submit a run the comparison needs: last in line. Queue mode, no other runner's item
+    waiting (ready or not), a free chip; a busy server (409) is the next pass."""
+    try:
+        mode = box_mode(server)
+        if holds(mode):
+            return
+        now = time.time()
+        for w in mode.get("waiting") or []:
+            at = w.get("reported_at")
+            if w.get("runner") != RUNNER and at and now - float(at) < REPORT_STALE_S:
+                log(f"stable proposal run waits behind {w.get('runner')} {str(w.get('sha'))[:12]}")
+                return
+        devices = test_devices(server("GET", "/api/devices"))
+        if not devices:
+            return
+        body = {**need["body"], "track_dir": str(LINK / CORPUS), "device_ids": devices}
+        job = server("POST", "/api/test/staging", body)
+    except urllib.error.HTTPError as e:
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            log(f"stable proposal run: server answered {e.code}; next pass")
+            return
+        failed = state.setdefault("proposal", {}).setdefault("failed", {})
+        failed[need["key"]] = int(failed.get(need["key"], 0)) + 1
+        log(f"stable proposal run refused ({e.code}): {_detail(e)}")
+        return
+    except (urllib.error.URLError, OSError) as e:
+        log(f"stable proposal run: server not answering ({e}); next pass")
+        return
+    state["running"] = {
+        "sha": need["body"]["sha"],
+        "job": job["job_id"],
+        "devices": devices,
+        "kind": "proposal",
+        "key": need["key"],
+    }
+    state["proposal"]["need"] = None
+    log(f"stable proposal run {job['job_id']}: {need['what']} (non-blocking)")
 
 
 def quality(gh_: Gh, server: Callable[..., Any], state: dict[str, Any], sha: str) -> None:
@@ -1233,7 +1339,9 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
     if state.get("reported") == sha:
         if quality_due(state) == sha:
             quality(gh_, server, state, sha)
-            save_state(state)
+        elif not state.get("queued"):
+            propose(gh_, server, state)  # nothing of its own to run: the stable proposals
+        save_state(state)
         return state
     changed, why, blind = firmware_change(gh_, sha)
     if not changed:

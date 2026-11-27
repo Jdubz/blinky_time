@@ -32,7 +32,7 @@ from dbos import DBOS
 
 from ..paths import data_dir
 from ..work import durable, jobs
-from . import detection_latency, leds
+from . import detection_latency, leds, tempo
 from .audio_lock import acquire_audio_lock, release_audio_lock
 from .audio_player import audio_seconds, kill_orphan_audio, stop_audio
 from .nn_capture import capture_nn_stream
@@ -313,6 +313,12 @@ async def validation_run(
         if settle_ms > 0:
             data = _apply_settle_filter(data, settle_ms)
         scores[device.id[:12]] = _score(data, playback, gt)
+        # The run's tempo against the track's ground truth (testing/tempo.py): the stable
+        # proposals' tempo metric. Absent with the reason when the track has no reference.
+        scores[device.id[:12]]["tempo"] = tempo.tempo_score(
+            list(getattr(data, "music_states", None) or []),
+            tempo.ground_truth_bpm(track["audio_file"]),
+        )
         if persist_raw:
             path = _raw_path(track["name"], run, device.id[:12])
             capture = _serialize_raw_capture(
