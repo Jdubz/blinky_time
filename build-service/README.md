@@ -15,7 +15,7 @@ Two containers share one job volume. Neither has a docker socket.
   - It writes the job (a checkout with history) into the job volume.
 - **`worker`** (`blinky_build/worker.py`): `network_mode: none`, uid 10001, all capabilities dropped, `no-new-privileges`.
   - It runs the firmware's own steps exactly as `staging-build.yml` does: `scripts/build.sh --dev`, `tools/firmware_release.py package --dev`, the `Version.h` check.
-  - The toolchain is baked in at image build time by the firmware's `scripts/setup_toolchain.sh` at `FIRMWARE_TOOLCHAIN_REF`. It's root-owned, so a build can't change it.
+  - The toolchain is baked in at image build time by the firmware's `scripts/setup_toolchain.sh` at `FIRMWARE_TOOLCHAIN_REF`. It's root-owned, so a build can't change it or swap it: the checkout directory around it is root's, group 10001, sticky (`1775`), so the build creates and removes its own files there but can't rename or replace `.arduino` (`verify.sh` and CI probe both).
   - A commit whose pin differs fails with `toolchain mismatch: rebuild the worker image`. The pin is `tools/firmware_toolchain.json` (minus comments), `TFLITE_REF` and the `patches/*.patch` hashes (`blinky_build/toolchain.py`).
   - **Incremental builds:** the build tree is one persistent checkout at a fixed path, moved between commits with `git checkout`, and arduino-cli's build directory is on the cache volume (one per toolchain). Only changed files recompile.
   - **Why the rootfs isn't read-only:** arduino-cli resolves library symlinks and the firmware's `check_build_libs.py` wants the libraries under `<checkout>/.arduino`. So the tree lives in the container layer next to the baked toolchain.

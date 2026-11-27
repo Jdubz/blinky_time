@@ -41,7 +41,10 @@ RUN useradd --uid 10001 --user-group --create-home --home-dir /home/builder \
 # The toolchain, from an owner commit only: cloned with branch heads and no tags, and the
 # ref must be on a branch (a fork PR's commit is not). Installed at <src>/.arduino, where the
 # firmware's scripts expect it (scripts/arduino_env.sh, tools/check_build_libs.py), owned by
-# root so a build can't change it for the next one. Only toolchain.py is copied first, so a
+# root so a build can't change it for the next one. The checkout directory itself is root's,
+# group 10001, sticky (1775): the build creates and removes its own files there but can't rename
+# or replace .arduino (a directory owned by 10001 would let it move the toolchain aside and plant
+# its own for every later build). Only toolchain.py is copied first, so a
 # change to the service's code doesn't reinstall the toolchain. The download cache
 # (.arduino/staging) is emptied but kept: arduino-cli creates it at startup if missing, and
 # the build can't write there.
@@ -61,7 +64,8 @@ RUN set -eu; \
     find /opt/blinky/src -mindepth 1 -maxdepth 1 ! -name .arduino -exec rm -rf {} +; \
     find /opt/blinky/src/.arduino/staging -mindepth 1 -delete; \
     chmod -R a+rX,go-w /opt/blinky/src/.arduino; \
-    chown 10001:10001 /opt/blinky/src
+    chown root:10001 /opt/blinky/src; \
+    chmod 1775 /opt/blinky/src
 
 COPY blinky_build /opt/blinky/app/blinky_build
 
