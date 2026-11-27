@@ -423,6 +423,34 @@ def test_a_proposal_whose_candidate_became_stable_is_closed() -> None:
     assert gh.comments[-1] == (600, "b228 is the stable release now.")
 
 
+def test_a_promoted_proposal_closes_even_before_a_newer_candidate_exists() -> None:
+    # Review of #453: right after promotion there is no candidate newer than the stable.
+    gh, st = GitHub(), {}
+    run(gh, st, leading())
+    promoted = GitHub(stable="b228")
+    promoted.rels = [
+        {"tag_name": "b228", "prerelease": False},
+        {"tag_name": "b227", "prerelease": True},
+    ]
+    promoted.issues, promoted.comments = gh.issues, gh.comments
+    out = run(promoted, st, leading())
+    assert out.plan is None and out.stable == "b228"
+    assert gh.issues[600]["state"] == "closed"
+    assert gh.comments[-1] == (600, "b228 is the stable release now.")
+
+
+def test_an_older_open_proposal_closes_when_a_newer_release_becomes_stable() -> None:
+    gh, st = GitHub(candidate="b227"), {}
+    gh.rels = [r for r in gh.rels if r["tag_name"] != "b228"]
+    run(gh, st, leading())
+    promoted = GitHub(stable="b228")
+    promoted.rels = [{"tag_name": "b228", "prerelease": False}]
+    promoted.issues, promoted.comments = gh.issues, gh.comments
+    run(promoted, st, [])
+    assert gh.issues[600]["state"] == "closed"
+    assert gh.comments[-1] == (600, "b228, newer than b227, is the stable release now.")
+
+
 def test_the_candidates_staging_commit_must_have_its_tree() -> None:
     gh = GitHub()
     real = gh.__call__

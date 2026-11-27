@@ -636,6 +636,7 @@ class Outcome:
     decision: Decision | None
     text: str | None
     message: str
+    stable: str | None = None  # the current stable release, whenever it is known
 
 
 def evaluate(
@@ -650,17 +651,22 @@ def evaluate(
     stable, candidate = releases(gh_)
     if stable is None or candidate is None:
         return Outcome(
-            None, [], None, None, f"nothing to compare (stable {stable}, candidate {candidate})"
+            None,
+            [],
+            None,
+            None,
+            f"nothing to compare (stable {stable}, candidate {candidate})",
+            stable,
         )
     cand_sha, why = staging_commit(gh_, candidate)
     if cand_sha is None:
-        return Outcome(None, [], None, None, f"{candidate}: {why}")
+        return Outcome(None, [], None, None, f"{candidate}: {why}", stable)
     stable_sha = commit(gh_, stable)["sha"]
     noises = noise(records)
     p = plan(records, stable, stable_sha, candidate, cand_sha, pin, noises, st.get("failed") or {})
     if not p.cand or not p.base:
         msg = p.blocked or f"waiting for {p.need['what'] if p.need else 'scores'}"
-        return Outcome(p, [], None, None, f"{candidate} vs {stable}: {msg}")
+        return Outcome(p, [], None, None, f"{candidate} vs {stable}: {msg}", stable)
     results = compare(p.cand, p.base, noises)
     cand_all = [r for r in records if r.get("sha") == cand_sha and not r.get("release")]
     healths: list[dict[str, Any]] = []
@@ -674,18 +680,24 @@ def evaluate(
     problems += [f"run {h['version']}: health unreadable" for h in healths if h.get("unknown")]
     d = decide(results, problems)
     text = body(p, results, noises, d, healths)
-    return Outcome(p, results, d, text, f"{candidate} vs {stable}: {d.why}")
+    return Outcome(p, results, d, text, f"{candidate} vs {stable}: {d.why}", stable)
 
 
 def apply(gh_: Gh, st: dict[str, Any], out: Outcome) -> None:
     """Open, update or close issues to match the outcome."""
+    if out.stable is not None:
+        # Before anything else, and with or without a candidate: right after the owner promotes
+        # the proposed candidate there is no newer one, and its proposal must close anyway.
+        for tag, rec in list((st.get("issues") or {}).items()):
+            if number(tag) <= number(out.stable) and rec.get("state") == "open":
+                why = (
+                    f"{tag} is the stable release now."
+                    if tag == out.stable
+                    else f"{out.stable}, newer than {tag}, is the stable release now."
+                )
+                close(gh_, st, tag, why)
     p = out.plan
-    if p is None:
-        return
-    for tag, rec in list((st.get("issues") or {}).items()):
-        if tag == p.stable and rec.get("state") == "open":
-            close(gh_, st, tag, f"{tag} is the stable release now.")
-    if out.decision is None or out.text is None:
+    if p is None or out.decision is None or out.text is None:
         return
     rec = upsert(gh_, st, p.candidate, out.text, out.decision.qualifies)
     if out.decision.qualifies and rec:
