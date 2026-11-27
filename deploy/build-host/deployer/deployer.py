@@ -18,7 +18,8 @@ whose gate checks this reuses). blinky-build-host-deploy.timer runs one pass eve
    deploy, and the next pass runs the new code). The script builds, restarts and health-checks; its
    persistent state (volumes, firewall) is untouched by a redeploy.
 4. The script fails: check out the commit the service ran before and run its script again (roll
-   back), and refuse the new commit.
+   back), and refuse the new commit. At the end of that pass the clone goes back to the deployer's
+   own deployed commit, so the timer never runs older (or refused) deployer code.
 
 State: ~/.local/share/blinky-build-host/deploy.json. Log: the journal (`journalctl -u
 blinky-build-host-deploy`), and Loki when LOKI_PUSH_URL is set (EnvironmentFile). `--status`
@@ -151,6 +152,7 @@ def deploy_pass(services: list[dict[str, Any]], state: dict[str, Any], fetch: Fe
     git("fetch", "--quiet", "--no-recurse-submodules", "origin", BRANCH)
     head = git("rev-parse", f"refs/remotes/origin/{BRANCH}").strip()
     now = time.time() if now is None else now
+    failed = False
     for svc in services:
         st = state.setdefault(svc["name"], {"deployed": None, "refused": {}})
         if head == st["deployed"] or (head in st["refused"] and head != accept):
@@ -178,13 +180,29 @@ def deploy_pass(services: list[dict[str, Any]], state: dict[str, Any], fetch: Fe
             save(state)
             continue
         st["refused"][head] = "deploy script failed"
+        failed = True
         save(state)
         if st["deployed"]:
             ok = run_deploy(svc, st["deployed"], runner)
             log("rolled_back" if ok else "rollback_failed", service=svc["name"], to=st["deployed"][:12])
         else:
             log("deploy_failed", service=svc["name"], sha=head[:12], note="nothing to roll back to")
+    if failed:
+        restore_own_code(services, state)
     return state
+
+
+def restore_own_code(services: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    """After a failed deploy the clone sits at the refused commit, or at the commit a rollback
+    went back to, which can predate the deployer's own deployed code. The timer runs whatever the
+    clone holds, so put it back at the deployer's commit (the checkout-only entry's)."""
+    own = next((s for s in services if not s["deploy"]), None)
+    sha = (state.get(own["name"]) or {}).get("deployed") if own else None
+    if sha is None:
+        log("clone_not_restored", note="no deployed commit recorded for the deployer's own code")
+        return
+    git("checkout", "--quiet", "--detach", sha)
+    log("clone_restored", to=sha[:12])
 
 
 def gh_fetch(path: str) -> Any:

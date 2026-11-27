@@ -73,16 +73,6 @@ MAX_POST_BYTES = 2 * 1024 * 1024  # a 1000-hit track is ~50 KB
 # stamps the same hash into the page, which says "reload" when the two differ.
 VERSION = os.environ.get("LABELS_SERVICE_VERSION") or "dev"
 
-# Hosted mode: token buckets per client address (capacity, per seconds), and one global bucket for
-# saves, since each one opens a pull request.
-DEFAULT_LIMITS: dict[str, tuple[int, float]] = {
-    "request": (600, 300.0),  # any request: 600 per 5 min
-    "lock": (30, 3600.0),  # taking an edit lock (renewals are free): 30 per hour
-    "draft": (240, 600.0),  # autosaves: 240 per 10 min
-    "save": (6, 3600.0),  # completed saves (pull requests): 6 per hour
-    "save_global": (30, 3600.0),  # all clients together: 30 pull requests per hour
-}
-
 
 class ApiError(Exception):
     def __init__(self, status: int, message: str, **extra: Any):
@@ -463,9 +453,13 @@ def load_track(c: Corpus, stem: str, human_override: dict[str, Any] | None = Non
 # --- The shared state, and writing or publishing it --------------------------------------
 
 
+# Hosted mode: token buckets per client address (capacity, per seconds).
 DEFAULT_LIMITS: dict[str, tuple[int, float]] = {
     "request": (600, 300.0),  # any request, per client address: 600 per 5 min
     "ops": (300, 300.0),  # edit batches (the page sends one a second at most while editing)
+    # GET /api/export runs the label checks on every edited track; blinky-corpus's labels-sync pulls
+    # it once per run (every 5 min), so this only bounds what anyone else can make it cost.
+    "export": (20, 300.0),
 }
 
 
@@ -611,7 +605,8 @@ class App:
     def _check(self, path: str, text: str, main_text: str | None) -> list[str]:
         stem = Path(path).name[: -len(labelcheck.HUMAN_SUFFIX)]
         base = json.loads(main_text) if main_text else None
-        return labelcheck.check_human_doc(self.c.edm, stem, json.loads(text), base, self.c.seeds())
+        return labelcheck.check_human_doc(self.c.edm, stem, json.loads(text), base, self.c.seeds(),
+                                          audio_sha256=self.c.audio_sha256(stem))  # cached per mp3
 
     def _adopt(self, path: str, main_text: str | None) -> None:
         """A track takes main's version (None: main has no file: back to its seed)."""
@@ -632,8 +627,9 @@ class App:
                     out[self._path(s)] = (text, self.store.base_blob(s))
         return out
 
-    def export(self) -> dict[str, Any]:
+    def export(self, ip: str | None = None) -> dict[str, Any]:
         """For blinky-corpus's labels-sync workflow (it pulls; the service writes nowhere)."""
+        self.limit("export", ip)
         if self.publisher is None:
             raise ApiError(404, "no export: this server doesn't publish")
         edited = self._edited()
@@ -659,12 +655,16 @@ class App:
         for stem in self.store.stems():
             if self.store.edited_since_base(stem):
                 continue
-            with self.rw.read():
-                hp = self.c.human_path(stem)
-                now = hosted.git_blob_sha(hp.read_bytes()) if hp.is_file() else None
-                if now != self.store.base_blob(stem):
-                    self.store.reset(stem, initial_state(self.c, stem))
-                    self.log.emit("refreshed_from_main", stem=stem)
+            try:
+                with self.rw.read():
+                    hp = self.c.human_path(stem)
+                    now = hosted.git_blob_sha(hp.read_bytes()) if hp.is_file() else None
+                    if now != self.store.base_blob(stem):
+                        self.store.reset(stem, initial_state(self.c, stem))
+                        self.log.emit("refreshed_from_main", stem=stem)
+            except Exception as e:  # one unreadable track must not stop the others (or publishing)
+                msg = e.message if isinstance(e, ApiError) else repr(e)
+                self.log.emit("tick_failed", stem=stem, error=msg[:400])
 
     def start(self) -> None:
         def loop() -> None:
@@ -922,7 +922,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/ops":
             self._send_json(app.pull(self._stem_param(q), (q.get("since") or [None])[0]))
         elif path == "/api/export":
-            self._send_json(app.export())
+            self._send_json(app.export(self._ip))
         elif path.startswith("/audio/"):
             name = unquote(path[len("/audio/"):])
             if not name.endswith(".mp3"):

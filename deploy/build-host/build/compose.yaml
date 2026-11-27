@@ -45,7 +45,8 @@ services:
     environment:
       BLINKY_BUILD_HOST: 0.0.0.0   # inside the container; published below
       BLINKY_BUILD_PORT: ${BLINKY_BUILD_PORT:?set in build.env}
-      # Read from 1Password by deploy.sh into its own environment; never written to a file.
+      # Read from 1Password by deploy.sh into its own environment; deploy.sh never writes it to a
+      # file, but Docker keeps it in the container's config (root-owned; `docker inspect` shows it).
       BLINKY_BUILD_TOKEN: ${BLINKY_BUILD_TOKEN:?run deploy.sh (it reads the token from 1Password)}
     ports:
       # ONE private address of this host (deploy.sh checks it is one of this host's; never a wildcard).

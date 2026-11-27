@@ -3,8 +3,8 @@
 
 A report's ``strict`` is {"rules": [one row per rule], "devices": {...}}; each row has its rule,
 mode (warn | block), status (pass | warn | fail | no data), worst value and where it was read,
-the threshold, the blinky-firmware issues it waits on, and the windows it excluded (a settings
-save the server sent) or, for detection_latency, the tracks it left out (``left_out``: too few
+the threshold, the blinky-firmware issues it waits on, and for detection_latency the tracks it
+left out (``left_out``: too few
 kicks detected for the music's check). Warn rows never change a status; the description may say
 how many.
 """
@@ -27,9 +27,15 @@ def warnings(strict: dict[str, Any] | None) -> int:
 
 
 def suffix(strict: dict[str, Any] | None) -> str:
-    """For a commit status's description: " · 2 strict warnings" (nothing without any)."""
+    """For a commit status's description: " · fps fails (blocking) · 2 strict warnings"
+    (nothing when every rule passed). A failing block rule only reaches a passing status's
+    description from the quality suite, whose status is always success."""
+    failed = [str(r.get("rule")) for r in rows(strict) if r.get("status") == "fail"]
+    out = (
+        f" · {', '.join(failed)} fail{'s' if len(failed) == 1 else ''} (blocking)" if failed else ""
+    )
     n = warnings(strict)
-    return f" · {n} strict warning{'' if n == 1 else 's'}" if n else ""
+    return out + (f" · {n} strict warning{'' if n == 1 else 's'}" if n else "")
 
 
 def _num(v: Any) -> str:

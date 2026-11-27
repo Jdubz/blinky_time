@@ -242,19 +242,6 @@ def no_proposals(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
-TESTBOX = "http://testbox.example.invalid:8420"  # reserved name: tests never name a real host
-
-
-@pytest.fixture(autouse=True)
-def hosts_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Never the machine's real ~/.config/blinky/hosts.env: a file per test, the env var unset."""
-    path = tmp_path / "hosts.env"
-    path.write_text(f'BLINKY_TESTBOX_URL="{TESTBOX}/"\n')
-    monkeypatch.setattr(staging, "HOSTS_ENV", path)
-    monkeypatch.delenv("BLINKY_TESTBOX_URL", raising=False)
-    return path
-
-
 GOOD_REPORT = {
     "sha": SHA,
     "passed": True,
@@ -818,7 +805,9 @@ def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
 def test_the_report_links_its_archived_copy_through_the_box() -> None:
     text = staging._archive_line({**GOOD_REPORT, "artifact": "inputs/abc/s.json"})
     assert "`inputs/abc/s.json`" in text
-    assert f"{TESTBOX}/api/spark/artifacts/inputs/abc/s.json" in text
+    assert "`/api/spark/artifacts/inputs/abc/s.json`" in text
+    # The comment goes on a public repo: never the box's address (no URL at all).
+    assert "://" not in text
     assert staging._archive_line(GOOD_REPORT) == ""
 
 
@@ -964,27 +953,6 @@ def test_a_cancelled_suite_with_an_unreadable_mode_is_a_retry_not_a_failure() ->
     assert all(st != "failure" for st, _ in g.statuses) and not g.comments
 
 
-def test_the_box_url_comes_from_the_environment_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BLINKY_TESTBOX_URL", "http://other.example.invalid:1")
-    assert staging.host_setting("BLINKY_TESTBOX_URL") == "http://other.example.invalid:1"
-
-
-@pytest.mark.parametrize("content", [None, "", "BLINKY_TESTBOX_URL=http://<test-box>:8420\n"])
-def test_a_missing_box_url_stops_the_runner_naming_file_and_key(
-    hosts_env: Path, content: str | None, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # No file, no key, or the template's placeholder: no default host, and no suite started.
-    if content is None:
-        hosts_env.unlink()
-    else:
-        hosts_env.write_text(content)
-    with pytest.raises(RuntimeError, match=r"BLINKY_TESTBOX_URL.*hosts\.env"):
-        staging.host_setting("BLINKY_TESTBOX_URL")
-    assert staging.main([]) == 2
-    out = capsys.readouterr().out
-    assert "BLINKY_TESTBOX_URL" in out and str(hosts_env) in out
-
-
 # -- retest and dry run ------------------------------------------------------------------------
 
 
@@ -1051,6 +1019,16 @@ def test_the_quality_status_says_how_many_strict_rules_warned() -> None:
     report = {**GOOD_REPORT, "strict": {"rules": STRICT_ROWS[1:2]}}
     assert staging.quality_summary(report).endswith("health ok · 1 strict warning")
     assert "**⚠ strict rules (non-blocking)**" in "\n".join(staging.quality_lines(report))
+
+
+def test_a_blocking_rule_that_fails_in_the_quality_suite_is_said_in_its_status() -> None:
+    """The quality status stays success, but a block-mode rule the suite measured failing is
+    named in its description, not left to read as "health/asserts: see report"."""
+    failed = {**STRICT_ROWS[1], "mode": "block", "status": "fail"}
+    report = {**GOOD_REPORT, "passed": False, "strict": {"rules": [failed, STRICT_ROWS[2]]}}
+    desc = staging.quality_summary(report)
+    assert desc.startswith("non-blocking:")
+    assert desc.endswith(" · fps fails (blocking) · 1 strict warning")
 
 
 def ready(streak: int, mode: str = "warn") -> dict[str, Any]:

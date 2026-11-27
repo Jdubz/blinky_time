@@ -22,14 +22,14 @@ The drum-label reviewer. The owner and helpers fix the corpus's kick and snare l
   - A compromised service can only offer bad label files, which is what the checks are for. Nobody but the owner can push code to the corpus.
   - The service notices its labels landing on `main` (published).
   - Partial progress is published: the scorer only uses a human file once it's `complete`.
-- **Anti-vandalism** (`labelcheck.py`, the same file as the corpus's `tools/labels/labelcheck.py`; copy it when it changes). Before publishing, a file must:
+- **Anti-vandalism** (`labelcheck.py`, the same file as the corpus's `tools/labels/labelcheck.py`; copy it when it changes, and bump the `corpus` pin: CI's end-to-end job compares the two). Before publishing, a file must:
   - match the schema;
   - not delete more than half of `main`'s hits;
   - not leave a class empty while a reference has hits in it.
 
-  A file that fails is held back (`publish_refused` in the logs). The corpus workflow and CI run the same checks as the gate.
-- **The undo is git history.** A track whose file changes on `main` from outside (an owner's fix or revert) takes `main`'s version, and open pages reload it.
-- **Rate limits** apply per client address, on requests and edits. The address is only ever kept as a keyed hash, in the logs.
+  A file that fails is held back (`publish_refused` in the logs). It stays held until someone fixes the track, so the page says so: the status line reads *not published: the label checks hold it back (...)* with the problems, and the track list shows *held back* (`held` in `/api/track`, `/api/ops` and `/api/tracks`, from the last export). The corpus workflow and CI run the same checks as the gate.
+- **The undo is git history.** A track whose file changes on `main` from outside (an owner's fix or revert) takes `main`'s version, and open pages reload it. That includes a deletion (a `labels-override` revert of the batch that added the file): the track goes back to its seed, even with unpublished edits on top of the deleted file.
+- **Rate limits** apply per client address, on requests, edits and the export. The address is only ever kept as a keyed hash, in the logs.
 - **Suspect bars and expected hits (hints, never labels).** A track's suspect map, `edm/drums_suspect/<stem>.json` in the corpus (blinky-corpus `scripts/drum_suspect.py`), is read from the same corpus checkout as the seeds and the audio.
   - The page draws its high and medium bars as a red and amber strip above *reviewed* (and in the overview), with the reason on hover. Reviewed bars fade.
   - **Next suspect** (`J`) jumps to the next unreviewed one. The setting *Review order: suspect first* makes *Reviewed → next* do the same, falling back to in-order when none are left.
