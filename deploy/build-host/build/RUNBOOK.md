@@ -5,7 +5,7 @@ The build service (`build-service/`, the dev loop's builder: `docs/DEV_LOOP.md`)
 - **Deploys.** The pull deployer (`deploy/build-host/deployer/`; installed by `deploy/build-host/labels/RUNBOOK.md`, "Install", step 7) runs `deploy.sh` for every gated master commit that changes `build-service/` or this directory. "Gated" means CI green (including `Build service`) and a clean Claude review. No GitHub runner is involved.
 - **The sandbox.** `compose.yaml`'s header has the trust model. `check_config.py` refuses a config that loosens it, both in CI and in `deploy.sh` before every deploy. `verify.sh` checks the running containers.
 - **Exposure.** The api is published on one private address of the host and one port, and nowhere else (no wildcard, not the LAN). `deploy.sh` refuses an address the host doesn't have. Nothing else fences it: there is no firewall unit, unlike the labels service, because nothing here reaches out except the api's mirror fetches from GitHub.
-- **The token.** It lives in 1Password. `deploy.sh` reads it with `op read` through the host's 1Password service account, keeps it in its own environment for `docker compose up`, and never writes it to a file. The box holds the same value.
+- **The token.** It lives in 1Password. `deploy.sh` reads it with `op read` through the host's 1Password service account, keeps it in its own environment for `docker compose up`, and never writes it to a file. Docker itself does: the api's environment is part of its container config, in Docker's root-owned state, and `docker inspect blinky-build-api-1` shows it, so anyone in this host's `docker` group can read the token. The box holds the same value.
 - **Host values.** Every host-specific value lives in `build.env` (gitignored; template `build.env.example`): the address, the port, the CPU set, the token's 1Password reference and the service-account token file. Not the box's file of the same name.
 
 ## Install (once per host)
@@ -36,7 +36,7 @@ The build service (`build-service/`, the dev loop's builder: `docs/DEV_LOOP.md`)
   - `blinky-build-cache`: the warm compile cache, safe to delete.
 
   None of them is precious. The only secret is the token, and it is in 1Password.
-- **Rotating the token:** update the 1Password item, run `./deploy.sh` by hand (a token change alone is not a commit, so the deployer won't do it), and update the box's `build.env`.
+- **Rotating the token:** update the 1Password item, run `./deploy.sh` by hand (a token change alone is not a commit, so the deployer won't do it), and update the box's `build.env`. `deploy.sh` builds whatever commit the clone is at, which is the last commit any service deployed or rolled back to, not necessarily the build service's: first `git -C ~/blinky-build-host checkout --detach <sha>` with the `build` service's `deployed` sha from `deployer.py --status`, or a hand deploy can downgrade the service.
 - **Turn it off:** `docker compose -p blinky-build stop`. A later deploy starts it again; to keep it off, also take `build` out of `deploy/build-host/deployer/services.json`.
 
 ## Retiring
