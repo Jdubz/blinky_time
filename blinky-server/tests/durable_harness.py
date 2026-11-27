@@ -112,6 +112,7 @@ devices = {
         subscribe_stream=subscribe_stream,
         unsubscribe_stream=lambda q: None,
         device_type="testbox_grid",
+        hardware_sn=None,
         ble_address="",
     )
     for d in DEVICES
