@@ -467,6 +467,32 @@ async def test_the_staging_suite_route_refuses_in_dev_mode(
     assert r.status_code == 409 and "dev mode" in r.json()["detail"] and submitted == []
 
 
+async def test_every_route_that_flashes_the_box_keeps_the_60_s_rule(
+    box: tuple[AsyncClient, FakeFleet], submitted: list[Any]
+) -> None:
+    """The staging suite and a staging deploy start with a flash, like a dev deploy and the
+    hardware checks: a chip that reset 20 s ago (a dev flash just before the box went back to
+    queue mode, or hardware checks cancelled mid-flash) is refused with how long to wait, and
+    the runner tries again next pass (409)."""
+    c, fleet = box
+    fleet.devices["grid"].last_info = {"millis": 20_000}  # type: ignore[attr-defined]
+    calls = [
+        ("/api/test/staging", {"sha": SHA, "device_ids": ["grid"], "track_dir": "/tmp"}),
+        ("/api/fleet/deploy-staging", {"sha": SHA, "device_ids": ["grid"]}),
+        ("/api/test/hardware-checks", {"sha": SHA, "device_ids": ["grid"], "source": "staging"}),
+    ]
+    for path, body in calls:
+        r = await c.post(path, json=body)
+        assert r.status_code == 409, (path, r.text)
+        assert "60 s between resets" in r.json()["detail"]
+        assert 39 <= int(r.headers["Retry-After"]) <= 41
+    assert submitted == []
+    fleet.devices["grid"].last_info = {"millis": 3_600_000}  # type: ignore[attr-defined]
+    for path, body in calls:
+        assert (await c.post(path, json=body)).status_code == 200, path
+    assert len(submitted) == 3
+
+
 async def test_a_dev_deploy_in_dev_mode(
     box: tuple[AsyncClient, FakeFleet],
     service: FakeBuildService,

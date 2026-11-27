@@ -741,7 +741,7 @@ async def _audio(device_ids: list[str]) -> dict[str, Any]:
 
 # -- 4. response -------------------------------------------------------------------------------
 
-LAG_RANGE_MS = (100, 900)  # ffplay's start to the sound at the mic: 0.24-0.53 s measured
+LAG_RANGE_MS = (100, 900)  # the playback's start to the detections (~220 ms with the ALSA player)
 LAG_TOL_MS = 40  # a detection within this of a hit (shifted by the lag) matches it
 ON_WINDOW_MS = (-20, 120)  # a feature's samples "at a hit": from just before to 120 ms after
 DEFAULT_LAG_MS = 300.0

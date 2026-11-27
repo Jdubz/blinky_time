@@ -179,7 +179,7 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
     if unknown:
         raise HTTPException(422, f"unknown limits: {unknown}")
     from ..testing import box_mode
-    from . import routes_firmware
+    from . import routes_dev, routes_firmware
 
     # One deploy-bearing job at a time, the suite included (routes_firmware._deploy_active):
     # the same lock makes the check and the submit one step.
@@ -195,6 +195,9 @@ async def staging(body: StagingSuiteRequest) -> dict[str, Any]:
             deploy_pipeline.require_test_devices(get_fleet(), devices)
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
+        # The suite starts with a deploy: a flash, so a reset (a dev flash just before the box
+        # went back to queue mode, or checks cancelled mid-flash, may be seconds old).
+        routes_dev.require_reset_gap(devices)
         return await _submit(staging_suite, body.model_dump())
 
 
@@ -248,14 +251,7 @@ async def hardware_checks(body: HardwareChecksRequest) -> dict[str, Any]:
             deploy_pipeline.require_test_devices(get_fleet(), devices)
         except deploy_pipeline.DeployError as e:
             raise HTTPException(400, str(e)) from e
-        wait = max(routes_dev.reset_wait(d) for d in devices)
-        if wait > 0:
-            raise HTTPException(
-                409,
-                f"a chip reset {routes_dev.RESET_GAP_S - wait:.0f} s ago; the firmware's rule "
-                f"is {routes_dev.RESET_GAP_S:.0f} s between resets: retry in {wait:.0f} s",
-                headers={"Retry-After": str(int(wait) + 1)},
-            )
+        routes_dev.require_reset_gap(devices)
         req: dict[str, Any] = {
             "sha": body.sha,
             "device_ids": body.device_ids,
