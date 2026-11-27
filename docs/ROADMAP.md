@@ -86,7 +86,7 @@ Umbrella: [blinky-firmware#8](https://github.com/Jdubz/blinky-firmware/issues/8)
 - ~~blinky-firmware#23, JSON streaming stalls the loop~~: fixed 2026-11-26 ([blinky-firmware#85](https://github.com/Jdubz/blinky-firmware/pull/85): printf-exact integer float formatting, and serial output through a RAM buffer drained by a lower-priority task; whole stream lines skipped and counted in `streamDropped` if the host stops reading). On the box, `maxFrameMs` with any stream mode on is 15–18 ms, the same as streaming off (`nn` was 27–28 ms).
 - [blinky-firmware#14](https://github.com/Jdubz/blinky-firmware/issues/14): the LED DMA wait caps fps on large strips. Needed before the 1024-LED matrices.
 - ~~blinky-firmware#59, the ~30 ms detection-to-light tail~~: fixed 2026-11-25 by ACF phase 1 ([blinky-firmware#61](https://github.com/Jdubz/blinky-firmware/pull/61), exact incremental lag tables, each decision spread over its cycle). On the box: `maxFrameMs` 31–34 → 15 ms (streaming off), `acfUs` 17–19.5 → 6.4–7.2 ms, and a camera p90 of 29–31 → 19–21 ms; tracker harness unchanged. ACF phase 2 (narrower range or comb filterbank for pass 2, 32-bit table updates) is optional CPU headroom, not a smoothness blocker.
-- The frame-time gate: strict rules in warn mode; each blocks once it passes (readiness tracker, [`DEV_LOOP.md`](DEV_LOOP.md) "Strict rules"; owner, 2026-11-25). Longest frame ≤ 100 ms, fps ≥ 60 and no overrun growth are measured over every run's `json info` reads, with no exclusions (the settings-save exclusion went with blinky-firmware#49). A tighter threshold than 100 ms (the release docs call 100 ms a visible freeze) is the owner's call, one line in `strict_rules.py` and blinky-firmware's `release_gate.py` together. The camera harness (P0) can confirm frames from outside.
+- The frame-time gate: **blocking since 2026-11-26** (owner, after readiness issues #444, #445, #448): longest frame ≤ 50 ms (was 100 ms), fps ≥ 60 and no overrun growth, over every run's `json info` reads with no exclusions, in the box's hardware checks ([`DEV_LOOP.md`](DEV_LOOP.md) "Strict rules") and blinky-firmware's `release_gate.py` alike. The box measures 15–27 ms in every window. The camera harness (P0) can confirm frames from outside.
 
 ## P3: ESP32-S3
 
@@ -141,4 +141,3 @@ Decided 2026-11-24: P0 is done when a full dev loop is iterable with adequate ob
 
 Still open:
 
-- **The frame-time gate:** the target threshold, now that the known P2 stalls are fixed (the stream, blinky-firmware#23; the save, #49; ACF, #59). Every window measures 15–19 ms on the box, so a threshold far below 100 ms is possible; the readiness tracker shows when each strict rule has held.

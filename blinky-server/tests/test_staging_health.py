@@ -18,7 +18,7 @@ async def test_health_reads_from_the_start_and_every_window_counts(
 ) -> None:
     """Health reads from right after the deploy, and the frame-time rule judges every window it
     read: the first one too (a save no longer stalls the loop, blinky-firmware#49), and a real
-    stall (the 1118 ms window of the box's first full run) is a warning."""
+    stall (the 1118 ms window of the box's first full run) fails the blocking frame_time rule."""
     monkeypatch.setattr(staging, "HEALTH_POLL_S", 0.0)
     now = time.time()
     # Read times: right after the deploy, then 10 s apart (the poll, compressed).
@@ -44,10 +44,10 @@ async def test_health_reads_from_the_start_and_every_window_counts(
 
     rows = {r["rule"]: r for r in strict_rules.evaluate(ws)}
     frame = rows["frame_time"]
-    assert frame["status"] == strict_rules.WARNED
+    assert frame["status"] == strict_rules.FAILED  # frame_time blocks since 2026-11-26
     assert frame["worst"] == 1118 and frame["samples"] == 4
     # Without the late stall, the first window (113 ms, a stall right after the deploy) still
     # counts: nothing is excused.
     calm = [{**w, "max_frame_ms": 30} if w["max_frame_ms"] == 1118 else w for w in ws]
     calm_frame = {r["rule"]: r for r in strict_rules.evaluate(calm)}["frame_time"]
-    assert calm_frame["worst"] == 113 and calm_frame["status"] == strict_rules.WARNED
+    assert calm_frame["worst"] == 113 and calm_frame["status"] == strict_rules.FAILED

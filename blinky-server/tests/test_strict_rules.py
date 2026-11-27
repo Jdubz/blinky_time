@@ -31,6 +31,20 @@ def win(t: float, frame: int = 20, fps: float = 120.0, over: int = 0, ms: int | 
     }
 
 
+# The real table, read before the fixture below replaces it.
+REAL_RULES = strict_rules.RULES
+
+
+@pytest.fixture(autouse=True)
+def every_rule_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mechanics tests run with every rule in warn mode, whatever the real table blocks
+    today; a test that needs a blocking rule switches it with block(). The real table is checked
+    by test_the_table_is_the_release_gates_limits."""
+    rules = tuple(dataclasses.replace(r, mode=strict_rules.WARN) for r in REAL_RULES)
+    monkeypatch.setattr(strict_rules, "RULES", rules)
+    monkeypatch.setattr(strict_rules, "BY_NAME", {r.name: r for r in rules})
+
+
 def rows(windows: list[dict[str, Any]], **kw: Any):
     return {r["rule"]: r for r in strict_rules.evaluate(windows, **kw)}
 
@@ -45,16 +59,21 @@ def block(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     monkeypatch.setattr(strict_rules, "BY_NAME", {r.name: r for r in rules})
 
 
-def test_the_table_is_the_release_gates_limits_all_warning_today() -> None:
-    got = {r.name: (r.threshold, r.mode) for r in strict_rules.RULES}
-    assert got["frame_time"] == (100.0, "warn")  # release_gate --max-frame-ms
-    assert got["fps"] == (60.0, "warn")  # release_gate --min-fps
-    assert got["overrun_growth"] == (0.0, "warn")
-    assert got["beat_pace"] == (0.03, "warn")
-    assert {r.mode for r in strict_rules.RULES} == {"warn"}
+def test_the_table_is_the_release_gates_limits() -> None:
+    got = {r.name: (r.threshold, r.mode) for r in REAL_RULES}
+    # Blocking since 2026-11-26 (owner): passed 5 builds in a row after blinky-firmware#49/#23.
+    assert got["frame_time"] == (50.0, "block")  # release_gate --max-frame-ms
+    assert got["fps"] == (60.0, "block")  # release_gate --min-fps
+    assert got["overrun_growth"] == (0.0, "block")
     assert got["stream_dropped"] == (0.0, "warn")
-    # blinky-firmware#23 (the stream stalls) is fixed: no rule waits on an open issue.
-    assert strict_rules.BY_NAME["frame_time"].issues == ()
+    assert got["beat_pace"] == (0.03, "warn")
+    assert {r.name for r in REAL_RULES if r.mode == "block"} == {
+        "frame_time",
+        "fps",
+        "overrun_growth",
+    }
+    # No rule waits on an open firmware issue.
+    assert all(r.issues == () for r in REAL_RULES)
 
 
 # -- frame time: every window counts --------------------------------------------------------
