@@ -16,8 +16,11 @@ ARG FIRMWARE_REPO_URL=https://github.com/Jdubz/blinky-firmware.git
 # Required: a full blinky-firmware commit sha on one of its branches.
 ARG FIRMWARE_TOOLCHAIN_REF
 
+# g++: the host compiler the checks' tracker harness builds with (blinky_build/checks.py). The
+# NN harness pins CXX=g++-13, which bookworm lacks: that check is refused as "the image doesn't
+# have" it until the base moves (docs/DEV_LOOP.md, section 1).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git patch \
+ && apt-get install -y --no-install-recommends ca-certificates curl git patch g++ \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL -o /tmp/arduino-cli.tgz \

@@ -447,7 +447,7 @@ jobs:
     - name: Lint and unit tests (trust check, bundles, auth, cache, toolchain mismatch)
       working-directory: build-service
       run: |
-        pip install ruff pytest
+        pip install ruff pytest pyyaml
         ruff check .
         python -m pytest -v tests
 
@@ -531,7 +531,7 @@ jobs:
           echo "::notice title=Build service::no readable $name artifact; manifest comparison skipped"
         fi
 
-    - name: End to end (SHA path, bundle path, verified packages)
+    - name: End to end (SHA path, bundle path, verified packages, the tracker harness check)
       # `shell: bash` is `bash -eo pipefail`: without pipefail the step would take tee's status
       # and a failed e2e would pass.
       shell: bash

@@ -29,7 +29,10 @@ Two containers share one job volume. Neither has a docker socket.
 | `POST /v1/builds`, multipart `bundle` (file) + `sha` | the same |
 | `GET /v1/builds/{id}` | `{"id", "state": "queued\|building\|done\|failed", "sha", "version", "error", "log_tail", ...}` |
 | `GET /v1/builds/{id}/package` | `.tar.gz` of `manifest.json`, `*.hex`, `*.uf2` (the `staging-firmware-<sha>` artifact's files); 409 until done |
+| `POST /v1/checks`, JSON `{"repo": "Jdubz/blinky-firmware", "sha": "<40 hex>", "check": "tracker-harness" \| "tracker-harness-nn"}` | 202 `{"id", "state": "queued", "sha", "check"}` |
+| `GET /v1/checks/{id}` | `{"id", "state", "sha", "check", "corpus", "conclusion": "success\|failure" (once done), "steps": [{"name", "outcome", "seconds"}], "error", "log_tail", ...}` |
 
+- **Checks** (`blinky_build/checks.py`; [DEV_LOOP.md](../docs/DEV_LOOP.md), section 1): one heavy job of the commit's own `pr-validation.yml`, run step for step in the worker's sandbox with the corpus the commit pins. Branch commits only (no bundles), and the corpus pin must be on a branch of blinky-corpus (its own `refs/heads/*` mirror; `BLINKY_BUILD_CORPUS_REPO`, `BLINKY_BUILD_CORPUS_REMOTE`). `state: failed` is an infrastructure error (a step the image can't run as written, a toolchain mismatch); a failing gate is `done` with `conclusion: failure`. 400 also means no corpus pin; 403, the commit or its corpus pin is not on a branch.
 - **Repeat requests:** a SHA with a `done` build gets that build back (202 with `"state": "done"`), and so does a SHA with a build still queued or building. A failed build is built again.
 - **Errors:**
   - 400: bad input, a malformed bundle, or a SHA in neither the bundle nor a branch;

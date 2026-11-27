@@ -9,6 +9,17 @@
                                    409 bundle prerequisites not on a branch, 413 too large
   GET  /v1/builds/{id}             -> {"id", "state", "sha", "version", "error", "log_tail", ...}
   GET  /v1/builds/{id}/package     -> .tar.gz of manifest.json, *.hex, *.uf2; 409 until done
+  POST /v1/checks                  JSON {"repo": REPO, "sha": "<40 hex>", "check": "<job>"}
+                                   one heavy CI job of the commit's own PR Validation workflow
+                                   (checks.py: tracker-harness, tracker-harness-nn), with the
+                                   corpus it pins -> 202 {"id", "state", "sha", "check"}; a
+                                   done or in-flight run of the same check and sha is returned
+                                   400 bad input or no corpus pin, 403 the commit or its corpus
+                                   pin is not on a branch of its repo
+  GET  /v1/checks/{id}             -> {"id", "state", "sha", "check", "corpus", "conclusion":
+                                   "success|failure" once done, "steps": [{name, outcome,
+                                   seconds}], "error", "log_tail", ...}; state "failed" is an
+                                   infrastructure error (no verdict), never the check failing
 
 Configuration (environment only; there is no default address or port):
   BLINKY_BUILD_HOST, BLINKY_BUILD_PORT    where to listen (required)
@@ -18,6 +29,9 @@ Configuration (environment only; there is no default address or port):
   BLINKY_BUILD_REPO      the one repo built here (default Jdubz/blinky-firmware)
   BLINKY_BUILD_REMOTE    its fetch URL (default https://github.com/<repo>.git)
   BLINKY_BUILD_MAX_BUNDLE_MB  (default 64)    BLINKY_BUILD_KEEP_JOBS  (default 200)
+  BLINKY_BUILD_CORPUS_REPO    the corpus the checks take (default Jdubz/blinky-corpus)
+  BLINKY_BUILD_CORPUS_REMOTE  its fetch URL (default https://github.com/<corpus repo>.git); the
+                              commit's .gitmodules never chooses it
 """
 
 import hmac
@@ -35,6 +49,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import SHA_RE
+from .checks import CHECKS
 from .jobs import ID_RE, JobStore
 from .mirror import BadInput, Mirror, MissingPrerequisites, Untrusted
 
@@ -56,11 +71,14 @@ class HttpError(Exception):
 
 
 class Config:
-    def __init__(self, host, port, token, data, jobs, repo, remote, max_bundle, keep):
+    def __init__(self, host, port, token, data, jobs, repo, remote, max_bundle, keep,
+                 corpus_repo="Jdubz/blinky-corpus", corpus_remote=None):
         self.host, self.port, self.token = host, port, token
         self.data, self.jobs = Path(data), Path(jobs)
         self.repo, self.remote = repo, remote
         self.max_bundle, self.keep = max_bundle, keep
+        self.corpus_repo = corpus_repo
+        self.corpus_remote = corpus_remote or f"https://github.com/{corpus_repo}.git"
 
     @classmethod
     def from_env(cls, env=None):
@@ -88,6 +106,8 @@ class Config:
             remote=env.get("BLINKY_BUILD_REMOTE", f"https://github.com/{repo}.git"),
             max_bundle=int(env.get("BLINKY_BUILD_MAX_BUNDLE_MB", "64")) * 1024 * 1024,
             keep=int(env.get("BLINKY_BUILD_KEEP_JOBS", "200")),
+            corpus_repo=env.get("BLINKY_BUILD_CORPUS_REPO", "Jdubz/blinky-corpus"),
+            corpus_remote=env.get("BLINKY_BUILD_CORPUS_REMOTE") or None,
         )
 
 
@@ -95,6 +115,8 @@ class Service:
     def __init__(self, cfg):
         self.cfg = cfg
         self.mirror = Mirror(cfg.data / "mirror.git", cfg.remote, cfg.repo)
+        # The checks' corpus: the same trust rule, its own branch heads only.
+        self.corpus = Mirror(cfg.data / "corpus.git", cfg.corpus_remote, cfg.corpus_repo)
         # The api's own record of jobs lives with the mirror, not on the shared volume.
         self.store = JobStore(cfg.jobs, meta_dir=cfg.data / "jobs")
         self.lock = threading.Lock()
@@ -105,6 +127,7 @@ class Service:
         self.mirror.ensure()
         err = self.mirror.fetch_heads()
         log(f"mirror ready ({self.cfg.repo})" + (f"; initial fetch failed: {err}" if err else ""))
+        self.corpus.ensure()  # fetched when a check needs it
 
     def _brief(self, job_id):
         v = self.store.view(job_id)
@@ -167,9 +190,54 @@ class Service:
             except MissingPrerequisites as e:
                 raise HttpError(409, str(e)) from None
 
+    def submit_check(self, repo, sha, check):
+        """One heavy CI job of an owner commit, with the corpus it pins (both on their repos'
+        own branches: docs/DEV_LOOP.md, "Trust"). Never a bundle: a check's result is for a
+        pushed commit."""
+        if repo != self.cfg.repo:
+            raise HttpError(400, f"only {self.cfg.repo} is checked here, not {repo!r}")
+        if not isinstance(sha, str) or not SHA.match(sha):
+            raise HttpError(400, "sha must be a full 40-hex lowercase commit sha")
+        if check not in CHECKS:
+            raise HttpError(400, f"check must be one of {', '.join(CHECKS)}")
+        kind = f"check:{check}"
+        with self.lock:
+            reuse = self.store.find_reusable(sha, kind)
+            if reuse:
+                return 202, {**self._brief(reuse), "check": check}
+            self._fetch()
+            try:
+                self.mirror.require_branch_commit(sha)
+            except Untrusted as e:
+                log(f"refused check {check} of {sha[:12]}: {e}")
+                raise HttpError(403, str(e)) from None
+            pin = self.mirror.gitlink(sha, "corpus")
+            if pin is None:
+                raise HttpError(400, f"{sha[:12]} pins no corpus submodule at corpus/")
+            err = self.corpus.fetch_heads()
+            if err:
+                log(f"corpus fetch failed, using the branches already mirrored: {err}")
+            try:
+                self.corpus.require_branch_commit(pin)
+            except Untrusted as e:
+                raise HttpError(403, f"its corpus pin: {e}") from None
+            job_id = self.store.new_id(sha)
+            incoming = self.store.incoming(job_id)
+            try:
+                self.mirror.write_checkout(sha, incoming / "src")
+                self.corpus.write_tree(pin, incoming / "corpus")
+                self.store.publish(job_id, sha, self.cfg.repo, "branch", kind, corpus=pin)
+            except BaseException:
+                self.store.discard_incoming(job_id)
+                raise
+            for gone in self.store.prune(self.cfg.keep):
+                self.mirror.delete_refs(f"refs/dev/{gone}")
+            log(f"queued check {job_id} ({check} {sha[:12]}, corpus {pin[:12]})")
+            return 202, {"id": job_id, "state": "queued", "sha": sha, "check": check}
+
     def package_tar(self, job_id):
         meta = self.store.meta(job_id)
-        if not meta:
+        if not meta or self.store.kind(meta) != "build":
             raise HttpError(404, f"no build {job_id}")
         if (self.store.status(job_id) or {}).get("state") != "done":
             raise HttpError(409, f"build {job_id} is not done")
@@ -301,11 +369,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(401, "missing or bad bearer token")
         parts = path.strip("/").split("/")
         try:
+            if len(parts) == 3 and parts[:2] == ["v1", "checks"] and ID_RE.match(parts[2]):
+                v = self.service.store.view(parts[2])
+                if not v or "check" not in v:
+                    raise HttpError(404, f"no check {parts[2]}")
+                return self._send(200, v)
             if len(parts) in (3, 4) and parts[:2] == ["v1", "builds"] and ID_RE.match(parts[2]):
                 job_id = parts[2]
                 if len(parts) == 3:
                     v = self.service.store.view(job_id)
-                    if not v:
+                    if not v or "check" in v:
                         raise HttpError(404, f"no build {job_id}")
                     return self._send(200, v)
                 if parts[3] == "package":
@@ -324,6 +397,21 @@ class Handler(BaseHTTPRequestHandler):
             # The body is never read: close rather than leave it in the stream.
             return self._error(401, "missing or bad bearer token", close=True)
         try:
+            if path == "/v1/checks":
+                if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != (
+                    "application/json"
+                ):
+                    raise HttpError(400, "Content-Type must be application/json")
+                try:
+                    req = json.loads(self._body(MAX_JSON))
+                except ValueError:
+                    raise HttpError(400, "body is not JSON") from None
+                if not isinstance(req, dict) or set(req) - {"repo", "sha", "check"}:
+                    raise HttpError(400, 'expected {"repo": ..., "sha": ..., "check": ...}')
+                code, body = self.service.submit_check(
+                    req.get("repo"), req.get("sha"), req.get("check")
+                )
+                return self._send(code, body)
             if path != "/v1/builds":
                 raise HttpError(404, "not found")
             ctype = self.headers.get("Content-Type", "")
