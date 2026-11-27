@@ -158,6 +158,19 @@ def test_tracks_with_incomparable_lags_or_one_sided_scores_are_left_out_and_list
     }
 
 
+def test_the_body_lists_left_out_tracks_per_metric() -> None:
+    gh, st = GitHub(), {}
+    recs = leading()
+    for t in recs[0]["tracks"]:
+        t["tempoErr"] = None  # the candidate's line predates the tempo score
+    out = run(gh, st, recs)
+    assert (
+        "- tempo error (octave-tolerant; lower is better): t00 (no score from the candidate)"
+        in (out.text or "")
+    )
+    assert "- drum F:" not in (out.text or "")
+
+
 def test_without_measured_noise_a_metric_cannot_be_judged() -> None:
     base = [line(STABLE_SHA, 0.5, run="s", release="b217")]
     cand = [line(CAND_SHA, 0.9, run="c")]
