@@ -58,12 +58,11 @@ need_root() { [ "$(id -u)" = 0 ] || { echo "firewall.sh: run as root (sudo)" >&2
 
 apply() {
   need_root
-  ipt -N "$CHAIN" 2>/dev/null || true
-  ipt -F "$CHAIN"
-  while read -r rule; do
-    # shellcheck disable=SC2086  # word splitting of the rule is the point
-    ipt -A "$CHAIN" $rule
-  done < <(rules)
+  # One transaction: iptables-restore creates the chain or flushes it, and refills it, in a single
+  # commit of the raw table. A flush followed by one `-A` per rule left the chain empty (the service
+  # unfenced) for as long as the ~20 iptables calls took, on every deploy.
+  { echo "*raw"; echo ":$CHAIN - [0:0]"; rules | sed "s/^/-A $CHAIN /"; echo COMMIT; } \
+    | iptables-restore -w 5 --noflush
   ipt -C PREROUTING -s "$LABELS_FW_SOURCE" -j "$CHAIN" 2>/dev/null || ipt -I PREROUTING 1 -s "$LABELS_FW_SOURCE" -j "$CHAIN"
   echo "blinky-labels firewall applied: $(ipt -S "$CHAIN" | grep -c '^-A') rules in raw/$CHAIN"
 }

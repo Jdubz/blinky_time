@@ -1514,8 +1514,22 @@ LIMIT_OP = {"max": "max", "min": "min", "abs": "within ±"}  # a strict rule's k
 
 
 def strict_checks(strict_: dict[str, Any]) -> list[dict[str, Any]]:
-    """A block-mode rule that failed, as a failing check (a warn-mode one never is)."""
-    return [
+    """A block-mode rule that failed, or that measured nothing (the firmware didn't report its
+    field), as a failing check (a warn-mode one never is)."""
+    unmeasured = [
+        check(
+            "strict",
+            r["rule"],
+            r.get("device") or "",
+            NO,
+            f"strict rule (block): {LIMIT_OP.get(r['worst_is'], r['worst_is'])} "
+            f"{r['threshold']:g} {r['unit']}".rstrip(),
+            f"not measured: json info reported no {strict_rules.WINDOW_FIELDS[r['rule']]} "
+            f"({r.get('samples', 0)} reads)",
+        )
+        for r in strict_rules.unmeasured(strict_)
+    ]
+    return unmeasured + [
         check(
             "strict",
             r["rule"],
@@ -1572,6 +1586,7 @@ def verdict(report: dict[str, Any]) -> bool:
         and [p["name"] for p in report["phases"]] == list(report["plan"])
         and all(p["result"] == YES for p in report["phases"])
         and not strict_rules.failures(report.get("strict"))
+        and not strict_rules.unmeasured(report.get("strict"))
     )
 
 

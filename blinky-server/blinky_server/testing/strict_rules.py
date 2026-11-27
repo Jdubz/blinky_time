@@ -67,7 +67,8 @@ RULES: tuple[Rule, ...] = (
     # Blocking since 2026-11-26 (owner): each passed 5 builds in a row (blinky_time #444, #445,
     # #448) once blinky-firmware#49 and #23 removed the save and stream stalls. frame_time went
     # from the release gate's old 100 ms disaster floor to 50 ms, about 2x the worst window seen
-    # (15-27 ms, saves and streaming included); blinky-firmware's release_gate.py matches it.
+    # (15-27 ms before blinky-firmware#23, 13-18 ms since; saves and streaming included).
+    # blinky-firmware's release_gate.py matches it.
     Rule(
         "frame_time",
         "longest frame in every 5 s loop window (maxFrameMs)",
@@ -365,6 +366,30 @@ def report(
 def failures(strict: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The block-mode rules that failed: these fail the run."""
     return [r for r in (strict or {}).get("rules") or [] if r["status"] == FAILED]
+
+
+# The rules measured from the loop windows, and the ``json info`` field each reads. The
+# hardware checks always read windows, so a blocking one of these with no data means the
+# firmware stopped reporting the field: unmeasured() below, a failing check, never a pass.
+WINDOW_FIELDS = {
+    "frame_time": "maxFrameMs",
+    "fps": "fps",
+    "overrun_growth": "audioOverruns",
+    "stream_dropped": "streamDropped",
+}
+
+
+def unmeasured(strict: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Per device, the block-mode window rules with no data (each row with its ``device``):
+    a blocking rule that judged nothing must not pass silently (CLAUDE.md, No Silent
+    Fallbacks). The quality-suite rules (music, pace, latency) aren't measured by every run, so
+    they aren't here."""
+    out = []
+    for dev, rows in sorted(((strict or {}).get("devices") or {}).items()):
+        for r in rows:
+            if r["mode"] == BLOCK and r["status"] == NO_DATA and r["rule"] in WINDOW_FIELDS:
+                out.append({**r, "device": dev})
+    return out
 
 
 def warnings(strict: dict[str, Any] | None) -> list[dict[str, Any]]:
