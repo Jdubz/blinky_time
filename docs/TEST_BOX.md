@@ -240,7 +240,7 @@ The camera unavailable, the region map missing or not fitting (the frame brighte
 
 ### Strict rules (non-blocking)
 
-The release gate's limits that don't block yet: longest frame ≤ 100 ms, fps ≥ 60, no overrun growth, beat pace, music level and onsets, and the chip's detection latency (scored runs only; "Audio start") ([DEV_LOOP.md](DEV_LOOP.md), "Strict rules"). Every `json info` read the phases make is kept as a loop window, and the rules are judged over them at the end. They **warn** (a section in the report, "· N strict warnings" on a passing status, never red) until the owner switches one to **block** in `testing/strict_rules.py`, after the readiness tracker shows it passing on 5 builds in a row (the staging report says so and the staging runner opens one blinky_time issue). The windows that may hold one of the server's own settings saves (the deploy's restore + save, blinky-firmware#49) are excluded from the frame-time rule and listed with the save's time; nothing else is.
+The release gate's limits: longest frame ≤ 50 ms, fps ≥ 60 and no overrun growth, which **block** since 2026-11-26 (a failure is a red `Hardware test`); beat pace, music level and onsets, stream lines dropped, and the chip's detection latency (scored runs only; "Audio start"), which still warn ([DEV_LOOP.md](DEV_LOOP.md), "Strict rules"). Every `json info` read the phases make is kept as a loop window, and the rules are judged over them at the end. A warning rule shows in a report section and as "· N strict warnings" on a passing status, never red, until the owner switches it to **block** in `testing/strict_rules.py`, after the readiness tracker shows it passing on 5 builds in a row (the staging report says so and the staging runner opens one blinky_time issue). No window is excluded: since blinky-firmware#49 a settings save doesn't stall the loop.
 
 ### Reports
 
@@ -277,7 +277,7 @@ The result on the head: `success` "hardware checks passed: …" if every check p
 - **Sharing the box with the staging runner:** the server runs one hardware test at a time (a busy box answers 409, and the runner tries again next pass). Each runner reports its own waiting items, ready ones marked `ready`, and yields to the other's ready item that has waited longer, while the other is still reporting (a stopped runner never blocks one that runs). A head backing off after a rig error isn't reported ready.
 - **Closed or merged PRs:** dropped from the queue; running checks are cancelled (`DELETE /api/test/hardware-checks/{id}`); nothing more is posted.
 - `pr_queue.py --retest PR` queues the PR's head again (a flake that ended in a verdict). State: `pr_queue.py --status` (`~/.local/share/blinky-server/pr-queue.json`); log: `journalctl -u blinky-pr-queue`. Config: `build.env` ("Build service client" above); without it nothing is built and the pass says so in the log.
-- **Required or not:** the owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
+- **Required:** `Hardware test (PR)` is a required status on blinky-firmware's `staging` ruleset (since 2026-11-26). Fork PRs and firmware-neutral PRs get a `success` without a run, so they still merge; drafts get nothing until they're ready.
 
 ## Dev loop
 

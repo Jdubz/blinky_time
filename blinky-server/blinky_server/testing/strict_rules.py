@@ -8,7 +8,7 @@ gate's limits (blinky-firmware tools/release_gate.py) that don't block on the bo
 Each rule is one row of RULES: a name, a threshold, the blinky-firmware issues it waits on and a
 mode. The lifecycle:
 
-1. **warn** (every rule today): measured and reported in every run (the hardware checks, the
+1. **warn**: measured and reported in every run (the hardware checks, the
    staging quality suite, dev runs), exported as metrics, and never a failure: a warning never
    changes a commit status.
 2. **ready**: it has passed on the last READY_AFTER distinct firmware builds with real runs
@@ -64,17 +64,21 @@ class Rule:
 # The strict rules, defined once. Switching one to blocking is its mode, WARN -> BLOCK: the
 # owner's decision, once the readiness tracker shows it passing (docs/DEV_LOOP.md).
 RULES: tuple[Rule, ...] = (
+    # Blocking since 2026-11-26 (owner): each passed 5 builds in a row (blinky_time #444, #445,
+    # #448) once blinky-firmware#49 and #23 removed the save and stream stalls. frame_time went
+    # from the release gate's old 100 ms disaster floor to 50 ms, about 2x the worst window seen
+    # (15-27 ms, saves and streaming included); blinky-firmware's release_gate.py matches it.
     Rule(
         "frame_time",
         "longest frame in every 5 s loop window (maxFrameMs)",
-        100.0,
+        50.0,
         "ms",
         "max",
         (),
-        WARN,
+        BLOCK,
     ),
-    Rule("fps", "loop fps in every 5 s window, sustained", 60.0, "fps", "min", (), WARN),
-    Rule("overrun_growth", "audioOverruns growth across the run", 0.0, "", "max", (), WARN),
+    Rule("fps", "loop fps in every 5 s window, sustained", 60.0, "fps", "min", (), BLOCK),
+    Rule("overrun_growth", "audioOverruns growth across the run", 0.0, "", "max", (), BLOCK),
     # Stream lines the firmware skipped whole because the host wasn't draining its serial
     # buffer (blinky-firmware#85: ``streamDropped`` in ``json info``). Any skip means the
     # server missed analysis data the run judged on.

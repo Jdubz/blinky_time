@@ -1,6 +1,6 @@
 # Dev loop: build, flash and test on the box before CI
 
-Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`), phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py`; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue") and phase 2.1 (the blocking hardware checks, the server's `test.hardware-checks` job, in place of phase 2's smoke test; [TEST_BOX.md](TEST_BOX.md), "Hardware checks") and phase 2.2 (the strict rules in warn mode, with readiness tracking: "Strict rules" below). The owner makes `Hardware test (PR)` a required status on blinky-firmware's `staging` ruleset.
+Status: design, agreed with the owner on 2026-11-25. Phases are at the end. Built: phase 1 (the build service, [build-service/](../build-service/README.md); box modes, dev deploy and targeted checks, `dev.py`), phase 2 (the PR hardware queue: `scripts/testbox/pr_queue.py`; [TEST_BOX.md](TEST_BOX.md), "PR hardware queue") and phase 2.1 (the blocking hardware checks, the server's `test.hardware-checks` job, in place of phase 2's smoke test; [TEST_BOX.md](TEST_BOX.md), "Hardware checks") and phase 2.2 (the strict rules, with readiness tracking: "Strict rules" below; `frame_time`, `fps` and `overrun_growth` block since 2026-11-26). `Hardware test (PR)` is a required status on blinky-firmware's `staging` ruleset (since 2026-11-26).
 
 ## Why
 
@@ -124,9 +124,9 @@ The bench release gate's limits that don't block on the box yet (owner, 2026-11-
 
 | Rule | Limit | Measured | Waits on |
 |---|---|---|---|
-| `frame_time` | longest frame ≤ 100 ms in every 5 s loop window | every `json info` read of the run | — |
-| `fps` | ≥ 60 in every window | the same reads | — |
-| `overrun_growth` | no `audioOverruns` growth across the run | the same reads | — |
+| `frame_time` (**block**) | longest frame ≤ 50 ms in every 5 s loop window | every `json info` read of the run | — |
+| `fps` (**block**) | ≥ 60 in every window | the same reads | — |
+| `overrun_growth` (**block**) | no `audioOverruns` growth across the run | the same reads | — |
 | `stream_dropped` | no stream line skipped (`streamDropped` growth across the run; firmware since blinky-firmware#85, older firmware: no data) | the same reads | — |
 | `beat_pace` | beats counted within 3% (±2 beats) of the tempo, 60 s of music | quality suite, `dev.py test pace` | — |
 | `music_level`, `music_onsets` | mean level ≥ 0.05, ≥ 1 pulse onset/s with music | the same | — |
@@ -134,9 +134,10 @@ The bench release gate's limits that don't block on the box yet (owner, 2026-11-
 
 The reads: the hardware checks' (upload's stability wait, audio before and after the noise, the first read after the response stream, the last), the quality suite's (5 min of health, one after each track while the chip streams, the last) and a dev run's (info, health, after each validated track).
 
-- **warn** (every rule now): a section "⚠ strict rules (non-blocking)" in every report (PR and staging comments, `dev.py`), each rule with pass/warn, its worst value, where and when it was read, and the tracks a rule left out (detection latency). A warning never changes a commit status; the description may end "· 2 strict warnings". Metrics: `blinky_strict_rule_pass{rule,source}`, `_worst`, `_streak`, `_ready`, `_blocking`; and `blinky_detection_latency_offset_ms{device,source}` with `_tracks` for the detection latency itself.
+- **warn** (every rule not marked block above): a section "⚠ strict rules (non-blocking)" in every report (PR and staging comments, `dev.py`), each rule with pass/warn, its worst value, where and when it was read, and the tracks a rule left out (detection latency). A warning never changes a commit status; the description may end "· 2 strict warnings". Metrics: `blinky_strict_rule_pass{rule,source}`, `_worst`, `_streak`, `_ready`, `_blocking`; and `blinky_detection_latency_offset_ms{device,source}` with `_tracks` for the detection latency itself.
 - **ready:** passed on the last 5 distinct firmware builds with real runs (staging quality suites, and PR or staging heads that passed the hardware checks; a staging commit with a PR head's tree is that head's build), no warning in between. A run without data for a rule counts neither way. `BLINKY_STRICT_READY_AFTER` changes the 5. The staging report then says "strict rule X has passed on 5 consecutive builds: ready to block", and the staging runner opens one blinky_time issue, "Ready to enable strict rule: X", with the evidence (never a second one). `dev.py status` and `GET /api/test/strict-rules` show each rule's streak.
 - **block:** the owner sets the rule's mode to `BLOCK` (its one line in `RULES`). A failing block rule is then a failing check in the hardware checks (red `Hardware test`) and fails a dev run. Never automatic. Beat pace and music are measured only by the quality suite and `dev.py test pace`, so blocking them fails dev runs but no commit status (`Quality suite (staging)` is always `success`): that needs a decision on where they block.
+- **Blocking now** (owner, 2026-11-26, after readiness issues #444, #445 and #448): `frame_time` at 50 ms (was 100 ms; every window measures 15–27 ms since blinky-firmware#49 and #23, and the release gate's `--max-frame-ms` matches), `fps` ≥ 60 and `overrun_growth` 0.
 
 **No settings-save exclusion.** A `save` used to stall the loop ~85–115 ms erasing a flash page, and the windows that might hold one of the server's saves were left out of `frame_time`. Since blinky-firmware#49 (the settings journal: a save only writes flash; measured on the box, windows with a save 15–19 ms, the same as without) every window counts, and the server no longer records its saves.
 
@@ -156,7 +157,7 @@ The reads: the hardware checks' (upload's stability wait, audio before and after
    - dev flash and targeted tests, and `dev.py`;
    - drafts run no heavy jobs.
 2. **The PR hardware queue:** `Hardware test (PR)` on each firmware PR head (built).
-   - **2.1, the blocking hardware checks:** upload, lights, audio, response, interfaces, yes/no, on the PR head; staging confirms them by tree; the quality suite non-blocking after (built). `Hardware test (PR)` becomes required on blinky-firmware's `staging` ruleset by the owner.
+   - **2.1, the blocking hardware checks:** upload, lights, audio, response, interfaces, yes/no, on the PR head; staging confirms them by tree; the quality suite non-blocking after (built). `Hardware test (PR)` is required on blinky-firmware's `staging` ruleset (2026-11-26).
    - **2.2, the strict rules** in warn mode, with the readiness tracker (built; "Strict rules" above). Each blocks once it passes and the owner switches it.
 3. **The build service takes the heavy CI jobs for owner commits; score-ranked stable proposals.**
 
