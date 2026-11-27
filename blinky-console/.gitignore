@@ -34,5 +34,5 @@ coverage/
 # Web flasher firmware mirror (CI: tools/firmware_release.py mirror)
 public/firmware/
 
-# Drum-label reviewer page (CI: scripts/vendor-labels-page.js, from the pinned corpus)
+# Drum-label reviewer page (CI: scripts/labels-page.js, from labels-service/index.html)
 public/labels/

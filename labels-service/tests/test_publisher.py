@@ -213,6 +213,51 @@ def test_reverting_a_later_batch_sticks(env):
     assert env.app.export()["tracks"] == {}, "the reverted batch must not be offered again"
 
 
+def test_deleting_the_file_a_state_started_from_wins(env):
+    """The owner deletes a human file (a labels-override revert) while people have unpublished edits
+    on top of it: main wins, as for any outside change. The track goes back to its seed and the
+    deleted file isn't offered again."""
+    env.push_to_main({A: human(env.edm, "a", KICKS)}, "a human file")
+    env.app.tick()
+    env.edit("a", {"op": "del", "id": "h1"})  # edited, not yet published
+    git(env.work, "pull", "-q", "origin", "main")
+    git(env.work, "rm", "-q", A)
+    git(env.work, "commit", "-qm", "the owner deletes it")
+    git(env.work, "push", "-q", "origin", "HEAD:main")
+    env.app.tick()
+    assert [e.get("deleted") for e in env.events("adopted_main")] == [True]
+    assert env.app.store.view("a")["seed"] == "drums_adtof" and not env.app.store.edited_since_base("a")
+    assert env.app.export()["tracks"] == {}, "the deleted file must not be offered again"
+
+
+def test_one_unreadable_track_does_not_stop_publishing(env):
+    """A track whose new file on main can't be loaded (here: made against other audio) is logged;
+    the other tracks still refresh and land."""
+    env.app.store.view("a")  # opened, unedited: it follows main
+    env.edit("b", {"op": "del", "id": "h1"})
+    out = env.app.export()
+    bad = json.loads(human(env.edm, "a", KICKS))
+    bad["audio_sha256"] = "0" * 64
+    env.push_to_main({**out["tracks"], A: dumps_doc(bad)}, "b's batch, and a broken file for a")
+    env.app.tick()
+    assert env.app.status("b")["published"] and env.events("published")
+    assert any(e.get("stem") == "a" for e in env.events("tick_failed"))
+
+
+def test_a_held_track_says_so(env):
+    """A track the label checks refuse never publishes until it's fixed: its status says so (the
+    page shows it), instead of "publishing soon" forever."""
+    ids = [o["id"] for o in env.app.store.view("a")["onsets"]]
+    env.edit("a", *({"op": "del", "id": i} for i in ids[:15]))
+    assert env.app.status("a")["held"] is None  # not known before an export
+    env.app.export()
+    st = env.app.status("a")
+    assert st["unpublished"] and any("deletes 15 of the 19" in p for p in st["held"])
+    env.edit("a", *({"op": "add", "id": f"x{i}", "time": 0.5 + i, "type": "kick"} for i in range(10)))
+    out = env.app.export()
+    assert list(out["tracks"]) == [A] and env.app.status("a")["held"] is None
+
+
 def test_an_opened_track_follows_main_until_someone_edits_it(env):
     env.app.store.view("a")  # opened: its state starts from the seed
     env.push_to_main({A: human(env.edm, "a", KICKS[:9])}, "a human file lands from elsewhere")
@@ -263,6 +308,18 @@ def test_export_over_http(env):
     finally:
         s.shutdown()
         s.server_close()
+
+
+def test_the_export_has_its_own_rate_limit(env):
+    """GET /api/export is public and runs the label checks on every edited track: one client can't
+    make it cost much (labels-sync pulls it once per run)."""
+    env.app.limiter = hosted.RateLimiter({**srv.DEFAULT_LIMITS, "export": (2, 3600.0)})
+    env.edit("a", {"op": "del", "id": "h1"})
+    env.app.export(ip="client-1")
+    env.app.export(ip="client-1")
+    with pytest.raises(srv.ApiError) as e:
+        env.app.export(ip="client-1")
+    assert e.value.status == 429 and env.app.export(ip="client-2")["tracks"]
 
 
 def test_state_survives_a_restart(env, tmp_path):
