@@ -43,6 +43,8 @@ log = logging.getLogger(__name__)
 # The box's chips, by USB serial: the registry entry each one runs.
 BOX_CHIPS = {
     "87DE9B58C90AFE2D": "testbox_grid_v1",  # the permanent test chip, the 8x8 grid
+    # The ESP32-S3 (testbox_esp32) is added once the box can flash current ESP32 firmware: its
+    # 1.0.1 build refuses the entry (orientation 5), so it would only log a refused upload.
 }
 
 REGISTRY_DIR = Path(__file__).resolve().parents[3] / "devices" / "registry"

@@ -1,0 +1,11 @@
+{
+  "deviceId": "testbox_esp32",
+  "deviceName": "Test Box Grid ESP32-S3",
+  "ledWidth": 8,
+  "ledHeight": 8,
+  "ledPin": 1,
+  "ledType": 82,
+  "orientation": 5,
+  "layoutType": 0,
+  "brightness": 0
+}
