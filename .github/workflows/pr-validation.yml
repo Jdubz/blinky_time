@@ -576,8 +576,8 @@ jobs:
       run: python -m pytest -v labels-service/tests/
     - name: The page (JS syntax, no external fetches)
       run: python labels-service/check_js.py
-    - name: The build host's pull deployer
-      run: python -m pytest -v deploy/build-host/deployer/
+    - name: The build host's pull deployer and the build service's sandbox check
+      run: python -m pytest -v deploy/build-host/deployer/ deploy/build-host/build/
     - name: Deploy scripts parse (shellcheck)
       run: shellcheck deploy/build-host/*/*.sh
     - name: The build service's deployment keeps the sandbox (check_config.py)
