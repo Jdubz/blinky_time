@@ -14,13 +14,15 @@ where the scorer's lag came from. repS (repetition consistency) is a metric of t
 too, but the box doesn't measure it yet: it shows as "not measured" and counts neither way.
 
 **Health and smoothness are metrics too**, so a pure smoothness win can qualify: the longest
-frame, the lowest fps, audio overrun growth, stream lines dropped and the beat-pace error. Each
+frame, the lowest fps and the beat-pace error. Each
 is one value per run, the strict rule's worst (testing/strict_rules.py; the worst chip's), from
 the line's ``health`` record. A line without it (before phase 3, or a firmware that doesn't
 report the field) is "not measured" for it; the staging report isn't used for these, as it is
-one file per commit and a second run of it overwrites the first's. Music level and onsets
-depend on the rig's volume, and detection latency is a drift from the rig's calibration, not
-better or worse by direction, so they aren't metrics.
+one file per commit and a second run of it overwrites the first's. Not metrics: audio overrun
+growth and stream lines dropped (counters that are almost always 0, so their measured noise is
+0 and a single count from a rig hiccup would read as beyond it; overrun_growth blocks at 0
+anyway), music level and onsets (the rig's volume), and detection latency (a drift from the
+rig's calibration, not better or worse by direction).
 
 **What is compared with what.** A candidate ``bN`` is a merge of a staging commit into master;
 its scores are that staging commit's (its tag's second parent, with the same tree). The stable
@@ -114,8 +116,6 @@ METRICS: tuple[Metric, ...] = (
     Metric("tempoErr", "tempo error (octave-tolerant; lower is better)", False, "{:.4f}"),
     Metric("frame_time", "longest frame (ms; lower is better)", False, "{:.1f}", True),
     Metric("fps", "lowest fps", True, "{:.1f}", True),
-    Metric("overrun_growth", "audio overrun growth (lower is better)", False, "{:.1f}", True),
-    Metric("stream_dropped", "stream lines dropped (lower is better)", False, "{:.1f}", True),
     Metric("beat_pace", "beat-pace error (lower is better)", False, "{:.3f}", True),
 )
 
