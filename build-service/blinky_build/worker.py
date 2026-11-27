@@ -8,6 +8,12 @@ steps exactly as blinky-firmware's .github/workflows/staging-build.yml does:
 and writes package/ (manifest.json, blinky-things-b<N>.hex, .uf2), build.log and
 status.json back into the job.
 
+A check job (kind ``check:<job>``, checks.py) runs one heavy job of the commit's own
+.github/workflows/pr-validation.yml instead, step for step, in the same persistent checkout
+with the corpus the commit pins (from the job) at corpus/, and writes its ``conclusion``
+(success | failure) and each step's outcome and time into status.json. ``failed`` stays an
+infrastructure error: a job the image can't run as written, a toolchain mismatch, a timeout.
+
 The checkout it builds in is one persistent tree at a fixed path (BLINKY_BUILD_SRC), moved
 between commits with `git checkout`, so arduino-cli's sketch build directory (keyed by the
 sketch path) stays warm and unchanged files keep their mtimes: an incremental build
@@ -26,6 +32,7 @@ Configuration (environment):
   BLINKY_BUILD_TIMEOUT    seconds per step (default 1800)
 """
 
+import importlib.metadata
 import json
 import os
 import shutil
@@ -36,7 +43,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import toolchain
+from . import checks, toolchain
 from .gitutil import SAFE_CONFIG, safe_env
 from .jobs import JobStore
 
@@ -50,6 +57,11 @@ def log(msg):
 
 class BuildFailed(Exception):
     pass
+
+
+class StepFailed(BuildFailed):
+    """A command exited non-zero or timed out: for a build, the build failed; for a check,
+    its verdict (a timeout fails a job on GitHub too)."""
 
 
 class Config:
@@ -121,6 +133,7 @@ class Worker:
                 self.store.set_status(job_id, state="failed",
                                       error="the worker restarted during this build; submit again")
                 shutil.rmtree(d / "src", ignore_errors=True)
+                shutil.rmtree(d / "corpus", ignore_errors=True)
                 log(f"{job_id}: marked failed (worker restarted)")
 
     def prune_caches(self):
@@ -137,7 +150,11 @@ class Worker:
         job_id = self.store.next_queued()
         if not job_id or not self.store.claim(job_id):
             return False
-        self.build(job_id)
+        kind = self.store.kind(self.store.meta(job_id))
+        if kind.startswith("check:"):
+            self.check(job_id, kind.split(":", 1)[1])
+        else:
+            self.build(job_id)
         return True
 
     def run_forever(self):
@@ -182,12 +199,136 @@ class Worker:
                                   finished_at=time.time(), duration_s=dur)
             log(f"{job_id}: done in {dur}s: {version}")
 
+    # ----------------------------------------------------------------- check ---
+
+    def image(self):
+        """What this image provides for a check's download steps (checks.plan)."""
+        names = set()
+        for dist in importlib.metadata.distributions():
+            name = dist.metadata.get("Name")
+            if name:
+                names.add(checks._norm(name))
+        return {
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "arduino_cli": str((self.baked.get("toolchain") or {}).get("arduino_cli", "")),
+            "pip": names & checks.PROVIDED_PIP,
+        }
+
+    def check(self, job_id, job):
+        d = self.cfg.jobs / job_id
+        sha = self.store.meta(job_id)["sha"]
+        t0 = time.monotonic()
+        self.store.set_status(job_id, state="building", started_at=time.time())
+        log(f"{job_id}: check {job} of {sha[:12]}")
+        steps, conclusion, err = [], None, None
+        with open(d / "build.log", "a", encoding="utf-8") as logf:
+            try:
+                conclusion = self._check(d, sha, job, logf, steps)
+            except BuildFailed as e:
+                err = str(e)
+            except Exception as e:  # noqa: BLE001 - every failure ends the job, with a reason
+                err = f"internal error: {e!r}"
+            dur = round(time.monotonic() - t0, 1)
+            logf.write(f"\n=== {'FAILED: ' + err if err else conclusion} after {dur}s\n")
+        shutil.rmtree(d / "src", ignore_errors=True)
+        shutil.rmtree(d / "corpus", ignore_errors=True)
+        if err:
+            self.store.set_status(job_id, state="failed", error=err, steps=steps,
+                                  finished_at=time.time(), duration_s=dur)
+            log(f"{job_id}: check failed to run after {dur}s: {err}")
+        else:
+            self.store.set_status(job_id, state="done", conclusion=conclusion, error=None,
+                                  steps=steps, finished_at=time.time(), duration_s=dur)
+            log(f"{job_id}: check {job} {conclusion} in {dur}s")
+
+    def _check(self, d, sha, job, logf, steps):
+        import yaml  # the image's PyYAML (requirements-worker.txt); data only: safe_load
+
+        logf.write(f"=== check {job} of {sha} (job {d.name})\n")
+        logf.flush()
+        self.sync(d / "src", sha, logf)
+        src = self.cfg.src
+        try:
+            want = toolchain.fingerprint(src)
+        except toolchain.ToolchainError as e:
+            raise BuildFailed(f"cannot read this commit's toolchain pin: {e}") from None
+        diffs = toolchain.differences(want, self.baked)
+        if diffs:
+            raise BuildFailed("toolchain mismatch: rebuild the worker image. " + "; ".join(diffs))
+        corpus = d / "corpus"
+        if not corpus.is_dir():
+            raise BuildFailed("the job has no corpus")
+        shutil.rmtree(src / "corpus", ignore_errors=True)
+        shutil.copytree(corpus, src / "corpus", symlinks=True)
+        try:
+            wf = yaml.safe_load((src / checks.WORKFLOW).read_text(encoding="utf-8"))
+            plan = checks.plan(wf, job, self.image())
+        except (OSError, yaml.YAMLError) as e:
+            raise BuildFailed(f"{checks.WORKFLOW} unreadable: {e}") from None
+        except checks.Unsupported as e:
+            raise BuildFailed(f"can't run as written: {e}") from None
+        deadline = time.monotonic() + checks.job_timeout_s(wf, job, self.cfg.timeout)
+        tmp = self.cfg.cache / "check-tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True)
+        self.cfg.home.mkdir(parents=True, exist_ok=True)
+        base = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": str(self.cfg.home),
+            "TMPDIR": str(tmp),
+            "LANG": "C.UTF-8",
+            "CI": "true",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            **self.safe_directory(),
+        }
+        failed = False
+        for step in plan:
+            if step.provided:
+                steps.append({"name": step.name, "outcome": "provided", "seconds": 0.0})
+                logf.write(f"\n=== {step.name}: provided by the image ({step.provided})\n")
+                continue
+            if failed:
+                steps.append({"name": step.name, "outcome": "skipped", "seconds": None})
+                continue
+            left = deadline - time.monotonic()
+            if left <= 0:  # as on GitHub: the job timed out, a failure
+                logf.write(f"\n=== {step.name}: the job's timeout passed\n")
+                steps.append({"name": step.name, "outcome": "failure", "seconds": 0.0})
+                failed = True
+                continue
+            t = time.monotonic()
+            try:
+                self._run(logf, ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                                 step.script], {**base, **step.env}, step.name,
+                          timeout=min(left, step.timeout_s or left))
+                outcome = "success"
+            except StepFailed:
+                outcome, failed = "failure", True
+            steps.append({"name": step.name, "outcome": outcome,
+                          "seconds": round(time.monotonic() - t, 1)})
+        return "failure" if failed else "success"
+
+    def safe_directory(self):
+        """Git config, as environment (protected, like -c), that trusts the checkout: its
+        directory is root's (sticky, so a build can't swap .arduino: Dockerfile.worker) while
+        the repository in it is this user's, which git would otherwise refuse as "dubious
+        ownership". The build's own git calls (scripts/build.sh) need it too. The worker
+        rewrites .git/config before every sync, so trusting it adds nothing a build planted."""
+        return {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": str(self.cfg.src),
+        }
+
     def _git(self, logf, *args):
         cmd = ["git"]
         for c in SAFE_CONFIG:
             cmd += ["-c", c]
         cmd += ["-C", str(self.cfg.src), *map(str, args)]
-        r = subprocess.run(cmd, env=safe_env(), capture_output=True, text=True, timeout=600)
+        env = {**safe_env(), **self.safe_directory()}
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             logf.write(r.stdout + r.stderr)
             raise BuildFailed(f"git {args[0]} failed: {r.stderr.strip()[:300]}")
@@ -217,7 +358,8 @@ class Worker:
         if self._git(logf, "rev-parse", "HEAD") != sha:
             raise BuildFailed("checkout did not land on the job's commit")
 
-    def _run(self, logf, cmd, env, what):
+    def _run(self, logf, cmd, env, what, timeout=None):
+        timeout = self.cfg.timeout if timeout is None else timeout
         logf.write(f"\n=== {what}: {' '.join(map(str, cmd))}\n")
         logf.flush()
         t0 = time.monotonic()
@@ -225,15 +367,15 @@ class Worker:
                              stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
         try:
-            rc = p.wait(timeout=self.cfg.timeout)
+            rc = p.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait()
-            raise BuildFailed(f"{what} timed out after {self.cfg.timeout}s") from None
+            raise StepFailed(f"{what} timed out after {timeout:.0f}s") from None
         logf.write(f"=== {what}: exit {rc} in {time.monotonic() - t0:.1f}s\n")
         logf.flush()
         if rc != 0:
-            raise BuildFailed(f"{what} failed (exit {rc}); see the log")
+            raise StepFailed(f"{what} failed (exit {rc}); see the log")
 
     def _build(self, d, sha, logf):
         logf.write(f"=== job {d.name}: {sha}\n")
@@ -273,6 +415,7 @@ class Worker:
             "PYTHONDONTWRITEBYTECODE": "1",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": "/dev/null",
+            **self.safe_directory(),
         }
         out = self.cfg.output
         shutil.rmtree(out, ignore_errors=True)

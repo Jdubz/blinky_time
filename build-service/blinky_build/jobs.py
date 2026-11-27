@@ -1,12 +1,17 @@
 """Jobs on the shared volume: the only channel between the api and the worker.
 
   <jobs>/.incoming/<id>/   being written by the api; renamed into place when complete
-  <jobs>/<id>/job.json     {id, sha, repo, source, created_at}           (api, for the worker)
+  <jobs>/<id>/job.json     {id, sha, repo, source, kind, created_at}     (api, for the worker)
   <jobs>/<id>/src/         a checkout of sha with history                (api; worker removes it)
+  <jobs>/<id>/corpus/      a check's corpus, the tree the commit pins    (api; worker removes it)
   <jobs>/<id>/claim        the worker took it (O_EXCL)                   (worker)
   <jobs>/<id>/status.json  {state, version, error, ...}                  (worker, atomic)
   <jobs>/<id>/build.log    the build's output                            (worker)
   <jobs>/<id>/package/     manifest.json, *.hex, *.uf2                   (worker, renamed in)
+
+``kind`` is ``build`` (a firmware build: the package) or ``check:<job>`` (one heavy CI job of
+the commit's workflow, checks.py: status.json carries its ``conclusion`` and ``steps``). A job
+recorded before kinds existed is a build.
 
 No status.json means queued; an unreadable one means failed.
 
@@ -33,6 +38,9 @@ LOG_TAIL_BYTES = 6000
 LOG_TAIL_LINES = 60
 MAX_JSON = 1 << 20
 MAX_PACKAGE_FILE = 64 << 20
+CONCLUSIONS = ("success", "failure")
+STEP_OUTCOMES = ("provided", "success", "failure", "skipped")
+MAX_STEPS = 100
 
 
 def _write_json_atomic(path, data):
@@ -163,6 +171,11 @@ class JobStore:
             return {"state": "failed", "error": "status.json is corrupt"}
         return st
 
+    @staticmethod
+    def kind(meta):
+        k = (meta or {}).get("kind") or "build"
+        return k if isinstance(k, str) else "build"
+
     def view(self, job_id):
         """The API's view of a job, or None."""
         meta = self.meta(job_id)
@@ -172,7 +185,7 @@ class JobStore:
         log = read_file(self.root, job_id, "build.log", limit=LOG_TAIL_BYTES, tail=True)
         version = st.get("version")
         error = st.get("error")
-        return {
+        out = {
             "id": job_id,
             "state": st["state"],
             "sha": meta["sha"],
@@ -183,6 +196,37 @@ class JobStore:
             "created_at": meta.get("created_at"),
             "duration_s": st.get("duration_s"),
         }
+        kind = self.kind(meta)
+        if kind.startswith("check:"):
+            out.pop("version")
+            out["check"] = kind.split(":", 1)[1]
+            out["corpus"] = meta.get("corpus")
+            out.update(self._check_result(st))
+        return out
+
+    @staticmethod
+    def _check_result(st):
+        """A check's conclusion and steps from status.json, which the worker wrote while the
+        job's code ran: untrusted, so typed and capped here. A done check without a valid
+        conclusion is a failure."""
+        concl = st.get("conclusion")
+        if st["state"] == "done" and concl not in CONCLUSIONS:
+            concl = "failure"
+        elif st["state"] != "done":
+            concl = None
+        steps = []
+        raw = st.get("steps")
+        for s in raw[:MAX_STEPS] if isinstance(raw, list) else []:
+            if not isinstance(s, dict):
+                continue
+            outcome = s.get("outcome")
+            secs = s.get("seconds")
+            steps.append({
+                "name": str(s.get("name", ""))[:200],
+                "outcome": outcome if outcome in STEP_OUTCOMES else "failure",
+                "seconds": round(float(secs), 1) if isinstance(secs, (int, float)) else None,
+            })
+        return {"conclusion": concl, "steps": steps}
 
     def package_files(self, job_id):
         """{name: bytes} of a done job's package: manifest.json, *.hex, *.uf2, regular files
@@ -206,12 +250,13 @@ class JobStore:
     def new_id(self, sha):
         return f"{time.strftime('%Y%m%d%H%M%S', time.gmtime())}-{sha[:8]}-{secrets.token_hex(3)}"
 
-    def find_reusable(self, sha):
-        """The newest done build of ``sha``, else one still queued or building, else None."""
+    def find_reusable(self, sha, kind="build"):
+        """The newest done job of ``sha`` and ``kind``, else one still queued or running, else
+        None."""
         done = inflight = None
         for job_id in self.ids():
             meta = self.meta(job_id)
-            if not meta or meta.get("sha") != sha:
+            if not meta or meta.get("sha") != sha or self.kind(meta) != kind:
                 continue
             state = (self.status(job_id) or {}).get("state")
             if state == "done":
@@ -225,10 +270,10 @@ class JobStore:
         d.mkdir(parents=True)
         return d
 
-    def publish(self, job_id, sha, repo, source):
+    def publish(self, job_id, sha, repo, source, kind="build", **extra):
         """Record the job and move the finished job directory into the queue."""
-        meta = {"id": job_id, "sha": sha, "repo": repo, "source": source,
-                "created_at": time.time()}
+        meta = {"id": job_id, "sha": sha, "repo": repo, "source": source, "kind": kind,
+                **extra, "created_at": time.time()}
         src = self.root / ".incoming" / job_id
         _write_json_atomic(src / "job.json", meta)
         if self.meta_dir:

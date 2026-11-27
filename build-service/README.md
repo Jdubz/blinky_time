@@ -15,7 +15,7 @@ Two containers share one job volume. Neither has a docker socket.
   - It writes the job (a checkout with history) into the job volume.
 - **`worker`** (`blinky_build/worker.py`): `network_mode: none`, uid 10001, all capabilities dropped, `no-new-privileges`.
   - It runs the firmware's own steps exactly as `staging-build.yml` does: `scripts/build.sh --dev`, `tools/firmware_release.py package --dev`, the `Version.h` check.
-  - The toolchain is baked in at image build time by the firmware's `scripts/setup_toolchain.sh` at `FIRMWARE_TOOLCHAIN_REF`. It's root-owned, so a build can't change it.
+  - The toolchain is baked in at image build time by the firmware's `scripts/setup_toolchain.sh` at `FIRMWARE_TOOLCHAIN_REF`. It's root-owned, so a build can't change it or swap it: the checkout directory around it is root's, group 10001, sticky (`1775`), so the build creates and removes its own files there but can't rename or replace `.arduino` (`verify.sh` and CI probe both).
   - A commit whose pin differs fails with `toolchain mismatch: rebuild the worker image`. The pin is `tools/firmware_toolchain.json` (minus comments), `TFLITE_REF` and the `patches/*.patch` hashes (`blinky_build/toolchain.py`).
   - **Incremental builds:** the build tree is one persistent checkout at a fixed path, moved between commits with `git checkout`, and arduino-cli's build directory is on the cache volume (one per toolchain). Only changed files recompile.
   - **Why the rootfs isn't read-only:** arduino-cli resolves library symlinks and the firmware's `check_build_libs.py` wants the libraries under `<checkout>/.arduino`. So the tree lives in the container layer next to the baked toolchain.
@@ -29,7 +29,10 @@ Two containers share one job volume. Neither has a docker socket.
 | `POST /v1/builds`, multipart `bundle` (file) + `sha` | the same |
 | `GET /v1/builds/{id}` | `{"id", "state": "queued\|building\|done\|failed", "sha", "version", "error", "log_tail", ...}` |
 | `GET /v1/builds/{id}/package` | `.tar.gz` of `manifest.json`, `*.hex`, `*.uf2` (the `staging-firmware-<sha>` artifact's files); 409 until done |
+| `POST /v1/checks`, JSON `{"repo": "Jdubz/blinky-firmware", "sha": "<40 hex>", "check": "tracker-harness" \| "tracker-harness-nn"}` | 202 `{"id", "state": "queued", "sha", "check"}` |
+| `GET /v1/checks/{id}` | `{"id", "state", "sha", "check", "corpus", "conclusion": "success\|failure" (once done), "steps": [{"name", "outcome", "seconds"}], "error", "log_tail", ...}` |
 
+- **Checks** (`blinky_build/checks.py`; [DEV_LOOP.md](../docs/DEV_LOOP.md), section 1): one heavy job of the commit's own `pr-validation.yml`, run step for step in the worker's sandbox with the corpus the commit pins. Branch commits only (no bundles), and the corpus pin must be on a branch of blinky-corpus (its own `refs/heads/*` mirror; `BLINKY_BUILD_CORPUS_REPO`, `BLINKY_BUILD_CORPUS_REMOTE`). `state: failed` is an infrastructure error (a step the image can't run as written, a toolchain mismatch); a failing gate is `done` with `conclusion: failure`. 400 also means no corpus pin; 403, the commit or its corpus pin is not on a branch.
 - **Repeat requests:** a SHA with a `done` build gets that build back (202 with `"state": "done"`), and so does a SHA with a build still queued or building. A failed build is built again.
 - **Errors:**
   - 400: bad input, a malformed bundle, or a SHA in neither the bundle nor a branch;

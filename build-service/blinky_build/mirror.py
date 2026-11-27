@@ -202,3 +202,46 @@ class Mirror:
                 shutil.copytree(stage, dest, symlinks=True)
             finally:
                 shutil.rmtree(stage, ignore_errors=True)
+
+    # ------------------------------------------------------------------ checks ---
+
+    def gitlink(self, sha, path):
+        """The commit a submodule at ``path`` is pinned to in ``sha``'s tree, or None."""
+        text = out("--git-dir", self.path, "ls-tree", sha, "--", path)
+        for line in text.splitlines():
+            meta, _, name = line.partition("\t")
+            parts = meta.split()
+            if name == path and len(parts) == 3 and parts[:2] == ["160000", "commit"]:
+                return parts[2]
+        return None
+
+    def write_tree(self, sha, dest):
+        """``sha``'s tree (no history, no .git) at ``dest``, by `git archive` from the mirror:
+        unpacked in the api's private storage with tarfile's "data" filter (no absolute or
+        escaping paths, no links out of the tree, no devices), then copied to ``dest``."""
+        import subprocess
+        import tarfile
+
+        dest = Path(dest)
+        stage = self.path.parent / "stage-tree" / dest.parent.name
+        with self.lock:
+            shutil.rmtree(stage, ignore_errors=True)
+            stage.mkdir(parents=True)
+            tar_path = stage.with_suffix(".tar")
+            try:
+                cmd = ["git"]
+                for c in gitutil.SAFE_CONFIG:
+                    cmd += ["-c", c]
+                cmd += ["--git-dir", str(self.path), "archive", "--format=tar", sha]
+                with open(tar_path, "wb") as f:
+                    r = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE,
+                                       env=gitutil.safe_env(), timeout=600)
+                if r.returncode != 0:
+                    err = r.stderr.decode(errors="replace")
+                    raise GitError(["archive", sha], r.returncode, err)
+                with tarfile.open(tar_path) as tar:
+                    tar.extractall(stage, filter="data")
+                shutil.copytree(stage, dest, symlinks=True)
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
+                tar_path.unlink(missing_ok=True)

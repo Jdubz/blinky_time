@@ -117,15 +117,91 @@ def write_firmware_tree(root, out_dir, toolchain_pin=None):
     (root / "scripts/build.sh").chmod(0o755)
 
 
+# A PR Validation workflow in the shape of blinky-firmware's: the two heavy jobs a check may run,
+# with download steps the image provides and steps that run (checks.py).
+WORKFLOW = """
+name: PR Validation
+on: [pull_request]
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    steps:
+    - run: echo never run by a check
+  tracker-harness:
+    name: Tracker Harness (UBSan stress + corpus gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: changes
+    if: ${{ always() }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+    - name: Corpus submodule
+      run: git submodule update --init --depth 1 corpus
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install Python deps
+      run: pip install numpy imageio-ffmpeg pytest
+    - name: Corpus regression gate
+      run: |
+        test -f corpus/edm/track.json
+        echo "gate $(cat corpus/edm/track.json)"
+        if [ -f FAIL_GATE ]; then echo "drum F below the floor"; exit 1; fi
+    - name: After the gate
+      run: echo after
+  tracker-harness-nn:
+    name: Tracker Harness with real onset NN (host TFLite Micro)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1
+    - name: Install TFLite Micro library
+      run: |
+        arduino-cli config init
+        bash tools/setup_tflite_lib.sh --ci
+    - name: Build harness with the real onset NN
+      env:
+        CXX: the-compiler
+      run: echo "built with $CXX"
+"""
+
+
 class Remote:
-    """A bare 'GitHub' repo plus a working clone to make commits in."""
+    """A bare 'GitHub' repo plus a working clone to make commits in, and a corpus repo the
+    firmware pins at corpus/ (a gitlink, as a submodule)."""
 
     def __init__(self, tmp, out_dir):
         self.bare = tmp / "github.git"
         self.work = tmp / "work"
+        self.corpus_bare = tmp / "corpus.git"
+        corpus_work = tmp / "corpus-work"
+        run_git(tmp, "init", "--bare", "-q", str(self.corpus_bare))
+        run_git(tmp, "init", "-q", str(corpus_work))
+        (corpus_work / "edm").mkdir()
+        (corpus_work / "edm/track.json").write_text('{"bpm": 120}\n')
+        run_git(corpus_work, "add", "-A")
+        run_git(corpus_work, "commit", "-q", "-m", "corpus")
+        self.corpus_pin = run_git(corpus_work, "rev-parse", "HEAD")
+        run_git(corpus_work, "push", "-q", str(self.corpus_bare), "HEAD:refs/heads/master")
+        # A corpus commit on no branch (a fork PR's, served by SHA): never taken.
+        (corpus_work / "edm/track.json").write_text('{"bpm": 666}\n')
+        run_git(corpus_work, "commit", "-q", "-am", "fork corpus")
+        self.corpus_fork = run_git(corpus_work, "rev-parse", "HEAD")
+        run_git(corpus_work, "push", "-q", str(self.corpus_bare), "HEAD:refs/pull/1/head")
         run_git(tmp, "init", "--bare", "-q", str(self.bare))
         run_git(tmp, "init", "-q", str(self.work))
         write_firmware_tree(self.work, out_dir)
+        p = self.work / ".github/workflows/pr-validation.yml"
+        p.parent.mkdir(parents=True)
+        p.write_text(WORKFLOW)
+        (self.work / "corpus").mkdir()  # an unpopulated submodule: `add -A` keeps the gitlink
+        run_git(self.work, "update-index", "--add", "--cacheinfo",
+                f"160000,{self.corpus_pin},corpus")
         self.commit("initial")
         self.base = self.head()
         self.commit_file("blinky-things/main.cpp", "int main() { return 2; }\n", "second")
@@ -178,6 +254,7 @@ def service(tmp_path, remote):
     cfg = api.Config(
         host="127.0.0.1", port=0, token=TOKEN, data=tmp_path / "data", jobs=tmp_path / "jobs",
         repo=REPO, remote=str(remote.bare), max_bundle=8 * 1024 * 1024, keep=50,
+        corpus_remote=str(remote.corpus_bare),
     )
     svc = api.Service(cfg)
     svc.start()
