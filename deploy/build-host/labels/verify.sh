@@ -47,8 +47,11 @@ docker exec $C sh -c 'env | grep -qiE "token|deploy_key|secret|password" && exit
 
 echo "== probes from inside the container"
 targets=()
+# Every TCP port this host listens on (read here, not listed: the repo is public, and a host's
+# service ports are its topology), on every address it has.
+ports=$(ss -ltnH | awk '{n = split($4, a, ":"); print a[n]}' | sort -un | xargs)
 for ip in $(ip -o -4 addr show scope global | awk '{print $4}' | cut -d/ -f1); do
-  for port in 22 5432 9100 10050 8790 5002; do targets+=("$ip:$port this host ($ip)"); done
+  for port in 22 $ports; do targets+=("$ip:$port this host ($ip)"); done
 done
 gw=$(ip route show default | awk '{print $3; exit}')
 [ -n "$gw" ] && targets+=("$gw:80 the LAN gateway" "$gw:443 the LAN gateway (https)")

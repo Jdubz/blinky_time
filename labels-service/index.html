@@ -1044,6 +1044,7 @@ function renderTracks() {
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
 function hhmm(iso) { if (!iso) return ""; const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
 function trackStatus(t) {
+  if (t.held) return `<span class="badge bad" title="${escapeHtml("The label checks hold these labels back: " + t.held.join("; "))}">held back</span>`;
   if (t.unpublished) return '<span class="badge pending">publishing soon</span>';
   return t.published ? `<span class="dim">${escapeHtml(hhmm(t.published))}</span>` : "";
 }
@@ -1115,13 +1116,13 @@ function runAnalysis(stem) {
 const TAB = Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 let hitSeq = 0;
 function newId() { return `${TAB}-${(++hitSeq).toString(36)}`; }
-const SY = { rev: 0, known: new Map(), knownRanges: [], knownNotes: new Map(), sending: false, timer: null, pulling: false, published: null, unpublished: false, error: "" };
+const SY = { rev: 0, known: new Map(), knownRanges: [], knownNotes: new Map(), sending: false, timer: null, pulling: false, published: null, unpublished: false, held: null, error: "" };
 function syncReset(meta) {
   SY.rev = meta.rev || 0; SY.error = "";
   SY.known = new Map((meta.onsets || []).map(o => [o.id, { time: +o.time, type: o.type }]));
   SY.knownRanges = mergeRanges(meta.reviewed_ranges || []);
   SY.knownNotes = new Map((meta.notes || []).map(n => [n.id, { text: n.text, range: n.range || null }]));
-  SY.published = meta.published; SY.unpublished = meta.unpublished;
+  SY.published = meta.published; SY.unpublished = meta.unpublished; SY.held = meta.held || null;
 }
 function rangeMinus(A, B) {  // the parts of ranges A not covered by ranges B
   let out = mergeRanges(A);
@@ -1190,7 +1191,7 @@ async function sendOps() {
   SY.sending = true; updateStatus();
   try {
     const r = await api(`/api/ops?stem=${encodeURIComponent(stem)}`, { tab: TAB, audio_sha256: S.meta.audio_sha256, duration: S.duration, ops });
-    if (S.stem === stem) { for (const op of ops) knownApply(op); SY.published = r.published; SY.unpublished = r.unpublished; SY.error = ""; }
+    if (S.stem === stem) { for (const op of ops) knownApply(op); SY.published = r.published; SY.unpublished = r.unpublished; SY.held = r.held || null; SY.error = ""; }
   } catch (e) {
     SY.error = e.message;
     if (e.status === 409) { const be = $("banner-err"); be.className = "banner err"; be.textContent = `${e.message}`; }
@@ -1207,7 +1208,7 @@ async function pullOps() {
   try {
     const r = await api(`/api/ops?stem=${encodeURIComponent(stem)}&since=${SY.rev}`);
     if (S.stem !== stem) return;
-    SY.published = r.published; SY.unpublished = r.unpublished;
+    SY.published = r.published; SY.unpublished = r.unpublished; SY.held = r.held || null;
     if (r.reset) {  // reloaded on the server (e.g. its file changed on main): start over from its state
       const m = await api(`/api/track?stem=${encodeURIComponent(stem)}`);
       if (S.stem !== stem) return;
@@ -1249,9 +1250,9 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 // ---------------------------------------------------------------- info panels
 function updateStatus() {
   const st = $("status"), pending = syncPending();
-  st.className = pending || SY.error ? "dirty" : "";
+  st.className = pending || SY.error || SY.held ? "dirty" : "";
   st.textContent = !S.meta ? "" : SY.error ? `⚠ not saved: ${SY.error}` : pending ? "saving…"
-    : "saved" + (SY.unpublished ? " · publishing in a few minutes" : SY.published ? ` · published ${hhmm(SY.published)}` : "");
+    : "saved" + (SY.held ? ` · not published: the label checks hold it back (${SY.held.join("; ")})` : SY.unpublished ? " · publishing in a few minutes" : SY.published ? ` · published ${hhmm(SY.published)}` : "");
   $("btn-undo").disabled = !S.undo.length; $("btn-redo").disabled = !S.redo.length;
 }
 function updateInfo() {

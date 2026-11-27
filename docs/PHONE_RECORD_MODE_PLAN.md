@@ -1,6 +1,7 @@
 # Phone Record Mode Plan
 
 > **Status (2026-11-23): parked.** The re-scope to live calibration-data capture ([#243](https://github.com/Jdubz/blinky_time/issues/243)) supersedes the PCM-first design below; nothing here is planned work until #243 is picked up.
+> **2026-11-26:** on the nRF52840 the 32 KB record buffer no longer fits (about 25 KB of heap free), so `record` refuses to start there. It may become ESP32-S3 only (owner); see ROADMAP.md, "Later".
 > The firmware, console and converter described here exist but were never run end to end on hardware. NUS output blocking the loop ([#189](https://github.com/Jdubz/blinky_time/issues/189)) is fixed.
 
 **Goal:** capture what a single device hears and does at real concert volume, with no blinky-server nearby. An Android phone running the hosted console (Chrome, Web Bluetooth) connects directly to one device. It starts a recording, and the device streams **raw mic PCM** plus its live analysis to the phone. The phone saves the session to disk for offline analysis.

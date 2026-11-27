@@ -2,7 +2,8 @@
 test_durable_work.py can kill it for real and start it again (#325). WORKFLOW names another
 test job instead; ``staging`` runs the staging suite (#349) with the deploy, json info, the
 stream and json rhythm faked, its validation playbacks counted like validate's; ``dev-run`` runs
-the dev loop's targeted checks the same way, and ``pr-smoke`` the PR hardware queue's smoke test.
+the dev loop's targeted checks the same way, and ``hardware-checks`` the blocking hardware checks
+on a PR head's build.
 
     python -m tests.durable_harness start  OUT KILL   # KILL: none | crash:N | drain:N
     python -m tests.durable_harness resume OUT [late]  # late: devices reconnect 1.5 s in

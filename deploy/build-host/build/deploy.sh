@@ -3,7 +3,8 @@
 # pull deployer (deploy/build-host/deployer) runs it for a gated master commit; it also works by hand.
 # Refuses to start a config that loosens the sandbox (check_config.py) or binds anything but one of
 # this host's own addresses. The bearer token is read from 1Password into this process's environment
-# only; it is never written to a file. RUNBOOK.md.
+# only; this script never writes it to a file (Docker keeps the api's environment in its container
+# config, root-owned: RUNBOOK.md, "The token"). RUNBOOK.md.
 set -euo pipefail
 cd "$(dirname "$0")"
 [ -f build.env ] || { echo "refusing: build.env missing (copy build.env.example, RUNBOOK.md)" >&2; exit 1; }
