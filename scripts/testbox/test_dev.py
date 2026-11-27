@@ -416,9 +416,7 @@ RUN_REPORT = {
         "rules": [
             {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 15.0,
              "threshold": 100.0, "unit": "ms", "worst_is": "max", "issues": [49, 23],
-             "where": "health", "at": "14:05:31.204", "samples": 15,
-             "excluded": [{"read_at": "14:03:12.101", "where": "health", "max_frame_ms": 113,
-                           "reason": "settings save at 14:03:05.320 (blinky-firmware#49)"}]},
+             "where": "health", "at": "14:05:31.204", "samples": 15},
             {"rule": "fps", "mode": "warn", "status": "warn", "worst": 52.0, "threshold": 60.0,
              "unit": "fps", "worst_is": "min", "issues": [23], "where": "after techno",
              "at": "14:06:00.000", "samples": 16},
@@ -498,10 +496,7 @@ def test_try_enters_dev_mode_builds_flashes_tests_and_reports(
     assert "⚠ strict rules (non-blocking):" in report
     assert "  fps: WARN (52 fps, after techno, 14:06:00.000, 16 reads), limit ≥ 60 fps" in report
     assert "frame_time: pass (15 ms" in report and "beat_pace: no data, limit ≤ 0.03" in report
-    assert (
-        "frame_time: the window read at 14:03:12.101 (health, 113 ms) excluded: settings save "
-        "at 14:03:05.320 (blinky-firmware#49)" in report
-    )
+    assert "excluded" not in report  # no loop window is ever excluded (blinky-firmware#49)
 
 
 def test_try_hw_runs_the_hardware_checks_against_the_flashed_version(
