@@ -39,6 +39,17 @@ Pass = every check passes, and no strict rule in block mode fails (a warning nev
 The validation numbers are reported, not gated: the box's numbers
 aren't trusted as a floor yet (docs/TEST_BOX.md, "Trusting the box's numbers").
 The operator's visual check is not here: it happens at promotion to stable.
+
+**The stable release** (``release``: a stable tag such as ``b217``): the same suite on that
+release, deployed through the stable path (fetch_stable_release: a promoted stable release only,
+every byte verified; stored stable, so recovery stays armed with it), its settings restore on
+the targets only. It scores the baseline the stable proposals compare candidates with
+(docs/DEV_LOOP.md, "Stable candidates from scores"; scripts/testbox/proposals.py). Its report
+and score line say ``release``; it never counts for the strict rules' readiness (a stable build
+isn't the staging line) and sets no staging gauges.
+
+Every score line carries ``run`` (this job's id): a second run of the same build is a second
+line, which is what the proposals measure the box's run-to-run noise from.
 """
 
 from __future__ import annotations
@@ -52,6 +63,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from dbos import DBOS
 
 from .. import telemetry
 from ..device.device import alerts_since
@@ -351,6 +364,27 @@ SCORE_FIELDS = (
 )
 
 
+def health_record(report: dict[str, Any]) -> dict[str, Any]:
+    """What the stable proposals need to rule a build out (docs/DEV_LOOP.md): a reboot
+    anywhere in the run, each strict rule's result (status, worst; which ones block is the
+    proposer's question, asked of the rules as they are now) and the run's verdict."""
+    rebooted = any(
+        (h.get("stability") or {}).get("rebooted") for h in (report.get("health") or {}).values()
+    ) or any(
+        (f.get("no_reboot") or {}).get("pass") is False
+        for f in (report.get("final") or {}).values()
+    )
+    return {
+        "passed": report.get("passed"),
+        "rebooted": bool(rebooted),
+        "strict": {
+            r["rule"]: {"status": r.get("status"), "worst": r.get("worst"), "mode": r.get("mode")}
+            for r in (report.get("strict") or {}).get("rules") or []
+            if r.get("rule")
+        },
+    }
+
+
 def score_record(report: dict[str, Any]) -> dict[str, Any]:
     """One line of the score record: the commit, version, corpus pin and setup, and each
     track's drum scores per device with where its lag came from."""
@@ -358,11 +392,20 @@ def score_record(report: dict[str, Any]) -> dict[str, Any]:
     for r in (report.get("validation") or {}).get("results") or []:
         for dev, s in (r.get("scores") or {}).items():
             drums = s.get("drums") or {}
+            tempo = s.get("tempo") or {}
             rows.append(
-                {"track": r.get("track"), "device": dev, **{k: drums.get(k) for k in SCORE_FIELDS}}
+                {
+                    "track": r.get("track"),
+                    "device": dev,
+                    **{k: drums.get(k) for k in SCORE_FIELDS},
+                    "tempoErr": tempo.get("err"),  # octave-tolerant (testing/tempo.py)
+                    "tempoBpm": tempo.get("bpm"),
+                }
             )
-    return {
+    rec: dict[str, Any] = {
         "sha": report.get("sha"),
+        "build": report.get("build"),
+        "run": report.get("run"),
         "version": report.get("version"),
         "corpus": report.get("corpus"),
         "devices": report.get("devices"),
@@ -374,7 +417,11 @@ def score_record(report: dict[str, Any]) -> dict[str, Any]:
             dev: {"median_ms": d.get("median_ms"), "counted": d.get("counted")}
             for dev, d in (report.get("detection_latency") or {}).items()
         },
+        "health": health_record(report),
     }
+    if report.get("release"):
+        rec["release"] = report["release"]
+    return rec
 
 
 @durable.step
@@ -385,7 +432,8 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{sha}.json"
     path.write_text(json.dumps(report, indent=2) + "\n")
-    if report.get("strict") and (report.get("deploy") or {}).get("pass"):
+    stable = bool(report.get("release"))
+    if report.get("strict") and (report.get("deploy") or {}).get("pass") and not stable:
         # A staging head's run counts for the strict rules' readiness (strict_rules.readiness).
         strict_rules.record_run(
             report["strict"],
@@ -396,15 +444,23 @@ async def write_report(sha: str, report: dict[str, Any]) -> str:
         )
     if (report.get("validation") or {}).get("results"):
         rec = data_dir() / "staging-scores.jsonl"
+        line = score_record(report)
+
+        def same_run(old: dict[str, Any]) -> bool:
+            # A repeated step rewrites its own line; another run of the commit is another line
+            # (the proposals' noise). A line from before ``run`` existed is one per commit.
+            return old.get("sha") == sha and old.get("run") in (None, line["run"])
+
         keep = [
             ln
             for ln in (rec.read_text().splitlines() if rec.exists() else [])
-            if ln.strip() and json.loads(ln).get("sha") != sha
+            if ln.strip() and not same_run(json.loads(ln))
         ]
         tmp = rec.with_suffix(".tmp")
-        tmp.write_text("".join(f"{ln}\n" for ln in [*keep, json.dumps(score_record(report))]))
+        tmp.write_text("".join(f"{ln}\n" for ln in [*keep, json.dumps(line)]))
         tmp.replace(rec)
-    telemetry.record_staging(report)  # gauges, so a repeated step just sets them again
+    if not stable:
+        telemetry.record_staging(report)  # gauges, so a repeated step just sets them again
     return str(path)
 
 
@@ -479,15 +535,20 @@ def _passed(node: Any) -> bool:
 async def staging_suite(req: dict[str, Any]) -> dict[str, Any]:
     """req: sha, device_ids, track_dir, optional limits (DEFAULTS' keys), optional build_of (the
     PR head whose tree this commit has: the same firmware build, for the strict rules'
-    readiness)."""
+    readiness), optional release (a stable tag: that release in place of the staging build;
+    ``sha`` is then the release's commit)."""
     sha, device_ids = req["sha"], list(req["device_ids"])
     limits = {**DEFAULTS, **(req.get("limits") or {})}
+    release = req.get("release")
     report: dict[str, Any] = {
         "sha": sha,
-        "build": req.get("build_of") or sha,
+        "build": release or req.get("build_of") or sha,
+        "run": str(DBOS.workflow_id),
         "devices": device_ids,
         "limits": limits,
     }
+    if release:
+        report["release"] = release
 
     async with reserve(device_ids):
         report["corpus"] = await corpus_pin(req["track_dir"])
@@ -504,17 +565,36 @@ async def _suite(
     from ..api.routes_firmware import _store_staging_hex
     from ..firmware.fleet_workflows import flash_devices
 
-    jobs.report(0, "deploying the staging build")
-    deploy = await deploy_pipeline.run_deploy(
-        _fleet(),
-        jobs.Progress(),
-        release_tag=None,
-        device_ids=device_ids,
-        download_dir=data_dir() / "staging-download",
-        store_firmware=_store_staging_hex,
-        flash=flash_devices,
-        staging_sha=sha,
-    )
+    release = req.get("release")
+    if release:
+        from ..api.routes_firmware import _store_release_hex
+
+        jobs.report(0, f"deploying the stable release {release}")
+        flash_t = await deploy_pipeline._flash_time()  # alerts count from here
+        deploy = await deploy_pipeline.run_deploy(
+            _fleet(),
+            jobs.Progress(),
+            release_tag=release,
+            device_ids=device_ids,
+            download_dir=data_dir() / "release-download",
+            store_firmware=_store_release_hex,
+            flash=flash_devices,
+            settings_on_targets=True,
+        )
+        if deploy.get("status") == "ok":
+            deploy["steps"]["store"]["flash_t"] = flash_t
+    else:
+        jobs.report(0, "deploying the staging build")
+        deploy = await deploy_pipeline.run_deploy(
+            _fleet(),
+            jobs.Progress(),
+            release_tag=None,
+            device_ids=device_ids,
+            download_dir=data_dir() / "staging-download",
+            store_firmware=_store_staging_hex,
+            flash=flash_devices,
+            staging_sha=sha,
+        )
     report["deploy"] = {"pass": deploy.get("status") == "ok", **deploy}
     if deploy.get("status") != "ok":
         report["passed"] = False

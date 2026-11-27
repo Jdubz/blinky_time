@@ -492,6 +492,7 @@ async def run_deploy(
     settle_s: float = LOOP_METRICS_SETTLE_S,
     staging_sha: str | None = None,
     dev_build: str | None = None,
+    settings_on_targets: bool = False,
 ) -> dict[str, Any]:
     """All six steps. Returns a result dict; any failed step returns
     ``status: error`` with ``failed_step`` and that step's details.
@@ -503,6 +504,10 @@ async def run_deploy(
 
     ``dev_build``: the same as ``staging_sha``, with a build-service dev package (a build id,
     docs/DEV_LOOP.md) in place of the staging artifact. Nothing else differs.
+
+    ``settings_on_targets``: a stable release's settings restore + save go to the targets only,
+    as a staging or dev build's do (the box's staging suite on the stable release, for the
+    stable proposals: docs/DEV_LOOP.md). A fleet deploy leaves it off: the whole fleet.
 
     ``store_firmware`` and ``flash`` are the routes' own storage and
     flash-job helpers, passed in so the deploy writes and flashes exactly
@@ -567,7 +572,7 @@ async def run_deploy(
 
     try:
         job.progress_message = "Restoring runtime settings and saving"
-        if not test_build:
+        if not test_build and not settings_on_targets:
             settings = await _settings(fleet)
         else:
             settings = await _settings_on(fleet, target_ids)

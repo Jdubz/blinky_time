@@ -61,7 +61,15 @@ section, and a status's description says how many warned. After each quality sui
 reads each rule's readiness (GET /api/test/strict-rules): a rule that has passed on enough
 builds in a row is said in the report, and gets ONE blinky_time issue, "Ready to enable strict
 rule: X", never a second (the state's ``strict_issues`` and a title search). Switching a rule to
-block stays the owner's call. State is in
+block stays the owner's call.
+
+When it has nothing of its own to run (the head settled, its quality suite done), the runner
+compares blinky-firmware's newest release candidate with the stable release (proposals.py;
+docs/DEV_LOOP.md, "Stable candidates from scores"): ONE "Propose bN for stable" issue per
+candidate in blinky_time when it leads without a health problem. The quality-suite runs that
+comparison needs (the candidate's staging commit or the stable release under the current corpus
+pin, a repeat for the noise) are submitted then too, last in line: queue mode, nothing of the PR
+queue waiting, never preempting. State is in
 ~/.local/share/blinky-server/staging.json; the log goes to the journal
 (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
 """
@@ -82,6 +90,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import proposals
 import strict
 from deploy import review_verdict  # the deployer's parser: one reading of the verdict comment
 
@@ -96,9 +105,6 @@ QUALITY_CONTEXT = "Quality suite (staging)"  # always success: scores, never a v
 HOME = Path.home()
 LINK = HOME / "blinky-deploy"
 BASE_URL = "http://127.0.0.1:8420"
-# Host endpoints are private (this repo is public): the box's own URL, as the home network reaches
-# it, is BLINKY_TESTBOX_URL in the environment or in this file (template: scripts/hosts.env.example).
-HOSTS_ENV = Path(os.environ.get("BLINKY_HOSTS_ENV") or HOME / ".config/blinky/hosts.env")
 STATE = (
     Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
     / "blinky-server"
@@ -129,26 +135,6 @@ Gh = Callable[..., str]
 
 def log(msg: str) -> None:
     print(msg, flush=True)
-
-
-def host_setting(key: str) -> str:
-    """A host endpoint: the environment's ``key``, else the private hosts file's (KEY=value or
-    KEY="value", the last one wins; parsed, never sourced). No default: a real host never goes in
-    this repo. Missing, or still the template's <placeholder>: RuntimeError naming file and key."""
-    value = os.environ.get(key, "").strip()
-    if not value and HOSTS_ENV.is_file():
-        for line in HOSTS_ENV.read_text().splitlines():
-            m = re.match(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$", line)
-            if m:
-                value = m.group(1)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-    if not re.fullmatch(r"https?://[^\s<>]+", value):
-        raise RuntimeError(
-            f"{key} missing or not a URL: set it in {HOSTS_ENV} (mode 600, template "
-            f"scripts/hosts.env.example), e.g. {key}=http://<test-box>:8420"
-        )
-    return value.rstrip("/")
 
 
 def gh(*args: str, stdin: str | None = None) -> str:
@@ -868,11 +854,14 @@ def report_comment(gh_: Gh, sha: str, hardware: str, quality: str) -> str | None
 def _archive_line(report: dict[str, Any]) -> str:
     if not report.get("artifact"):
         return ""
-    # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
-    # signs its LAN address, so the link opens from the home network.
+    # Presigned URLs expire, so point at the box's redirect, which signs a fresh one (the store
+    # signs its LAN address: it opens from the home network). As a path only: this comment is on a
+    # public repo, and the box's address is topology (CLAUDE.md, "No network topology").
     key = report["artifact"]
-    link = f"{host_setting('BLINKY_TESTBOX_URL')}/api/spark/artifacts/{key}"
-    return f"Full report in the Spark artifact store: `{key}` ([open]({link}), home network)\n\n"
+    return (
+        f"Full report in the Spark artifact store: `{key}` (from the home network: "
+        f"`/api/spark/artifacts/{key}` on the test box's blinky-server)\n\n"
+    )
 
 
 def finish_hw(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
@@ -1166,10 +1155,107 @@ def _poll(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> dict[st
         return _pass(gh_, server)
     if kind == "hw":
         finish_hw(gh_, state, job)
+    elif kind == "proposal":
+        finish_proposal_run(state, job)
     else:
         finish_quality(gh_, state, job, server)
     save_state(state)
     return state
+
+
+# -- stable proposals (proposals.py) -----------------------------------------------------------
+
+
+def finish_proposal_run(state: dict[str, Any], job: dict[str, Any]) -> None:
+    """A run the comparison asked for ended: its scores are in the record (the server wrote
+    them); one that ended without scores counts towards giving up on it."""
+    run = state.pop("running")
+    st = state.setdefault("proposal", {})
+    report = job.get("result") if job.get("status") == "complete" else None
+    scored = isinstance(report, dict) and bool((report.get("validation") or {}).get("results"))
+    if not scored:
+        failed = st.setdefault("failed", {})
+        failed[run["key"]] = int(failed.get(run["key"], 0)) + 1
+        log(f"stable proposal run {run['key']} ended without scores ({job.get('status')})")
+    else:
+        log(f"stable proposal run {run['key']} done")
+    st.pop("stamp", None)  # evaluate again on the next idle pass
+
+
+def propose(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> None:
+    """Compare the newest candidate with the stable release, update its proposal issue, and
+    submit the next run the comparison needs. Re-evaluated when the scores or the pin change,
+    else at most every proposals.RECHECK_S."""
+    st = state.setdefault("proposal", {})
+    pin = proposals.corpus_pin(LINK / "corpus")
+    if pin is None:
+        log("stable proposal: the deployed corpus pin is unreadable; skipped")
+        return
+    scores = STATE.parent / "staging-scores.jsonl"
+    stamp = f"{pin}:{scores.stat().st_mtime if scores.exists() else 0}"
+    fresh = (
+        st.get("stamp") == stamp and time.time() - float(st.get("at") or 0) < proposals.RECHECK_S
+    )
+    if not fresh:
+        try:
+            blocking = proposals.blocking_rules(server)
+            out = proposals.evaluate(
+                gh_,
+                st,
+                proposals.load_records(scores),
+                pin,
+                blocking,
+                STATE.parent / "staging-reports",
+            )
+            proposals.apply(gh_, st, out)
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as e:
+            log(f"stable proposal: not evaluated now ({e})")  # URLError is an OSError
+            return
+        st.update(stamp=stamp, at=time.time(), last=out.message)
+        st["need"] = out.plan.need if out.plan else None
+        log(f"stable proposal: {out.message}")
+    if st.get("need"):
+        proposal_run(server, state, st["need"])
+
+
+def proposal_run(server: Callable[..., Any], state: dict[str, Any], need: dict[str, Any]) -> None:
+    """Submit a run the comparison needs: last in line. Queue mode, no other runner's item
+    waiting (ready or not), a free chip; a busy server (409) is the next pass."""
+    try:
+        mode = box_mode(server)
+        if holds(mode):
+            return
+        now = time.time()
+        for w in mode.get("waiting") or []:
+            at = w.get("reported_at")
+            if w.get("runner") != RUNNER and at and now - float(at) < REPORT_STALE_S:
+                log(f"stable proposal run waits behind {w.get('runner')} {str(w.get('sha'))[:12]}")
+                return
+        devices = test_devices(server("GET", "/api/devices"))
+        if not devices:
+            return
+        body = {**need["body"], "track_dir": str(LINK / CORPUS), "device_ids": devices}
+        job = server("POST", "/api/test/staging", body)
+    except urllib.error.HTTPError as e:
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            log(f"stable proposal run: server answered {e.code}; next pass")
+            return
+        failed = state.setdefault("proposal", {}).setdefault("failed", {})
+        failed[need["key"]] = int(failed.get(need["key"], 0)) + 1
+        log(f"stable proposal run refused ({e.code}): {_detail(e)}")
+        return
+    except (urllib.error.URLError, OSError) as e:
+        log(f"stable proposal run: server not answering ({e}); next pass")
+        return
+    state["running"] = {
+        "sha": need["body"]["sha"],
+        "job": job["job_id"],
+        "devices": devices,
+        "kind": "proposal",
+        "key": need["key"],
+    }
+    state["proposal"]["need"] = None
+    log(f"stable proposal run {job['job_id']}: {need['what']} (non-blocking)")
 
 
 def quality(gh_: Gh, server: Callable[..., Any], state: dict[str, Any], sha: str) -> None:
@@ -1233,7 +1319,9 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
     if state.get("reported") == sha:
         if quality_due(state) == sha:
             quality(gh_, server, state, sha)
-            save_state(state)
+        elif not state.get("queued"):
+            propose(gh_, server, state)  # nothing of its own to run: the stable proposals
+        save_state(state)
         return state
     changed, why, blind = firmware_change(gh_, sha)
     if not changed:
@@ -1407,11 +1495,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.retest:
         log(retest())
         return 0
-    try:
-        host_setting("BLINKY_TESTBOX_URL")  # before any work, not after a 20-minute suite
-    except RuntimeError as e:
-        log(f"ERROR: {e}")
-        return 2
     if args.dry_run:
         import tempfile
 

@@ -74,17 +74,12 @@ def title(strict: dict[str, Any] | None) -> str:
     return f"strict rules ({', '.join(blocking)} block; the rest warn)"
 
 
-def excluded_lines(strict: dict[str, Any] | None) -> list[str]:
-    """Every excluded window, said: "frame_time: the window read at hh:mm:ss.mmm (where, N ms)
-    excluded: settings save at hh:mm:ss.mmm (blinky-firmware#49)"; and every track a rule left
-    out: "detection_latency: dubstep-edm-halftime (+57.2 ms) left out: kickR50 0.25 < 0.5: ..."."""
+def left_out_lines(strict: dict[str, Any] | None) -> list[str]:
+    """Every track a rule left out, said: "detection_latency: dubstep-edm-halftime (+57.2 ms) left
+    out: kickR50 0.25 < 0.5: ...". No loop window is ever excluded (blinky-firmware#49 removed the
+    settings-save stall, and with it the server's save exclusion)."""
     out = []
     for r in rows(strict):
-        for e in r.get("excluded") or []:
-            out.append(
-                f"{r['rule']}: the window read at {e.get('read_at')} ({e.get('where')}, "
-                f"{_num(e.get('max_frame_ms'))} ms) excluded: {e.get('reason')}"
-            )
         for e in r.get("left_out") or []:
             off = e.get("offset_ms")
             shown = f" ({float(off):+g} ms)" if isinstance(off, (int, float)) else ""
@@ -94,7 +89,7 @@ def excluded_lines(strict: dict[str, Any] | None) -> list[str]:
 
 def md_lines(strict: dict[str, Any] | None) -> list[str]:
     """The section as markdown: a table (rule, result, worst, where, limit, waits on), then
-    the exclusions, never silent."""
+    the tracks a rule left out, never silent."""
     rs = rows(strict)
     if not rs:
         return []
@@ -111,7 +106,7 @@ def md_lines(strict: dict[str, Any] | None) -> list[str]:
             f"{where(r).replace('|', '/')} | {limit(r)} | {issues or '—'} |"
         )
     lines.append("")
-    ex = excluded_lines(strict)
+    ex = left_out_lines(strict)
     if ex:
         lines += [*(f"- {e}" for e in ex), ""]
     lines.append(
@@ -136,7 +131,7 @@ def text_lines(strict: dict[str, Any] | None) -> list[str]:
             + f", limit {limit(r)}"
             + (f", waits on {issues}" if issues else "")
         )
-    lines += [f"  {e}" for e in excluded_lines(strict)]
+    lines += [f"  {e}" for e in left_out_lines(strict)]
     return lines
 
 

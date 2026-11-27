@@ -233,17 +233,13 @@ def state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "staging.json"
 
 
-TESTBOX = "http://testbox.example.invalid:8420"  # reserved name: tests never name a real host
-
-
 @pytest.fixture(autouse=True)
-def hosts_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Never the machine's real ~/.config/blinky/hosts.env: a file per test, the env var unset."""
-    path = tmp_path / "hosts.env"
-    path.write_text(f'BLINKY_TESTBOX_URL="{TESTBOX}/"\n')
-    monkeypatch.setattr(staging, "HOSTS_ENV", path)
-    monkeypatch.delenv("BLINKY_TESTBOX_URL", raising=False)
-    return path
+def no_proposals(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The stable proposals (proposals.py, test_proposals.py) run when the runner is idle; these
+    tests are about the staging head, so an idle pass only records that it would propose."""
+    calls: list[str] = []
+    monkeypatch.setattr(staging, "propose", lambda gh_, server, state: calls.append("propose"))
+    return calls
 
 
 GOOD_REPORT = {
@@ -809,7 +805,9 @@ def test_a_stalled_review_lookup_is_a_note_not_a_failure() -> None:
 def test_the_report_links_its_archived_copy_through_the_box() -> None:
     text = staging._archive_line({**GOOD_REPORT, "artifact": "inputs/abc/s.json"})
     assert "`inputs/abc/s.json`" in text
-    assert f"{TESTBOX}/api/spark/artifacts/inputs/abc/s.json" in text
+    assert "`/api/spark/artifacts/inputs/abc/s.json`" in text
+    # The comment goes on a public repo: never the box's address (no URL at all).
+    assert "://" not in text
     assert staging._archive_line(GOOD_REPORT) == ""
 
 
@@ -955,27 +953,6 @@ def test_a_cancelled_suite_with_an_unreadable_mode_is_a_retry_not_a_failure() ->
     assert all(st != "failure" for st, _ in g.statuses) and not g.comments
 
 
-def test_the_box_url_comes_from_the_environment_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("BLINKY_TESTBOX_URL", "http://other.example.invalid:1")
-    assert staging.host_setting("BLINKY_TESTBOX_URL") == "http://other.example.invalid:1"
-
-
-@pytest.mark.parametrize("content", [None, "", "BLINKY_TESTBOX_URL=http://<test-box>:8420\n"])
-def test_a_missing_box_url_stops_the_runner_naming_file_and_key(
-    hosts_env: Path, content: str | None, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # No file, no key, or the template's placeholder: no default host, and no suite started.
-    if content is None:
-        hosts_env.unlink()
-    else:
-        hosts_env.write_text(content)
-    with pytest.raises(RuntimeError, match=r"BLINKY_TESTBOX_URL.*hosts\.env"):
-        staging.host_setting("BLINKY_TESTBOX_URL")
-    assert staging.main([]) == 2
-    out = capsys.readouterr().out
-    assert "BLINKY_TESTBOX_URL" in out and str(hosts_env) in out
-
-
 # -- retest and dry run ------------------------------------------------------------------------
 
 
@@ -1008,9 +985,7 @@ def test_a_dry_run_posts_and_submits_nothing(capsys: pytest.CaptureFixture[str])
 STRICT_ROWS = [
     {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 18.0, "threshold": 100.0,
      "unit": "ms", "worst_is": "max", "issues": [49, 23], "where": "upload",
-     "at": "14:05:31.204", "samples": 14,
-     "excluded": [{"read_at": "14:03:12.101", "where": "upload", "max_frame_ms": 113,
-                   "reason": "settings save at 14:03:05.320 (blinky-firmware#49)"}]},
+     "at": "14:05:31.204", "samples": 14},
     {"rule": "fps", "mode": "warn", "status": "warn", "worst": 52.0, "threshold": 60.0,
      "unit": "fps", "worst_is": "min", "issues": [23], "where": "after the response stream",
      "at": "14:07:00.000", "samples": 18},
@@ -1032,10 +1007,7 @@ def test_strict_warnings_never_change_the_status_only_its_description() -> None:
         in text
     )
     assert "| frame_time | ✅ pass | 18 ms |" in text and "blinky-firmware#49" in text
-    assert (
-        "- frame_time: the window read at 14:03:12.101 (upload, 113 ms) excluded: settings save "
-        "at 14:03:05.320 (blinky-firmware#49)" in text
-    )
+    assert "excluded" not in text  # no loop window is ever excluded (blinky-firmware#49)
 
 
 def test_the_quality_status_says_how_many_strict_rules_warned() -> None:
@@ -1175,3 +1147,15 @@ def test_the_quality_report_shows_the_detection_latency_per_device_and_track() -
     assert "- detection_latency: dubstep (+57.2 ms) left out: kickR50 0.25 < 0.5" in text
     # No latency (an old report, or a run that scored nothing): no section.
     assert "Detection latency" not in "\n".join(staging.quality_lines(GOOD_REPORT))
+
+
+def test_an_idle_pass_runs_the_stable_proposals_and_a_busy_one_doesnt(
+    no_proposals: list[str],
+) -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "running"})
+    staging.save_state({"reported": SHA, "hw_passed": SHA})  # its quality suite is due
+    staging._pass(g, srv)
+    assert no_proposals == []
+    staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
+    staging._pass(g, srv)
+    assert no_proposals == ["propose"]  # nothing of its own to run

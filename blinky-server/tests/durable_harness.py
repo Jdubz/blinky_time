@@ -211,6 +211,9 @@ async def fake_deploy(*a: Any, **k: Any) -> dict[str, Any]:
     if k.get("dev_build"):  # the hardware checks' build-service package, of its commit
         effect(f"deploy build {k['dev_build']}")
         return {**out, "build_id": k["dev_build"], "sha": HW_REQ["sha"]}
+    if k.get("release_tag"):  # the stable release (the stable proposals' baseline)
+        effect(f"deploy release {k['release_tag']}")
+        return {**out, "steps": {"store": {}}}  # the stable path records no flash time
     effect(f"deploy {k['staging_sha'][:8]}")
     return out
 
@@ -408,6 +411,10 @@ async def main() -> None:
         }
         if WORKFLOW == "staging":
             wid = await durable.submit(staging.staging_suite, STAGING_REQ)
+        elif WORKFLOW == "staging-release":
+            wid = await durable.submit(
+                staging.staging_suite, {**STAGING_REQ, "sha": "ef" * 20, "release": "b217"}
+            )
         elif WORKFLOW == "dev-run":
             wid = await durable.submit(dev_run.dev_run, DEV_RUN_REQ)
         elif WORKFLOW == "hardware-checks":

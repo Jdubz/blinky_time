@@ -25,9 +25,8 @@
 #      stack (scripts/testbox/alloy/testbox.alloy). Its push endpoints come from
 #      the private ~/.config/blinky/observability.env (template: observability.env.example);
 #      this step fails, naming the file and keys, until it exists
-#  9b. the private host config ~/.config/blinky/hosts.env (template: ../hosts.env.example):
-#      BLINKY_TESTBOX_URL, the box's URL as the home network reaches it, for the staging
-#      runner's report links. This step fails, naming the file and key, until it's set
+#  9b. the private host config ~/.config/blinky/hosts.env (template: ../hosts.env.example),
+#      seeded from the card's copy if there is one. Nothing on the box requires it
 #  10. development tooling for this repo: ~/.local/bin on PATH (a managed ~/.profile block),
 #      blinky-serial-mcp, git hooks, Claude Code (with Linux MCP servers: blinky-serial on this
 #      box, playwright + its Chromium). No dev venv: ml analysis runs on CI or the Spark, and
@@ -305,8 +304,8 @@ read_observability_env() {
 }
 
 # host_config: ~/.config/blinky/hosts.env (the repo is public, so host endpoints live only there).
-# First boot: a copy next to this script (the card's blinky-testbox/hosts.env) seeds it.
-# staging.py refuses to run without BLINKY_TESTBOX_URL, so say now which file and key it needs.
+# First boot: a copy next to this script (the card's blinky-testbox/hosts.env) seeds it. The box's
+# runners need no key from it: their reports go on public repos, so they never name the box.
 HOSTS_ENV="$HOME_DIR/.config/blinky/hosts.env"
 host_config() {
   if [[ ! -f "$HOSTS_ENV" && -f "$HERE/hosts.env" ]]; then
@@ -314,19 +313,6 @@ host_config() {
       install -m 0600 -o "$TARGET_USER" -g "$(id -gn "$TARGET_USER")" \
         "$HERE/hosts.env" "$HOSTS_ENV" || return 1
     log "seeded $HOSTS_ENV from $HERE/hosts.env (delete that copy from the card)"
-  fi
-  # The file, not the environment: the staging timer's unit has no environment of its own, so
-  # staging.py on the box finds the URL only in the file.
-  local v=""
-  [[ -f "$HOSTS_ENV" ]] && v=$(sed -n 's/^[[:space:]]*BLINKY_TESTBOX_URL[[:space:]]*=[[:space:]]*//p' "$HOSTS_ENV" | tail -n 1)
-  v="${v%$'\r'}"                           # a file saved on Windows
-  v="${v%"${v##*[![:space:]]}"}"            # trailing whitespace
-  if [[ $v =~ ^\"(.*)\"$ || $v =~ ^\'(.*)\'$ ]]; then v="${BASH_REMATCH[1]}"; fi
-  if [[ ! $v =~ ^https?://[^[:space:]\<\>]+$ ]]; then
-    echo "$HOSTS_ENV: BLINKY_TESTBOX_URL missing or a placeholder. Copy the repo's" >&2
-    echo "scripts/hosts.env.example there (mode 600), set BLINKY_TESTBOX_URL=http://<this box>:8420" >&2
-    echo "(the owner's private notes), and re-run setup.sh. The staging runner won't run until then." >&2
-    return 1
   fi
 }
 
