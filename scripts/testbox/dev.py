@@ -543,7 +543,11 @@ def parse_checks(tokens: list[str]) -> list[dict[str, Any]]:
         if kind == "info" and not arg:
             checks.append({"kind": "info"})
         elif kind == "health":
-            checks.append({"kind": "health", "minutes": float(arg) if arg else 5.0})
+            try:
+                minutes = float(arg) if arg else 5.0
+            except ValueError:
+                raise DevError(f"health={arg!r}: the minutes are a number (health=2)") from None
+            checks.append({"kind": "health", "minutes": minutes})
         elif kind == "validate" and arg:
             checks.append({"kind": "validate", "tracks": [t for t in arg.split(",") if t]})
         elif kind == "pace":
@@ -890,6 +894,7 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
         if args.cmd == "test":
             if not args.hw and not args.checks:
                 raise DevError("name the checks to run, or --hw for the hardware checks")
+            checks = parse_checks(args.checks)  # a typo is said before anything runs
             devices = chips(server, args.device)
             ok = True
             if args.hw:
@@ -905,8 +910,8 @@ def main(argv: list[str] | None = None, server: Server = http) -> int:
                 for line in report_hw(hw):
                     say(line)
                 ok = bool(hw.get("passed"))
-            if args.checks:
-                res = run_checks(server, devices, parse_checks(args.checks))
+            if checks:
+                res = run_checks(server, devices, checks)
                 for line in report_run(res):
                     say(line)
                 ok = ok and bool(res.get("passed"))
