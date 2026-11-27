@@ -233,6 +233,15 @@ def state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "staging.json"
 
 
+@pytest.fixture(autouse=True)
+def no_proposals(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The stable proposals (proposals.py, test_proposals.py) run when the runner is idle; these
+    tests are about the staging head, so an idle pass only records that it would propose."""
+    calls: list[str] = []
+    monkeypatch.setattr(staging, "propose", lambda gh_, server, state: calls.append("propose"))
+    return calls
+
+
 GOOD_REPORT = {
     "sha": SHA,
     "passed": True,
@@ -1138,3 +1147,15 @@ def test_the_quality_report_shows_the_detection_latency_per_device_and_track() -
     assert "- detection_latency: dubstep (+57.2 ms) left out: kickR50 0.25 < 0.5" in text
     # No latency (an old report, or a run that scored nothing): no section.
     assert "Detection latency" not in "\n".join(staging.quality_lines(GOOD_REPORT))
+
+
+def test_an_idle_pass_runs_the_stable_proposals_and_a_busy_one_doesnt(
+    no_proposals: list[str],
+) -> None:
+    g, srv = GitHub(), Server([HAT], {"status": "running"})
+    staging.save_state({"reported": SHA, "hw_passed": SHA})  # its quality suite is due
+    staging._pass(g, srv)
+    assert no_proposals == []
+    staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
+    staging._pass(g, srv)
+    assert no_proposals == ["propose"]  # nothing of its own to run
