@@ -1012,6 +1012,16 @@ def test_the_quality_status_says_how_many_strict_rules_warned() -> None:
     assert "**⚠ strict rules (non-blocking)**" in "\n".join(staging.quality_lines(report))
 
 
+def test_a_blocking_rule_that_fails_in_the_quality_suite_is_said_in_its_status() -> None:
+    """The quality status stays success, but a block-mode rule the suite measured failing is
+    named in its description, not left to read as "health/asserts: see report"."""
+    failed = {**STRICT_ROWS[1], "mode": "block", "status": "fail"}
+    report = {**GOOD_REPORT, "passed": False, "strict": {"rules": [failed, STRICT_ROWS[2]]}}
+    desc = staging.quality_summary(report)
+    assert desc.startswith("non-blocking:")
+    assert desc.endswith(" · fps fails (blocking) · 1 strict warning")
+
+
 def ready(streak: int, mode: str = "warn") -> dict[str, Any]:
     runs = [{"source": "quality", "version": f"b{n}", "status": "pass", "worst": 18.0}
             for n in range(streak)]  # fmt: skip
