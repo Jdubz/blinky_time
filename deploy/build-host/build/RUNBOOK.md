@@ -36,7 +36,7 @@ The build service (`build-service/`, the dev loop's builder: `docs/DEV_LOOP.md`)
   - `blinky-build-cache`: the warm compile cache, safe to delete.
 
   None of them is precious. The only secret is the token, and it is in 1Password.
-- **Rotating the token:** update the 1Password item, run `./deploy.sh` by hand (a token change alone is not a commit, so the deployer won't do it), and update the box's `build.env`.
+- **Rotating the token:** update the 1Password item, run `./deploy.sh` by hand (a token change alone is not a commit, so the deployer won't do it), and update the box's `build.env`. `deploy.sh` builds whatever commit the clone is at, which is the last commit any service deployed or rolled back to, not necessarily the build service's: first `git -C ~/blinky-build-host checkout --detach <sha>` with the `build` service's `deployed` sha from `deployer.py --status`, or a hand deploy can downgrade the service.
 - **Turn it off:** `docker compose -p blinky-build stop`. A later deploy starts it again; to keep it off, also take `build` out of `deploy/build-host/deployer/services.json`.
 
 ## Retiring
