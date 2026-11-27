@@ -96,9 +96,6 @@ QUALITY_CONTEXT = "Quality suite (staging)"  # always success: scores, never a v
 HOME = Path.home()
 LINK = HOME / "blinky-deploy"
 BASE_URL = "http://127.0.0.1:8420"
-# Host endpoints are private (this repo is public): the box's own URL, as the home network reaches
-# it, is BLINKY_TESTBOX_URL in the environment or in this file (template: scripts/hosts.env.example).
-HOSTS_ENV = Path(os.environ.get("BLINKY_HOSTS_ENV") or HOME / ".config/blinky/hosts.env")
 STATE = (
     Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share")
     / "blinky-server"
@@ -129,26 +126,6 @@ Gh = Callable[..., str]
 
 def log(msg: str) -> None:
     print(msg, flush=True)
-
-
-def host_setting(key: str) -> str:
-    """A host endpoint: the environment's ``key``, else the private hosts file's (KEY=value or
-    KEY="value", the last one wins; parsed, never sourced). No default: a real host never goes in
-    this repo. Missing, or still the template's <placeholder>: RuntimeError naming file and key."""
-    value = os.environ.get(key, "").strip()
-    if not value and HOSTS_ENV.is_file():
-        for line in HOSTS_ENV.read_text().splitlines():
-            m = re.match(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$", line)
-            if m:
-                value = m.group(1)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-    if not re.fullmatch(r"https?://[^\s<>]+", value):
-        raise RuntimeError(
-            f"{key} missing or not a URL: set it in {HOSTS_ENV} (mode 600, template "
-            f"scripts/hosts.env.example), e.g. {key}=http://<test-box>:8420"
-        )
-    return value.rstrip("/")
 
 
 def gh(*args: str, stdin: str | None = None) -> str:
@@ -868,11 +845,14 @@ def report_comment(gh_: Gh, sha: str, hardware: str, quality: str) -> str | None
 def _archive_line(report: dict[str, Any]) -> str:
     if not report.get("artifact"):
         return ""
-    # Presigned URLs expire, so link the box's redirect, which signs a fresh one. The store
-    # signs its LAN address, so the link opens from the home network.
+    # Presigned URLs expire, so point at the box's redirect, which signs a fresh one (the store
+    # signs its LAN address: it opens from the home network). As a path only: this comment is on a
+    # public repo, and the box's address is topology (CLAUDE.md, "No network topology").
     key = report["artifact"]
-    link = f"{host_setting('BLINKY_TESTBOX_URL')}/api/spark/artifacts/{key}"
-    return f"Full report in the Spark artifact store: `{key}` ([open]({link}), home network)\n\n"
+    return (
+        f"Full report in the Spark artifact store: `{key}` (from the home network: "
+        f"`/api/spark/artifacts/{key}` on the test box's blinky-server)\n\n"
+    )
 
 
 def finish_hw(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
@@ -1407,11 +1387,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.retest:
         log(retest())
         return 0
-    try:
-        host_setting("BLINKY_TESTBOX_URL")  # before any work, not after a 20-minute suite
-    except RuntimeError as e:
-        log(f"ERROR: {e}")
-        return 2
     if args.dry_run:
         import tempfile
 
