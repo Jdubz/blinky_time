@@ -512,7 +512,12 @@ jobs:
         # ...and the checkout directory is root's, group 10001, sticky: the build can't rename or
         # replace .arduino with its own (it would be every later build's toolchain).
         check "checkout directory owner and mode" "$(docker exec "$w" stat -c '%u:%g %a' /opt/blinky/src)" "0:10001 1775"
-        docker exec "$w" sh -c 'mv /opt/blinky/src/.arduino /opt/blinky/src/.arduino.x 2>/dev/null && exit 1 || echo "toolchain: not renamable"'
+        # rename(2) itself, not mv (on overlayfs mv falls back to a copy when rename says EXDEV).
+        docker exec "$w" python -c 'import os,sys
+        s="/opt/blinky/src/.arduino"
+        try: os.rename(s, s + ".x")
+        except OSError as e: print("toolchain: not renamable:", e); sys.exit(0)
+        sys.exit("toolchain: renamed")'
         docker exec "$w" sh -c 'rm -rf /opt/blinky/src/.arduino 2>/dev/null; test -d /opt/blinky/src/.arduino/data && echo "toolchain: not removable"'
 
     - name: A blinky-firmware checkout to make bundles from

@@ -39,7 +39,13 @@ docker exec $W sh -c 'env | grep -qiE "token|secret|password" && exit 1 || exit 
   && ok "no credential in its environment" || bad "a credential-looking variable in the worker's environment"
 docker exec $W sh -c 'touch /opt/blinky/src/.arduino/x 2>/dev/null && exit 1 || exit 0' \
   && ok "toolchain not writable" || bad "the toolchain is writable"
-docker exec $W sh -c 'mv /opt/blinky/src/.arduino /opt/blinky/src/.arduino.x 2>/dev/null && { mv /opt/blinky/src/.arduino.x /opt/blinky/src/.arduino; exit 1; } || exit 0' \
+# rename(2) itself, not mv: on overlayfs mv falls back to copying the directory when the rename
+# returns EXDEV, which would leave a copy behind and prove nothing.
+docker exec $W python -c 'import os,sys
+s="/opt/blinky/src/.arduino"
+try: os.rename(s, s + ".x")
+except OSError: sys.exit(0)
+os.rename(s + ".x", s); sys.exit(1)' \
   && ok "toolchain can't be renamed" || bad "the toolchain directory can be renamed (and replaced)"
 docker exec $W sh -c 'rm -rf /opt/blinky/src/.arduino 2>/dev/null; test -d /opt/blinky/src/.arduino/data' \
   && ok "toolchain can't be removed" || bad "the toolchain can be removed"
