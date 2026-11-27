@@ -196,7 +196,7 @@ def test_json_info_sanity() -> None:
     info = {
         "version": "b221",
         "platform": "nrf52840",
-        "sn": "87DE9B58C90AFE2D",
+        "sn": "0123456789ABCDEF",
         "millis": 90_000,
         "audioOverruns": 0,
         "audioSamplesLost": 0,
@@ -205,12 +205,12 @@ def test_json_info_sanity() -> None:
         "mallocIsr": 0,
         "device": {"leds": 64},
     }
-    assert hc.sane(info, "87DE9B58C90AFE2D", board) == []
-    assert hc.sane({**info, "fps": 12.0}, "87DE9B58C90AFE2D", board) == ["fps 12.0 < 30"]
-    assert hc.sane({**info, "mallocIsr": 2}, "87DE9B58C90AFE2D", board) == ["mallocIsr 2"]
+    assert hc.sane(info, "0123456789ABCDEF", board) == []
+    assert hc.sane({**info, "fps": 12.0}, "0123456789ABCDEF", board) == ["fps 12.0 < 30"]
+    assert hc.sane({**info, "mallocIsr": 2}, "0123456789ABCDEF", board) == ["mallocIsr 2"]
     assert "no audioSamplesLost" in hc.sane({**info, "audioSamplesLost": None}, "x", board)
     assert hc.sane({**info, "device": {"leds": 89}}, "x", board) == ["89 LEDs, not 64"]
-    assert hc.sane(info, "0000000000000001", board)[0].startswith("sn 87DE")
+    assert hc.sane(info, "0000000000000001", board)[0].startswith("sn 0123")
 
 
 # -- 2. lights ---------------------------------------------------------------------------------
@@ -443,18 +443,20 @@ async def test_a_chip_that_disconnected_is_never_dropped_silently(
 
 
 async def test_an_enrolled_chip_is_checked_as_its_registry_entry(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A renamed entry: the grid's chip still reports its old id until a reboot applies the new
     config (maybe this job's flash), so its board is the entry the box keeps it on."""
+    (tmp_path / "box_chips.json").write_text(json.dumps({"0123456789ABCDEF": "testbox_grid"}))
+    monkeypatch.setattr(hc.box_config, "CONFIG_DIR", tmp_path)
 
     async def connected(ids: list[str]) -> list[Any]:
         return [
-            SimpleNamespace(id="87DE9B58C90AFE2D", hardware_sn=None, device_type="testbox_grid_v1"),
+            SimpleNamespace(id="0123456789ABCDEF", hardware_sn=None, device_type="testbox_grid_v1"),
             SimpleNamespace(id="other", hardware_sn="OTHER", device_type="bench_chip"),
         ]
 
     monkeypatch.setattr(hc, "_connected", connected)
-    got = await hc.boards.__wrapped__(["87DE9B58C90AFE2D", "other"])  # type: ignore[attr-defined]
-    assert got == {"87DE9B58C90AFE2D": "testbox_grid", "other": "bench_chip"}
-    assert got["87DE9B58C90AFE2D"] in hc.BOARDS
+    got = await hc.boards.__wrapped__(["0123456789ABCDEF", "other"])  # type: ignore[attr-defined]
+    assert got == {"0123456789ABCDEF": "testbox_grid", "other": "bench_chip"}
+    assert got["0123456789ABCDEF"] in hc.BOARDS

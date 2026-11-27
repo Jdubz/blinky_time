@@ -61,7 +61,7 @@ def test_the_staging_report_sets_one_gauge_per_check_and_replaces_the_last_run()
 
 def _device(**kw: Any) -> SimpleNamespace:
     base = {
-        "id": "87DE9B58C90AFE2D",
+        "id": "0123456789ABCDEF",
         "state": SimpleNamespace(value="connected"),
         "device_type": "testbox_grid",
         "version": "b217",

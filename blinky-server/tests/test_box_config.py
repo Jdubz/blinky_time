@@ -1,6 +1,6 @@
-"""The box's chips take their device config from the registry (testing/box_config.py).
+"""The box's chips take their device config from the box's own entries (testing/box_config.py).
 
-On a --staging server only, and only for a chip in BOX_CHIPS: compare first, upload only when
+On a --staging server only, and only for a chip enrolled in box_chips.json: compare first, upload only when
 the stored config differs, reboot once to apply it when the chip has been up past markStable
 and nothing uses it, and never twice for the same entry.
 """
@@ -17,8 +17,18 @@ import pytest
 from blinky_server.device.device import DeviceState
 from blinky_server.testing import box_config, leds
 
-GRID = "87DE9B58C90AFE2D"
-ENTRY = json.loads((box_config.REGISTRY_DIR / "testbox_grid.json").read_text())
+GRID = "0123456789ABCDEF"  # made up; the box's real serials are in its local config only
+ENTRY = {
+    "deviceId": "grid",
+    "deviceName": "Grid",
+    "ledWidth": 8,
+    "ledHeight": 8,
+    "ledPin": 10,
+    "ledType": 82,
+    "orientation": 5,
+    "layoutType": 0,
+    "brightness": 0,
+}
 
 
 def full_config(entry: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +96,11 @@ class FakeFleet:
 
 @pytest.fixture(autouse=True)
 def _state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = tmp_path / "devices"
+    config.mkdir()
+    (config / "box_chips.json").write_text(json.dumps({"_comment": "test", GRID: "grid"}))
+    (config / "grid.json").write_text(json.dumps(ENTRY))
+    monkeypatch.setattr(box_config, "CONFIG_DIR", config)
     monkeypatch.setattr(box_config, "state_path", lambda: tmp_path / "box-config.json")
     monkeypatch.setattr(box_config, "MIN_UPTIME_S", 0.0)
     box_config._pending.clear()
@@ -180,8 +195,11 @@ def test_an_entry_compares_equal_to_its_full_stored_config() -> None:
     assert box_config.stored_diff(shown | {"orientation": 0}, ENTRY) == ["orientation: 0 -> 5"]
 
 
-def test_every_box_chip_has_a_registry_entry() -> None:
-    for name in box_config.BOX_CHIPS.values():
-        assert (
-            json.loads((box_config.REGISTRY_DIR / f"{name}.json").read_text())["deviceId"] == name
-        )
+async def test_no_local_config_leaves_every_chip_alone() -> None:
+    """A box without its chips file, or a chip whose entry file is missing: logged, untouched."""
+    (box_config.CONFIG_DIR / "grid.json").unlink()
+    chip = FakeChip(GRID, None)
+    await connect(chip)
+    (box_config.CONFIG_DIR / "box_chips.json").unlink()
+    await connect(chip)
+    assert box_config.box_chips() == {} and chip.sent == []

@@ -29,8 +29,8 @@ Owner-stated and checked on 2026-11-23. Don't change this section from guesses; 
 | Part | As built |
 |------|----------|
 | Host | Raspberry Pi 5. Its hostname is in the owner's private notes; Alloy labels the box's telemetry with it (`host`). |
-| Test chip | One XIAO nRF52840 **Sense Plus**, USB serial `87DE9B58C90AFE2D`, device config `testbox_grid` (listed in blinky-firmware's `devices/test_devices.json`). All XIAO pins are soldered. Every bootloader and firmware build must run on both the Sense Plus and the fleet's plain Sense. |
-| Second chip | A **XIAO ESP32-S3**, attached by the owner on 2026-11-24 (USB cables replaced the same day). Measured: native USB Serial/JTAG, MAC `90:70:69:11:F8:10`, `/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_90:70:69:11:F8:10-if00`; it runs an old blinky build (`1.0.1`), **unconfigured, in safe mode**; blinky-server connects to it (`esp32s3`) and `json info` answers in ~2-16 ms. Wiring (owner): the same 8x8 grid layout as the test chip (GRB, `HORIZONTAL_ROTATED_180`), LED data on **D0** (GPIO1). Device config `testbox_esp32` (`devices/registry/testbox_esp32.json`, brightness 0), not enrolled yet: see "Chip config from the registry". The box has no ESP32 flash path yet (P3). |
+| Test chip | One XIAO nRF52840 **Sense Plus**, device config `testbox_grid` (the box's own entry, see "Chip config from the box's entries"; listed in blinky-firmware's `devices/test_devices.json`). All XIAO pins are soldered. Every bootloader and firmware build must run on both the Sense Plus and the fleet's plain Sense. |
+| Second chip | A **XIAO ESP32-S3**, attached by the owner on 2026-11-24 (USB cables replaced the same day). Measured: native USB Serial/JTAG (its USB serial is its MAC); it runs an old blinky build (`1.0.1`), **unconfigured, in safe mode**; blinky-server connects to it (`esp32s3`) and `json info` answers in ~2-16 ms. Wiring (owner): the same 8x8 grid layout as the test chip (GRB, `HORIZONTAL_ROTATED_180`), LED data on **D0** (GPIO1). Device config `testbox_esp32` (the box's own entry, brightness 0), not enrolled yet: see "Chip config from the box's entries". The box has no ESP32 flash path yet (P3). |
 | SWD probe | Seeed **XIAO Debug Mate**, the chip seated in it. CMSIS-DAP driven with OpenOCD, used for SWD recovery only. |
 | USB hub | Belkin hub with per-port power switching (`uhubctl`). The chip's own USB-C and the Debug Mate's USB-C are each on a hub port. |
 | LEDs | An 8x8 WS2812 grid, data from **D10** through the Debug Mate's D10 header pin (a direct trace to the socket in Seeed's netlist). The grid has its own external 5 V supply. No level shifter. |
@@ -55,7 +55,7 @@ From its schematic and firmware; details and sources in blinky-firmware's [SWD_R
 
 The grid is lit only while a test runs (owner, 2026-11-24). Only the box's chip works this way; every fleet device keeps booting lit, in Fire, at its configured brightness.
 
-- **Idle and at boot: dark.** The chip's device config, `devices/registry/testbox_grid.json`, has `brightness: 0`, and the server keeps the chip on it (see "Chip config from the registry"). A reboot, a flash or a deploy leaves it dark.
+- **Idle and at boot: dark.** The chip's device config, its entry `testbox_grid.json` on the box, has `brightness: 0`, and the server keeps the chip on it (see "Chip config from the box's entries"). A reboot, a flash or a deploy leaves it dark.
 - **During a run: lit at 40.** Test runs light the chip with the firmware's runtime-only `leds` override (blinky-firmware `render/LedBrightness.h`; `leds 0-255 | off | config | status`, never saved), at `TEST_BRIGHTNESS` (`blinky_server/testing/leds.py`): the brightness the camera's exposure and gain were set for (`TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Levels"). It is a box setting, not a device one: any chip in the grid's place needs the camera's level.
 - **After a run, however it ends** (pass, failure, cancel, a drain's stop): `leds config`, back to the config's brightness (dark).
 - **Restarts.** Lighting is per-run setup in the workflow body, so a job recovered after a restart lights the chip again. When the chip (re)connects, the server sets it back to its config brightness unless a run in this process holds it lit, so a run cut off by a crash doesn't leave it lit.
@@ -73,16 +73,18 @@ Per run type:
 
 A camera survey (`camera_capture.py survey`) runs outside any job: light the chip first (`leds 40` through `POST /api/devices/{id}/command`) and send `leds config` after.
 
-## Chip config from the registry
+## Chip config from the box's entries
 
-The box's server keeps each enrolled chip on its registry entry (`blinky_server/testing/box_config.py`). Nobody uploads a box chip's config by hand.
+The box's server keeps each enrolled chip on its device config entry (`blinky_server/testing/box_config.py`). Nobody uploads a box chip's config by hand.
 
-- **Which entry.** `BOX_CHIPS` maps a chip's USB serial to its entry: the grid's chip, `87DE9B58C90AFE2D`, runs `testbox_grid`. A chip that isn't listed is left alone and logged (`no registry entry for this chip`): today the ESP32-S3. Its entry, `testbox_esp32`, is in the registry, but its `1.0.1` build can't take it: that build's `device upload` refuses orientation 5 (it validates 0-2), so enrolling it now would only log a refused upload on every connect. Its `BOX_CHIPS` line (it connects as `90:70:69:11:F8:10`, its MAC) goes in once the box can flash current ESP32 firmware (P3).
+- **Where.** On the box, in `~/.config/blinky/devices/` (700, files 600, like the rest of `~/.config/blinky`): `box_chips.json`, `{"<USB serial>": "<entry>"}`, and one `<entry>.json` per chip, in the format of `devices/registry/README.md`. Device configs are private: real entries and chip serials never go in this repo, which holds only the made-up `devices/registry/example.json`. The fleet's entries are kept on the box too, in `~/.config/blinky/devices/fleet/`, until they sync with the production setup.
+
+- **Which entry.** `box_chips.json` maps a chip's USB serial to its entry: the grid's chip runs `testbox_grid`. A chip that isn't listed, or whose entry file is missing, is left alone and logged (`no device config entry for this chip`): today the ESP32-S3. Its entry, `testbox_esp32`, is on the box, but its `1.0.1` build can't take it: that build's `device upload` refuses orientation 5 (it validates 0-2), so enrolling it now would only log a refused upload on every connect. Its `box_chips.json` line (it connects as its MAC) goes in once the box can flash current ESP32 firmware (P3).
 - **When.** On every connect, before the chip counts as connected: a boot, a flash, a reconnect, a server restart. That is the one code path. Every run flashes first, so every run starts on a checked config.
 - **Compare first.** `device show` (the stored config, with the firmware's defaults for the fields the entry leaves out) and `json info` (the running one) against the entry. A match writes nothing and costs one command.
 - **Upload, then reboot once.** If the stored config differs, the server sends `device upload <entry>` (straight to the chip, #382: no deploy header). An upload applies at the next boot, so the server reboots the chip once it has been up 75 s (past markStable: the 60-second rule) and only if nothing uses it then: no test job, no flash, no run holding its LEDs, no held work. Busy, it is left for its next reboot (a run's flash).
 - **No loops.** Each reboot is recorded against the entry's hash (`~/.local/share/blinky-server/box-config.json`). A chip that still differs after a reboot for the same entry gets an ERROR in the log (`still differs from its registry entry`) and is left alone until the entry changes or the chip matches. A match clears the record, so a later drift (the reboot-counter quarantine, a hand upload) is fixed again.
-- **Changing an entry** restarts the server (`devices/registry/` is in the deployer's SERVER_PATHS), and the chips reconnect onto it.
+- **Changing an entry** needs no restart or deploy: both files are read on every connect, so the chip takes it at its next reconnect (a run's flash, or a server restart).
 - **Logs.** `journalctl -u blinky-server | grep -i "registry entry"`: `matches its registry entry`, `uploading its registry entry` (with the fields that differed), `rebooting to apply`.
 
 ## Audio start
@@ -163,7 +165,7 @@ Three behaviours to expect: the server doesn't auto-recover a device within 30 m
    defaults.ctl.!card Pebbles
    ```
    Check with `ffplay -nodisp -autoexit <track>.mp3`. `BLINKY_AUDIO_PCM` in the server's environment names another PCM for the player.
-5. **Enroll a chip** by PR: its registry entry in `devices/registry/` and its USB serial in `BOX_CHIPS` (`blinky_server/testing/box_config.py`). The server configures it when it connects (see "Chip config from the registry"). The grid's chip takes `devices/registry/testbox_grid.json` (brightness 0: see "LEDs: dark unless a test runs").
+5. **Enroll a chip** on the box: its entry in `~/.config/blinky/devices/` and its USB serial in `box_chips.json` there, never in this repo. The server configures it when it connects (see "Chip config from the box's entries"). The grid's chip takes `testbox_grid.json` (brightness 0: see "LEDs: dark unless a test runs").
 
 ## Build service client
 
@@ -205,7 +207,7 @@ The checks are one durable job, `test.hardware-checks` (`blinky-server/blinky_se
 | | no reboot | no reset across the checks | uptime |
 | | alerts | no firmware `[ASSERT]`/`[FALLBACK]` line since the flash | the lines |
 
-Which checks a chip gets is its board's entry (`BOARDS` in `hardware_checks.py`): `testbox_grid` (nRF52840, 64 LEDs, the grid's region map, the BLE stack report). A chip's board is its registry entry in `BOX_CHIPS`, or the device type it reports if it isn't enrolled: after an entry is renamed, the chip reports its old id until a reboot applies the new one. The ESP32-S3's entry comes with its device config and flash path (P3). The firmware's IMU is a stub (`IMU_ENABLED` off), so there is no IMU check; the mic's power shows as the PDM's `alive` in the audio check.
+Which checks a chip gets is its board's entry (`BOARDS` in `hardware_checks.py`): `testbox_grid` (nRF52840, 64 LEDs, the grid's region map, the BLE stack report). A chip's board is its entry in `box_chips.json`, or the device type it reports if it isn't enrolled: after an entry is renamed, the chip reports its old id until a reboot applies the new one. The ESP32-S3's entry comes with its device config and flash path (P3). The firmware's IMU is a stub (`IMU_ENABLED` off), so there is no IMU check; the mic's power shows as the PDM's `alive` in the audio check.
 
 **The camera here is a gate, once.** The owner made "do the LEDs work" a blocking yes/no, and only the camera can see it. The camera's timing and quality reviews stay secondary and never gate (`TEST_BOX_CAMERA_HARNESS_PLAN.md`). The lights check drives the chip over its serial connection and the camera through a worker on the system Python (`scripts/testbox/camera/camera_lights.py`, one JSON line each way: the server's venv has no picamera2).
 
@@ -329,7 +331,7 @@ When the box, its runners or its chip break, an alert says so. The central LGTM 
 | `BlinkyBoxRunnerTimerStopped` | a runner's timer stopped, or not triggered for an hour | `systemctl list-timers 'blinky-*'`, `sudo systemctl enable --now <timer>`. |
 | `BlinkyDeployHeadRefused` | the deployer has refused master's head for 15 min (red check, review findings, failed prepare, or rolled back) | `deploy.py --status` for the reason; fix master, or the owner's `deploy.py --accept SHA "reason"`. |
 | `BlinkyTestChipDown` | a chip connected in the last 7 days not connected for 45 min; the summary names its state (`dfu_recovery`, `error`, `disconnected`, or gone) | The USB auto-recovery had its chance (the 120 s park, the 30-min guard). `dev.py status`, then the recovery chain above: SWD restore, then both hub ports. |
-| `BlinkyTestChipUnconfigured` | a connected chip that had a device type in the last 7 days reports none for 30 min | An enrolled chip is configured by the server on connect ("Chip config from the registry"): its log says why not (`still differs`, `refused`). A chip not in `BOX_CHIPS` needs its entry enrolled. |
+| `BlinkyTestChipUnconfigured` | a connected chip that had a device type in the last 7 days reports none for 30 min | An enrolled chip is configured by the server on connect ("Chip config from the box's entries"): its log says why not (`still differs`, `refused`). A chip not in the box's `box_chips.json` needs its entry enrolled there. |
 | `BlinkyHardwareCheckRigError` | 6 rig errors in a row on one head (about an hour of the backoff); rig faults stay pending, never red | The runner's log names the fault (camera, speaker, build service, flash); then `--retest`. |
 | `BlinkyTestBoxHot` | the SoC above 80 °C for 10 min (throttles at 85; normal 45-55) | The fan, and what runs on the box: heavy work goes to CI or the Spark. |
 | `BlinkyTestBoxUndervoltage` | the Pi's under-voltage alarm on 3+ samples in 30 min | `vcgencmd get_throttled`; the supply or the powered hub (hardware, the owner). |

@@ -1,7 +1,12 @@
-"""The test box's chips take their device config from the registry (docs/TEST_BOX.md).
+"""The test box's chips take their device config from the box's own entries (docs/TEST_BOX.md).
+
+The entries are private: they live on the box in ``~/.config/blinky/devices/`` (``CONFIG_DIR``,
+beside the box's other ``~/.config/blinky`` files), never in this repo. ``box_chips.json`` there
+maps each chip's USB serial to its entry, ``<entry>.json`` (``devices/registry/README.md`` has
+the format).
 
 On the box (a server started with --staging), every time a chip connects, the server checks it
-against its registry entry, ``devices/registry/<entry>.json``, and fixes it if it differs:
+against its entry and fixes it if it differs:
 
 1. Compare. ``device show`` (the stored config) and ``json info`` (the running one) against
    the entry, with the firmware's defaults for the fields the entry leaves out. A match, the
@@ -15,11 +20,11 @@ against its registry entry, ``devices/registry/<entry>.json``, and fixes it if i
 
 Loops: each reboot is recorded against the entry's hash (``state_path``). A chip that still
 differs after a reboot for the same entry is logged as an ERROR and left alone until the entry
-changes or the chip matches. A chip that isn't in ``BOX_CHIPS`` is never touched (logged).
+changes or the chip matches. A chip with no entry (not in ``box_chips.json``, or its file is
+missing) is never touched (logged).
 
-Enrolling a chip: its registry entry, and a line in ``BOX_CHIPS``. The deployer restarts the
-server for either (``devices/registry/`` is in its SERVER_PATHS), and the chip is configured
-when it reconnects.
+Enrolling a chip: its entry file and a line in ``box_chips.json``, on the box. Both are read at
+every connect, so no restart is needed: the chip is configured when it next reconnects.
 """
 
 from __future__ import annotations
@@ -40,14 +45,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# The box's chips, by USB serial: the registry entry each one runs.
-BOX_CHIPS = {
-    "87DE9B58C90AFE2D": "testbox_grid",  # the permanent test chip, the 8x8 grid
-    # The ESP32-S3 (testbox_esp32) is added once the box can flash current ESP32 firmware: its
-    # 1.0.1 build refuses the entry (orientation 5), so it would only log a refused upload.
-}
-
-REGISTRY_DIR = Path(__file__).resolve().parents[3] / "devices" / "registry"
+# The box's private device config, as ~/.config/blinky/*.env: <entry>.json per chip, and
+# box_chips.json, {USB serial: entry} ("_"-prefixed keys are comments).
+CONFIG_DIR = Path.home() / ".config" / "blinky" / "devices"
+CHIPS_FILE = "box_chips.json"
 
 # Up this long before the server reboots a chip: past markStable (60 s), as deploy_local.py.
 MIN_UPTIME_S = 75.0
@@ -106,17 +107,40 @@ def _save_state(state: dict[str, str]) -> None:
     state_path().write_text(json.dumps(state, indent=1, sort_keys=True) + "\n")
 
 
+def box_chips() -> dict[str, str]:
+    """{USB serial: entry} from ``CONFIG_DIR/box_chips.json``, read on every call. Missing or
+    unreadable: no chip is enrolled."""
+    path = CONFIG_DIR / CHIPS_FILE
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        log.error("[FALLBACK] %s unreadable (%s): no chip is enrolled", path, e)
+        return {}
+    if not isinstance(data, dict):
+        log.error("[FALLBACK] %s is not an object: no chip is enrolled", path)
+        return {}
+    return {str(k): str(v) for k, v in data.items() if not str(k).startswith("_")}
+
+
 def entry_name(device: Device) -> str | None:
-    """The registry entry the chip runs (its deviceId), or None for a chip that isn't enrolled."""
-    return BOX_CHIPS.get(device.id) or BOX_CHIPS.get(device.hardware_sn or "")
+    """The entry the chip runs (its deviceId), or None for a chip that isn't enrolled."""
+    chips = box_chips()
+    return chips.get(device.id) or chips.get(device.hardware_sn or "")
 
 
 def entry_for(device: Device) -> dict[str, Any] | None:
-    """The chip's registry entry, or None for a chip that isn't enrolled."""
+    """The chip's entry, or None for a chip that isn't enrolled or whose file is missing."""
     name = entry_name(device)
     if name is None:
         return None
-    return dict(json.loads((REGISTRY_DIR / f"{name}.json").read_text()))
+    path = CONFIG_DIR / f"{name}.json"
+    try:
+        return dict(json.loads(path.read_text()))
+    except FileNotFoundError:
+        log.warning("%s: enrolled as %s, but %s is missing", device.id[:12], name, path)
+        return None
 
 
 def parse_show(raw: str) -> dict[str, Any]:
@@ -182,10 +206,10 @@ async def _reconcile(fleet: FleetManager, device: Device) -> None:
     entry = entry_for(device)
     if entry is None:
         log.info(
-            "%s (%s): no registry entry for this chip in box_config.BOX_CHIPS; its config is "
-            "left alone",
+            "%s (%s): no device config entry for this chip in %s; its config is left alone",
             device.id[:12],
             device.platform,
+            CONFIG_DIR,
         )
         return
     name, digest = entry["deviceId"], _entry_hash(entry)

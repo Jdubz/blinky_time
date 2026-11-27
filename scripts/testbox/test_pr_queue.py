@@ -24,7 +24,7 @@ dev = sys.modules["dev"]
 
 REPO = "Jdubz/blinky-firmware"
 A1, A2, B1 = "a" * 40, "b" * 40, "c" * 40
-GRID = {"id": "87DE9B58", "state": "connected", "platform": "nrf52840", "device_type": "grid"}
+GRID = {"id": "01234567", "state": "connected", "platform": "nrf52840", "device_type": "grid"}
 
 
 def pr(number: int, sha: str, draft: bool = False, repo: str | None = REPO) -> dict[str, Any]:

@@ -29,8 +29,8 @@ def test_usb_serial_of_port_reads_the_by_id_name(tmp_path: Path) -> None:
     tty.write_text("")
     by_id = tmp_path / "by-id"
     by_id.mkdir()
-    (by_id / "usb-Seeed_XIAO_nRF52840_Sense_87DE9B58C90AFE2D-if00").symlink_to(tty)
-    assert usb_serial_of_port(str(tty), by_id) == "87DE9B58C90AFE2D"
+    (by_id / "usb-Seeed_XIAO_nRF52840_Sense_0123456789ABCDEF-if00").symlink_to(tty)
+    assert usb_serial_of_port(str(tty), by_id) == "0123456789ABCDEF"
     assert usb_serial_of_port(str(tmp_path / "ttyACM9"), by_id) is None
     assert usb_serial_of_port(str(tty), tmp_path / "missing") is None
 
@@ -73,7 +73,7 @@ def _wire(
 
     monkeypatch.setattr(mgr, "_uf2_write_impl_for_job", fake_write)
     monkeypatch.setattr(mgr, "uf2_drive_present", fake_present)
-    monkeypatch.setattr(mgr, "usb_serial_of_port", lambda _p: "87DE9B58C90AFE2D")
+    monkeypatch.setattr(mgr, "usb_serial_of_port", lambda _p: "0123456789ABCDEF")
     monkeypatch.setattr(mgr, "UF2_RETRY_SETTLE_S", 0.0)
     monkeypatch.setattr(fleet, "_verify_with_anomaly_checks", fake_verify)
     return calls
@@ -95,7 +95,7 @@ async def test_drive_still_attached_retries_the_copy_once(
     assert job.state is FlashJobState.COMPLETED
     assert len(calls) == 2
     assert calls[1]["already_in_bootloader"] is True
-    assert calls[1]["usb_serial"] == "87DE9B58C90AFE2D"
+    assert calls[1]["usb_serial"] == "0123456789ABCDEF"
     assert UF2_WRITE_RETRIED in job.anomalies
     assert job.error is None
 

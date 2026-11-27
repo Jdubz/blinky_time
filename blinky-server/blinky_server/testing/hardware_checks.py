@@ -255,7 +255,7 @@ async def preflight(regions: list[str], need_audio: bool) -> dict[str, Any]:
 
 @durable.step
 async def boards(device_ids: list[str]) -> dict[str, str | None]:
-    """Each chip's board: the registry entry the box keeps it on (box_config.BOX_CHIPS), else the
+    """Each chip's board: the device config entry the box keeps it on (box_config), else the
     device type it reports. The entry first: when an entry's id changes, the chip reports the old
     id until a reboot applies the new config, and that reboot may be this job's flash."""
     return {d.id: box_config.entry_name(d) or d.device_type for d in await _connected(device_ids)}

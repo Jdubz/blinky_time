@@ -1,0 +1,12 @@
+{
+  "_comment": "A made-up entry: the format, for devices/registry/README.md and the registry test. Real entries are private and never in this repo.",
+  "deviceId": "example",
+  "deviceName": "Example Grid",
+  "ledWidth": 8,
+  "ledHeight": 8,
+  "ledPin": 10,
+  "ledType": 82,
+  "orientation": 0,
+  "layoutType": 0,
+  "brightness": 80
+}

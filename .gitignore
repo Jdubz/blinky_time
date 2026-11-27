@@ -84,3 +84,8 @@ spark.env
 deploy/build-host/labels/labels.env
 # The build service's host values (deploy/build-host/build/build.env.example)
 deploy/build-host/build/build.env
+
+# Device configs are private (devices/registry/README.md): only the made-up example is tracked.
+# Real entries live in ~/.config/blinky/devices/.
+devices/registry/*.json
+!devices/registry/example.json
