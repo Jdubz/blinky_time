@@ -1008,9 +1008,7 @@ def test_a_dry_run_posts_and_submits_nothing(capsys: pytest.CaptureFixture[str])
 STRICT_ROWS = [
     {"rule": "frame_time", "mode": "warn", "status": "pass", "worst": 18.0, "threshold": 100.0,
      "unit": "ms", "worst_is": "max", "issues": [49, 23], "where": "upload",
-     "at": "14:05:31.204", "samples": 14,
-     "excluded": [{"read_at": "14:03:12.101", "where": "upload", "max_frame_ms": 113,
-                   "reason": "settings save at 14:03:05.320 (blinky-firmware#49)"}]},
+     "at": "14:05:31.204", "samples": 14},
     {"rule": "fps", "mode": "warn", "status": "warn", "worst": 52.0, "threshold": 60.0,
      "unit": "fps", "worst_is": "min", "issues": [23], "where": "after the response stream",
      "at": "14:07:00.000", "samples": 18},
@@ -1032,10 +1030,7 @@ def test_strict_warnings_never_change_the_status_only_its_description() -> None:
         in text
     )
     assert "| frame_time | ✅ pass | 18 ms |" in text and "blinky-firmware#49" in text
-    assert (
-        "- frame_time: the window read at 14:03:12.101 (upload, 113 ms) excluded: settings save "
-        "at 14:03:05.320 (blinky-firmware#49)" in text
-    )
+    assert "excluded" not in text  # no loop window is ever excluded (blinky-firmware#49)
 
 
 def test_the_quality_status_says_how_many_strict_rules_warned() -> None:
