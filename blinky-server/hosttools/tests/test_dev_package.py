@@ -81,3 +81,30 @@ def test_the_esp32s3_image_is_optional_and_verified_when_listed(tmp_path: Path) 
     (d / s3).unlink()
     with pytest.raises(fr.ReleaseError, match="lists blinky-things-b220-esp32s3.bin but it is missing"):
         fr.verify_dev_package(d, SHA)
+
+
+def test_the_manifests_esp32s3_block_must_match_the_image(tmp_path: Path) -> None:
+    """Its NVS range is what a routine flash keeps: it must be the image's own partition
+    table's, which hosttools/esp32_flash.py skips."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_esp32_flash import merged
+
+    s3 = "blinky-things-b220-esp32s3.bin"
+    good = {"image": s3, "image_offset": 0, "nvs": {"offset": 0x9000, "size": 0x5000}}
+
+    def pkg(where: str, block: dict) -> Path:
+        d = package(tmp_path / where, **{s3: merged()})
+        m = json.loads((d / "manifest.json").read_text())
+        (d / "manifest.json").write_text(json.dumps({**m, "esp32s3": block}))
+        return d
+
+    assert fr.verify_dev_package(pkg("ok", good), SHA)["esp32s3"] is not None
+    with pytest.raises(fr.ReleaseError, match="manifest NVS"):
+        fr.verify_dev_package(pkg("nvs", {**good, "nvs": {"offset": 0x9000, "size": 0x6000}}), SHA)
+    with pytest.raises(fr.ReleaseError, match="at 0"):
+        fr.verify_dev_package(pkg("off", {**good, "image_offset": 0x10000}), SHA)
+    d = package(tmp_path / "app", **{s3: merged()[0x10000:]})  # an app-only bin under that name
+    m = json.loads((d / "manifest.json").read_text())
+    (d / "manifest.json").write_text(json.dumps({**m, "esp32s3": good}))
+    with pytest.raises(fr.ReleaseError, match="app-only"):
+        fr.verify_dev_package(d, SHA)

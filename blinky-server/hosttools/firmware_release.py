@@ -82,6 +82,29 @@ def esp32s3_name(n):
     return f"blinky-things-b{n}-esp32s3.bin"
 
 
+# [blinky_time: the manifest's "esp32s3" block (blinky-firmware's packaging) must describe the
+# image the box writes: the merged image at 0x0, and its NVS range the same as the image's own
+# partition table, which hosttools/esp32_flash.py skips on a routine write.]
+def check_esp32s3(manifest, image_path, n, name):
+    block = manifest.get("esp32s3")
+    if block is None:
+        return
+    import esp32_flash  # hosttools/, beside this file
+
+    if block.get("image") != esp32s3_name(n) or block.get("image_offset") != 0:
+        raise ReleaseError(f"{name}: manifest esp32s3 block names {block.get('image')} at "
+                           f"{block.get('image_offset')}, not {esp32s3_name(n)} at 0")
+    try:
+        parts = esp32_flash.check_image(Path(image_path).read_bytes())
+    except (esp32_flash.FlashError, OSError) as e:
+        raise ReleaseError(f"{name}: {esp32s3_name(n)}: {e}") from None
+    nvs = [{"offset": p.offset, "size": p.size} for p in parts
+           if p.type == esp32_flash.TYPE_DATA and p.subtype == esp32_flash.SUBTYPE_NVS]
+    if nvs != [block.get("nvs")]:
+        raise ReleaseError(f"{name}: manifest NVS {block.get('nvs')} is not the image's "
+                           f"partition table's {nvs}")
+
+
 def gh(*args, capture=True):
     """Run the GitHub CLI; raise with its stderr on failure.
 
@@ -199,6 +222,8 @@ def verify_dev_package(pkg_dir, sha, name=None):
     s3 = esp32s3_name(n)
     if s3 in files and not (pkg_dir / s3).exists():
         raise ReleaseError(f"{name}: the manifest lists {s3} but it is missing")
+    if s3 in files:
+        check_esp32s3(manifest, pkg_dir / s3, n, name)
     return {"manifest": manifest, "hex": pkg_dir / required[0], "uf2": pkg_dir / required[1],
             "esp32s3": pkg_dir / s3 if s3 in files else None}
 
@@ -283,6 +308,8 @@ def download(tag, out_dir):
             raise ReleaseError(f"{tag}: asset {name} missing")
         if sha256(p) != files[name]:
             raise ReleaseError(f"{tag}: {name} sha256 mismatch - refusing to use it")
+    if s3 in files:
+        check_esp32s3(manifest, out_dir / s3, n, tag)
     return {
         "tag": tag,
         "hex": out_dir / f"blinky-things-b{n}.hex",
