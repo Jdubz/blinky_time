@@ -216,7 +216,7 @@ def _write(port: str, plan: list[tuple[int, bytes]], total: int, image: bytes,
         if mode == "full":
             erase_flash(esp)
             print("[PASS] Erased the whole flash", flush=True)
-        write_flash(esp, plan)  # verifies each region's MD5
+        write_flash(esp, plan, no_progress=True)  # verifies each region's MD5
         print(f"[PASS] Wrote {total:,} / {total:,} bytes", flush=True)
         reset_chip(esp, "hard-reset")
         print("[PASS] Reset into the app", flush=True)

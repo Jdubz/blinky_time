@@ -458,3 +458,33 @@ def test_the_s3_board_gets_every_check_but_the_walk() -> None:
             "sn": "0011223344556677"}  # fmt: skip
     assert hc.sane(info, MAC, b) == []
     assert hc.sane({**info, "platform": "nrf52840"}, MAC, b) == ["platform 'nrf52840', not esp32s3"]
+
+
+async def test_a_board_without_a_region_map_still_checks_the_leds_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No camera view of the ESP32-S3's grid: the walk is not applicable, but `leds 40` must
+    still apply (the runtime override that lights and darkens the box's chips)."""
+    from types import SimpleNamespace
+
+    from blinky_server.testing import hardware_checks as hc
+
+    sent: list[str] = []
+
+    async def fake_send(d: Any, arg: str) -> dict[str, Any]:
+        sent.append(arg)
+        return {"brightness": int(arg), "config": 0, "override": True}
+
+    monkeypatch.setattr(hc.leds, "send", fake_send)
+    d = SimpleNamespace(id=MAC)
+
+    async def chips(ids: list[str]) -> list[Any]:
+        return [d]
+
+    monkeypatch.setattr(hc, "_chips", chips)
+    out = await hc._lights([MAC], {MAC: "testbox_esp32"}, None, 40)
+    assert [(c["name"], c["result"]) for c in out["checks"]] == [
+        ("leds", "yes"),
+        ("walk", "not applicable"),
+    ]
+    assert sent == ["40"] and out["rig_error"] is None
