@@ -25,7 +25,12 @@ dependencies = [
 
 [project.optional-dependencies]
 ble = ["bleak>=0.22"]
-firmware = ["pyudev>=0.24"]  # Event-driven USB device detection for UF2 upload
+firmware = [
+    "pyudev>=0.24",  # Event-driven USB device detection for UF2 upload
+    # ESP32-S3 flashing over USB Serial/JTAG (hosttools/esp32_flash.py, the box's ESP32-S3).
+    # Pinned: it decides how the chip is reset into download mode and what gets written.
+    "esptool==5.6.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

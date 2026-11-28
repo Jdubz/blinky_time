@@ -157,7 +157,7 @@ def test_a_deploy_failure_before_the_flash_is_a_rig_error() -> None:
         async def release(build_id: str, d: Any) -> dict[str, Any]:
             return {"tag": "dev", "hex": "x.hex", "version": "b221-dev-x", "sha": "a"}
 
-        async def store(fn: Any, rel: dict[str, Any]) -> str:
+        async def store(fn: Any, rel: dict[str, Any], *targets: Any) -> str:
             return "x.hex"
 
         async def flash_t() -> float:

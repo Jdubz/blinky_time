@@ -69,8 +69,16 @@ docs/DEV_LOOP.md, "Stable candidates from scores"): ONE "Propose bN for stable" 
 candidate in blinky_time when it leads without a health problem. The quality-suite runs that
 comparison needs (the candidate's staging commit or the stable release under the current corpus
 pin, a repeat for the noise) are submitted then too, last in line: queue mode, nothing of the PR
-queue waiting, never preempting. State is in
-~/.local/share/blinky-server/staging.json; the log goes to the journal
+queue waiting, never preempting.
+
+The box's ESP32-S3 (fw#50, P3; docs/TEST_BOX.md, "ESP32-S3 flash and recovery") is informational:
+the hardware checks above run on nRF52840 chips only (``test_devices``), so it never blocks or
+slows ``Hardware test (staging)``. Once a head's quality suite is done, and before the stable
+proposals, the runner runs the hardware checks once on each enrolled (configured, connected)
+ESP32-S3 with the same staging build, last in line like the proposals, and reports them in their
+own comment ("ESP32-S3 hardware checks (informational)") on the PR that merged the head. No
+status is posted, and a failure or rig error is reported, never retried (``esp32`` in the
+state). State is in ~/.local/share/blinky-server/staging.json; the log goes to the journal
 (`journalctl -u blinky-staging`). `--status` prints the state. Stdlib only.
 """
 
@@ -121,6 +129,7 @@ FIRMWARE_PATHS = "tools/firmware_paths.json"
 COMPARE_FILE_LIMIT = 300  # GitHub's compare lists at most this many files
 CORPUS = "corpus/edm"  # the blinky-corpus submodule
 REPORT_HEADER = "## Hardware test (staging) — "
+ESP32_HEADER = "## ESP32-S3 hardware checks (informational) — "
 REVIEWS_HEADER = "Claude reviews since master (informational, not gated):"
 TERMINAL = ("complete", "error", "cancelled")  # GET /api/test/jobs/{id} status (work/jobs.py)
 RUNNER = "staging"  # this runner's name in the box's hardware queue (PUT /api/box/queue/staging)
@@ -251,6 +260,15 @@ def older_elsewhere(
         if float(w.get("since") or 0.0) < since:
             return dict(w)
     return None
+
+
+def esp32_devices(devices: list[dict[str, Any]]) -> list[str]:
+    """Connected, configured ESP32-S3s: their checks are informational, never in the status."""
+    return [
+        d["id"]
+        for d in devices
+        if d.get("state") == "connected" and d.get("platform") == "esp32s3" and d.get("device_type")
+    ]
 
 
 def test_devices(devices: list[dict[str, Any]]) -> list[str]:
@@ -719,13 +737,14 @@ def hw_status(report: dict[str, Any]) -> tuple[str, str]:
     return "failure", f"hardware checks FAILED at {hw_failed_at(report)}"
 
 
-def hw_lines(report: dict[str, Any]) -> list[str]:
+def hw_lines(report: dict[str, Any], retried: bool = True) -> list[str]:
     """The hardware checks as markdown: the verdict, each phase's time, the table of checks
     (check, yes/no, evidence)."""
     devices = ", ".join(d[:12] for d in report.get("devices") or [])
     version = report.get("version") or "?"
     if report.get("rig_error"):
-        head = f"**RIG ERROR, no verdict** (retried): {report['rig_error']}"
+        again = " (retried)" if retried else ""
+        head = f"**RIG ERROR, no verdict**{again}: {report['rig_error']}"
     elif report.get("passed"):
         head = f"**PASSED** — `{version}` on {devices}"
     else:
@@ -1155,12 +1174,94 @@ def _poll(gh_: Gh, server: Callable[..., Any], state: dict[str, Any]) -> dict[st
         return _pass(gh_, server)
     if kind == "hw":
         finish_hw(gh_, state, job)
+    elif kind == "esp32":
+        finish_esp32(gh_, state, job)
     elif kind == "proposal":
         finish_proposal_run(state, job)
     else:
         finish_quality(gh_, state, job, server)
     save_state(state)
     return state
+
+
+# -- the ESP32-S3, informational ---------------------------------------------------------------
+
+
+def esp32_checks(gh_: Gh, server: Callable[..., Any], state: dict[str, Any], sha: str) -> bool:
+    """The hardware checks on the enrolled ESP32-S3s, once per head that passed its own checks
+    and finished its quality suite: last in line (queue mode, no other runner's item waiting),
+    informational. False when there is nothing to do (no S3, or this head's run is done), so the
+    stable proposals go ahead; True when it ran or waits for the box."""
+    if state.get("hw_passed") != sha or state.get("quality_done") != sha:
+        return False
+    if (state.get("esp32") or {}).get("sha") == sha:
+        return False
+    try:
+        devices = esp32_devices(server("GET", "/api/devices"))
+        if not devices:
+            return False
+        mode = box_mode(server)
+        if holds(mode):
+            return True
+        now = time.time()
+        for w in mode.get("waiting") or []:
+            at = w.get("reported_at")
+            if w.get("runner") != RUNNER and at and now - float(at) < REPORT_STALE_S:
+                log(f"{sha[:12]}: ESP32-S3 checks wait behind {w.get('runner')}")
+                return True
+        job = server(
+            "POST",
+            "/api/test/hardware-checks",
+            {"sha": sha, "device_ids": devices, "source": "staging", "runner": RUNNER},
+        )
+    except urllib.error.HTTPError as e:
+        if not (400 <= e.code < 500) or e.code in RETRY_CODES:
+            log(f"{sha[:12]}: ESP32-S3 checks: server answered {e.code}; next pass")
+            return True
+        state["esp32"] = {"sha": sha, "result": f"refused ({e.code}): {_detail(e)}"}
+        log(f"{sha[:12]}: ESP32-S3 checks refused ({e.code}): {_detail(e)}")
+        return True
+    except (urllib.error.URLError, OSError) as e:
+        log(f"{sha[:12]}: ESP32-S3 checks: server not answering ({e}); next pass")
+        return True
+    state["running"] = {"sha": sha, "job": job["job_id"], "devices": devices, "kind": "esp32"}
+    log(f"{sha[:12]}: ESP32-S3 hardware checks {job['job_id']} on {devices} (informational)")
+    return True
+
+
+def finish_esp32(gh_: Gh, state: dict[str, Any], job: dict[str, Any]) -> None:
+    """Their own comment on the PR that merged the head; no status. Settled either way."""
+    run = state.pop("running")
+    sha = run["sha"]
+    report = job.get("result") if job.get("status") == "complete" else None
+    if not isinstance(report, dict) or "passed" not in report:
+        report = {
+            "sha": sha,
+            "passed": False,
+            "devices": run["devices"],
+            "rig_error": f"the hardware-checks job ended {job.get('status')}: "
+            f"{job.get('error') or 'no result'}",
+        }
+    body = "\n".join(
+        [
+            f"{ESP32_HEADER}{sha}",
+            "",
+            "Informational: not part of `Hardware test (staging)` until the owner makes the "
+            "ESP32-S3's checks count (blinky_time docs/TEST_BOX.md, \"ESP32-S3 flash and "
+            'recovery"). Run once per head, never retried.',
+            "",
+            *hw_lines(report, retried=False),
+        ]
+    )
+    pr = staging_pr(gh_, sha)
+    url = upsert_comment(gh_, str(pr), f"{ESP32_HEADER}{sha}", body) if pr is not None else None
+    result = (
+        f"rig error: {report['rig_error']}"
+        if report.get("rig_error")
+        else ("passed" if report.get("passed") else f"failed at {hw_failed_at(report)}")
+    )
+    state["esp32"] = {"sha": sha, "result": result[:200]}
+    log(f"{sha[:12]}: ESP32-S3 checks (informational) {result} ({url or 'no PR to comment on'})")
 
 
 # -- stable proposals (proposals.py) -----------------------------------------------------------
@@ -1319,7 +1420,7 @@ def _pass(gh_: Gh, server: Callable[..., Any]) -> dict[str, Any]:
     if state.get("reported") == sha:
         if quality_due(state) == sha:
             quality(gh_, server, state, sha)
-        elif not state.get("queued"):
+        elif not state.get("queued") and not esp32_checks(gh_, server, state, sha):
             propose(gh_, server, state)  # nothing of its own to run: the stable proposals
         save_state(state)
         return state

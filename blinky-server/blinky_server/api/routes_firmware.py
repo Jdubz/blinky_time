@@ -121,10 +121,17 @@ async def fleet_upload(
     }
 
 
+# An ESP32-S3 merged flash image can be the whole flash (arduino-esp32 pads it to the
+# board's 8 MB); the XIAO ESP32-S3's flash is 8 MB, and 16 MB is the largest ESP32-S3 module.
+MAX_HEX_BYTES = 5_000_000
+MAX_ESP32_IMAGE_BYTES = 16 * 1024 * 1024
+
+
 def _check_size(content: bytes) -> None:
     if len(content) < 1000:
         raise HTTPException(400, f"Firmware file too small ({len(content)} bytes)")
-    if len(content) > 5_000_000:
+    limit = MAX_ESP32_IMAGE_BYTES if images.platform_of(content) == "esp32s3" else MAX_HEX_BYTES
+    if len(content) > limit:
         raise HTTPException(400, f"Firmware file too large ({len(content)} bytes)")
 
 
@@ -145,7 +152,7 @@ def _store_firmware(
         version=version,
         stable=stable,
         source=source,
-        keep=get_fleet().recovery_firmware_path,
+        keep=get_fleet().recovery_firmware_paths,
     )
     log.info(
         "Fleet firmware stored: %s (%d bytes, version=%s, stable=%s)",

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import time
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -1159,3 +1160,62 @@ def test_an_idle_pass_runs_the_stable_proposals_and_a_busy_one_doesnt(
     staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
     staging._pass(g, srv)
     assert no_proposals == ["propose"]  # nothing of its own to run
+
+
+# -- the ESP32-S3, informational (docs/TEST_BOX.md, "ESP32-S3 flash and recovery") ------------
+
+S3 = {
+    "id": "02:00:5E:10:00:01",
+    "state": "connected",
+    "platform": "esp32s3",
+    "device_type": "testbox_esp32",
+}
+
+
+def test_the_blocking_checks_never_include_the_esp32s3() -> None:
+    g, srv = GitHub(), Server([HAT, S3], {})
+    staging.run_once(g, srv)
+    assert srv.submitted[0]["device_ids"] == ["C04C56F9"]
+
+
+def test_after_the_quality_suite_the_esp32s3_runs_once_informational(
+    no_proposals: list[str],
+) -> None:
+    g, srv = GitHub(), Server([HAT, S3], {"status": "running"})
+    staging.save_state({"reported": SHA, "hw_passed": SHA})  # quality suite due: S3 waits
+    staging._pass(g, srv)
+    assert srv.submitted == [] and len(srv.quality) == 1
+    staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
+    state = staging._pass(g, srv)
+    assert srv.submitted == [
+        {"sha": SHA, "device_ids": [S3["id"]], "source": "staging", "runner": "staging"}
+    ]
+    assert state["running"]["kind"] == "esp32" and no_proposals == []
+    staging.save_state(state)
+    statuses = list(g.statuses)
+    bad = {**HW_BAD, "devices": [S3["id"]]}
+    srv.job = {"status": "complete", "result": bad}
+    state = staging._pass(g, srv)
+    assert state["esp32"]["sha"] == SHA and state["esp32"]["result"].startswith("failed at lights")
+    assert g.statuses == statuses  # no status, ever
+    (pr, text) = g.comments[-1]
+    assert pr == "12" and text.startswith(staging.ESP32_HEADER + SHA) and "Informational" in text
+    staging.save_state(state)
+    staging._pass(g, srv)  # settled: never again for this head; the proposals go ahead
+    assert len(srv.submitted) == 1 and no_proposals == ["propose"]
+
+
+def test_no_enrolled_esp32s3_leaves_the_pass_to_the_proposals(no_proposals: list[str]) -> None:
+    unconfigured = {**S3, "device_type": None}
+    g, srv = GitHub(), Server([HAT, unconfigured], {"status": "running"})
+    staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
+    staging._pass(g, srv)
+    assert srv.submitted == [] and no_proposals == ["propose"]
+
+
+def test_the_esp32s3_waits_behind_any_other_runners_item(no_proposals: list[str]) -> None:
+    g, srv = GitHub(), Server([HAT, S3], {"status": "running"})
+    srv.mode["waiting"] = [{"runner": "pr-queue", "sha": "b" * 40, "reported_at": time.time()}]
+    staging.save_state({"reported": SHA, "hw_passed": SHA, "quality_done": SHA})
+    staging._pass(g, srv)
+    assert srv.submitted == [] and no_proposals == []

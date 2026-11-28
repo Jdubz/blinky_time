@@ -16,7 +16,10 @@ console's web flasher.
 
 A release is a GitHub Release of blinky-firmware tagged `b<N>` whose assets are:
   blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and, once
-  signed, blinky-things-b<N>.bin + blinky-things-b<N>.otam. Channels:
+  signed, blinky-things-b<N>.bin + blinky-things-b<N>.otam. [blinky_time: and, once
+  blinky-firmware builds it (P3), the ESP32-S3's merged flash image
+  blinky-things-b<N>-esp32s3.bin: optional, but when the manifest lists it, it is
+  downloaded and verified like the rest, and returned as "esp32s3".] Channels:
   candidate  pre-release `b<N>` (CI-built, not yet gated)
   stable     full release `b<N>` + tag `stable-b<N>`; the latest stable is
              the release GitHub marks "Latest" (rollback = re-mark an older one)
@@ -71,6 +74,12 @@ def sha256(path):
         for chunk in iter(lambda: f.read(1 << 16), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# [blinky_time: the ESP32-S3 image (docs/TEST_BOX.md, "ESP32-S3 flash and recovery").]
+def esp32s3_name(n):
+    """The ESP32-S3 merged flash image's asset name (written at 0x0 by hosttools/esp32_flash.py)."""
+    return f"blinky-things-b{n}-esp32s3.bin"
 
 
 def gh(*args, capture=True):
@@ -135,6 +144,7 @@ def download_staging(sha, out_dir):
         "run_id": run_id,
         "hex": r["hex"],
         "uf2": r["uf2"],
+        "esp32s3": r["esp32s3"],
         "manifest": r["manifest"],
         "stable": False,
         "channel": "dev",
@@ -149,7 +159,8 @@ def verify_dev_package(pkg_dir, sha, name=None):
     gen_version.sh stamps, and the hex and UF2 match their sha256s. [blinky_time: and every
     other file in pkg_dir is a regular file listed in the manifest with a matching sha256, so
     nothing unverified sits beside the image (the box's dev loop, docs/DEV_LOOP.md).] Returns
-    {"manifest", "hex", "uf2"}; raises ReleaseError otherwise."""
+    {"manifest", "hex", "uf2", "esp32s3"} [blinky_time: "esp32s3" is the ESP32-S3 image when the
+    manifest lists it, else None]; raises ReleaseError otherwise."""
     if not SHA_RE.match(sha or ""):
         raise ReleaseError(f"not a full commit sha: {sha!r}")
     pkg_dir = Path(pkg_dir)
@@ -185,7 +196,11 @@ def verify_dev_package(pkg_dir, sha, name=None):
             raise ReleaseError(f"{name}: {p.name} is not in the manifest - refusing the package")
         if sha256(p) != files[p.name]:
             raise ReleaseError(f"{name}: {p.name} sha256 mismatch - refusing to use it")
-    return {"manifest": manifest, "hex": pkg_dir / required[0], "uf2": pkg_dir / required[1]}
+    s3 = esp32s3_name(n)
+    if s3 in files and not (pkg_dir / s3).exists():
+        raise ReleaseError(f"{name}: the manifest lists {s3} but it is missing")
+    return {"manifest": manifest, "hex": pkg_dir / required[0], "uf2": pkg_dir / required[1],
+            "esp32s3": pkg_dir / s3 if s3 in files else None}
 
 
 def list_releases():
@@ -244,8 +259,9 @@ def download(tag, out_dir):
     n = m.group(1)
     required = [f"blinky-things-b{n}.hex", f"blinky-things-b{n}.uf2"]
     ota_names = [f"blinky-things-b{n}.bin", f"blinky-things-b{n}.otam"]
+    s3 = esp32s3_name(n)
     # Replace only this release's own assets; never touch anything else in out_dir.
-    for name in ["manifest.json", *required, *ota_names]:
+    for name in ["manifest.json", *required, *ota_names, s3]:
         (out_dir / name).unlink(missing_ok=True)
     gh("release", "download", tag, "--dir", str(out_dir), "--pattern", "manifest.json",
        "-R", repo_slug())
@@ -256,7 +272,7 @@ def download(tag, out_dir):
     listed_ota = [name for name in ota_names if name in files]
     if listed_ota and len(listed_ota) != len(ota_names):
         raise ReleaseError(f"{tag}: manifest lists {listed_ota} but not both OTA files")
-    names = required + listed_ota
+    names = required + listed_ota + ([s3] if s3 in files else [])
     gh("release", "download", tag, "--dir", str(out_dir),
        *[a for name in names for a in ("--pattern", name)], "-R", repo_slug())
     for name in names:
@@ -273,6 +289,7 @@ def download(tag, out_dir):
         "uf2": out_dir / f"blinky-things-b{n}.uf2",
         "bin": out_dir / ota_names[0] if listed_ota else None,
         "otam": out_dir / ota_names[1] if listed_ota else None,
+        "esp32s3": out_dir / s3 if s3 in files else None,
         "manifest": manifest,
         "stable": is_stable(tag),
     }
@@ -353,6 +370,10 @@ def mirror(out_dir, keep):
     return index
 
 
+def _opt(path):
+    return str(path) if path else None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -374,16 +395,17 @@ def main():
         if args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)
             print(json.dumps({"tag": r["tag"], "stable": r["stable"], "hex": str(r["hex"]),
-                              "uf2": str(r["uf2"]), "version": r["manifest"]["version"]}))
+                              "uf2": str(r["uf2"]), "esp32s3": _opt(r["esp32s3"]),
+                              "version": r["manifest"]["version"]}))
         elif args.cmd == "download-staging":
             r = download_staging(args.sha, args.out)
             print(json.dumps({"tag": r["tag"], "stable": False, "channel": "dev", "sha": r["sha"],
                               "run_id": r["run_id"], "hex": str(r["hex"]), "uf2": str(r["uf2"]),
-                              "version": r["manifest"]["version"]}))
+                              "esp32s3": _opt(r["esp32s3"]), "version": r["manifest"]["version"]}))
         elif args.cmd == "verify-dev-package":
             r = verify_dev_package(args.dir, args.sha)
             print(json.dumps({"sha": args.sha, "hex": str(r["hex"]), "uf2": str(r["uf2"]),
-                              "version": r["manifest"]["version"]}))
+                              "esp32s3": _opt(r["esp32s3"]), "version": r["manifest"]["version"]}))
         elif args.cmd == "latest-stable":
             print(latest_stable_tag())
         elif args.cmd == "mirror":

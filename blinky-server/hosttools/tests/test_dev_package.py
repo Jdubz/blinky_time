@@ -67,3 +67,17 @@ def test_the_cli_prints_what_the_server_reads(tmp_path: Path) -> None:
     assert Path(out["hex"]).is_file() and Path(out["uf2"]).is_file()
     bad = subprocess.run([*args, "ab" * 20], capture_output=True, text=True)
     assert bad.returncode == 1 and "not the dev build" in bad.stderr
+
+
+# [blinky_time: the ESP32-S3 image, docs/TEST_BOX.md "ESP32-S3 flash and recovery"]
+def test_the_esp32s3_image_is_optional_and_verified_when_listed(tmp_path: Path) -> None:
+    assert fr.verify_dev_package(package(tmp_path / "a"), SHA)["esp32s3"] is None
+    s3 = "blinky-things-b220-esp32s3.bin"
+    d = package(tmp_path / "b", **{s3: b"\xe9merged"})
+    assert fr.verify_dev_package(d, SHA)["esp32s3"] == d / s3
+    (d / s3).write_bytes(b"\xe9other")
+    with pytest.raises(fr.ReleaseError, match="sha256 mismatch"):
+        fr.verify_dev_package(d, SHA)
+    (d / s3).unlink()
+    with pytest.raises(fr.ReleaseError, match="lists blinky-things-b220-esp32s3.bin but it is missing"):
+        fr.verify_dev_package(d, SHA)

@@ -105,6 +105,8 @@ def _fleet() -> FakeFleet:
             FakeDevice("stuck", state=DeviceState.DFU_RECOVERY),
             FakeDevice("gone", state=DeviceState.DISCONNECTED),
             FakeDevice("esp", platform="esp32s3"),
+            FakeDevice("esp_crashed", state=DeviceState.ERROR, platform="esp32s3"),
+            FakeDevice("odd", platform="unknown"),
         ]
     )
 
@@ -117,6 +119,12 @@ def test_all_means_connected_or_present_nrf52840_only() -> None:
     assert ids == ["porkpie_hat", "ble_lamp"]
 
 
+def test_explicit_list_may_name_an_esp32s3_even_one_not_answering() -> None:
+    """The box's ESP32-S3: esptool reaches its download mode whatever its firmware does."""
+    ids = [d.id for d in dp.resolve_targets(_fleet(), ["porkpie_hat", "esp", "esp_crashed"])]
+    assert ids == ["porkpie_hat", "esp", "esp_crashed"]
+
+
 def test_explicit_list_may_name_a_device_in_its_bootloader() -> None:
     ids = [d.id for d in dp.resolve_targets(_fleet(), ["stuck", "porkpie_hat", "porkpie_hat"])]
     assert ids == ["stuck", "porkpie_hat"]  # de-duplicated, order kept
@@ -127,7 +135,7 @@ def test_explicit_list_may_name_a_device_in_its_bootloader() -> None:
     [
         (["typo"], "unknown"),
         (["gone"], "not flashable"),
-        (["esp"], "not flashable"),
+        (["odd"], "not flashable"),
         ([], "empty device_ids"),
         ("everything", "list of IDs"),
     ],
@@ -568,3 +576,82 @@ async def test_staging_route_validates_its_request(client: AsyncClient) -> None:
         "/api/fleet/deploy-staging", json={"sha": STAGING_SHA, "device_ids": ["nope"]}
     )
     assert r.status_code == 400 and "unknown" in r.text
+
+
+# ── ESP32-S3 targets: the build's ESP32-S3 image, armed for them alone ──
+
+
+def _s3_bytes() -> bytes:
+    img = bytearray(b"\x22" * 4096)
+    img[0] = 0xE9
+    img[12:14] = b"\x09\x00"  # chip id: ESP32-S3
+    return bytes(img)
+
+
+async def test_mixed_deploy_stores_and_links_both_images_and_arms_each_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from blinky_server.firmware import images
+
+    hex_path = tmp_path / "blinky-things-b215.hex"
+    hex_path.write_bytes(b":00000001FF\n" * 200)
+    s3_path = tmp_path / "blinky-things-b215-esp32s3.bin"
+    s3_path.write_bytes(_s3_bytes())
+    out = {"tag": "b215", "stable": True, "hex": str(hex_path), "uf2": "x",
+           "esp32s3": str(s3_path), "version": STABLE_VERSION}  # fmt: skip
+    monkeypatch.setattr(dp.subprocess, "run", _fake_run(json.dumps(out)))
+    fleet = _fleet()
+    flashed: list[Any] = []
+
+    async def flash(_fleet: Any, ids: list[str], fw: Path, _job: Any) -> dict[str, Any]:
+        flashed.append((ids, fw))
+        return {"status": "ok", "message": "flashed"}
+
+    def store(p: Path, tag: str) -> Path:
+        return images.store(p.read_bytes(), version=tag, stable=True, source="deploy").path
+
+    result = await dp.run_deploy(
+        fleet,
+        FakeJob(),
+        release_tag=None,
+        device_ids=["porkpie_hat", "esp"],
+        download_dir=tmp_path,
+        store_firmware=store,
+        flash=flash,
+        settle_s=0.0,
+    )
+    assert result["status"] == "ok", result
+    named = Path(result["steps"]["store"]["firmware_path"])
+    assert named.suffix == ".hex" and flashed == [(["porkpie_hat", "esp"], named)]
+    s3 = images.for_platform(named, "esp32s3")
+    assert s3 is not None and s3.path.suffix == ".bin"
+    assert fleet.recovery == (str(s3.path), ["esp"])  # the last arm: the S3's own
+
+
+async def test_esp32_targets_and_no_esp32_image_is_refused_before_flashing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fleet = _fleet()
+    hex_path = tmp_path / "blinky-things-b215.hex"
+    hex_path.write_text(":00000001FF\n")
+    out = {"tag": "b215", "stable": True, "hex": str(hex_path), "uf2": "x",
+           "version": STABLE_VERSION}  # fmt: skip
+    monkeypatch.setattr(dp.subprocess, "run", _fake_run(json.dumps(out)))
+    flashed: list[Any] = []
+
+    async def flash(_fleet: Any, ids: list[str], fw: Path, _job: Any) -> dict[str, Any]:
+        flashed.append(ids)
+        return {"status": "ok"}
+
+    result = await dp.run_deploy(
+        fleet,
+        FakeJob(),
+        release_tag=None,
+        device_ids=["esp"],
+        download_dir=tmp_path,
+        store_firmware=lambda p, tag: tmp_path / "x.hex",
+        flash=flash,
+        settle_s=0.0,
+    )
+    assert result["failed_step"] == "release" and "no ESP32-S3 image" in result["message"]
+    assert flashed == [] and fleet.recovery is None

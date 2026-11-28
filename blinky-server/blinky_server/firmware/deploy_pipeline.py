@@ -12,7 +12,10 @@ step below reuses the module deploy.sh relies on, and none can be skipped:
    /api/fleet/upload writes, so auto-recovery and /api/fleet/firmware see it).
 3. Targets: an explicit list, or "all" = every nRF52840 that is connected or
    present (deploy.sh's rule). Unknown or unflashable IDs fail loudly.
-   /api/fleet/flash uses the same resolver.
+   /api/fleet/flash uses the same resolver. An explicit list may name an ESP32-S3 (the
+   test box's): it takes the build's ESP32-S3 image (``esp32s3`` in the release client's
+   answer), stored beside the hex as its companion (images.link), and every chip gets its
+   own platform's image (fleet_workflows.flash_one, images.for_platform).
 4. Flash through ``FleetManager.flash_fleet`` (the single flash entry point),
    with auto-recovery armed for exactly these targets.
 5. ``restore_runtime_settings`` then ``save`` over the fleet channels, judged
@@ -40,6 +43,7 @@ from ..device.device import DeviceState
 from ..device.protocol import json_object_from
 from ..paths import hosttools_dir
 from ..work import durable
+from . import images
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +51,10 @@ log = logging.getLogger(__name__)
 ALL_STATES = (DeviceState.CONNECTED, DeviceState.PRESENT)
 # An explicit list may also name a device stuck in its bootloader.
 FLASHABLE_STATES = (DeviceState.CONNECTED, DeviceState.DFU_RECOVERY, DeviceState.PRESENT)
+# An explicit list may name these. An ESP32-S3 is reachable through its USB port whatever its
+# firmware does, so one in ERROR (not answering) is flashable too.
+FLASHABLE_PLATFORMS = ("nrf52840", "esp32s3")
+ESP32_FLASHABLE_STATES = (*FLASHABLE_STATES, DeviceState.ERROR, DeviceState.DISCONNECTED)
 # deploy.sh LOOP_METRICS_SETTLE_S: let the 5 s fps window close before reading it.
 LOOP_METRICS_SETTLE_S = 6.0
 RELEASE_DOWNLOAD_TIMEOUT_S = 300.0
@@ -212,8 +220,8 @@ def resolve_targets(fleet: Any, device_ids: Sequence[str] | str) -> list[Any]:
     """Resolve an explicit target list, or "all", to devices. Fails loudly.
 
     "all" = every nRF52840 that is connected or present (deploy.sh). A list
-    must name only known, flashable nRF52840s: a typo or a stale ID is an
-    error, never silently dropped (the operator would think they deployed
+    must name only known, flashable nRF52840s or ESP32-S3s: a typo or a stale ID
+    is an error, never silently dropped (the operator would think they deployed
     to N devices and actually deployed to N-1).
     """
     if isinstance(device_ids, str):
@@ -235,7 +243,9 @@ def resolve_targets(fleet: Any, device_ids: Sequence[str] | str) -> list[Any]:
         d = fleet.get_device(device_id)
         if d is None:
             missing.append(device_id)
-        elif d.platform != "nrf52840" or d.state not in FLASHABLE_STATES:
+        elif d.platform not in FLASHABLE_PLATFORMS or d.state not in (
+            ESP32_FLASHABLE_STATES if d.platform == "esp32s3" else FLASHABLE_STATES
+        ):
             wrong_state.append(f"{device_id}({d.platform},{d.state.value})")
         else:
             devices.append(d)
@@ -433,14 +443,63 @@ async def _staging_build(sha: str, download_dir: Path) -> dict[str, Any]:
 @durable.step
 async def _dev_build(build_id: str, download_dir: Path) -> dict[str, Any]:
     rel = await asyncio.to_thread(fetch_dev_build, build_id, download_dir)
-    return {**rel, "hex": str(rel["hex"]), "uf2": str(rel.get("uf2", ""))}
+    esp32 = rel.get("esp32s3")
+    return {
+        **rel,
+        "hex": str(rel["hex"]),
+        "uf2": str(rel.get("uf2", "")),
+        "esp32s3": str(esp32) if esp32 else None,
+    }
+
+
+def _platforms(fleet: Any, target_ids: Sequence[str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for device_id in target_ids:
+        d = fleet.get_device(device_id) if fleet is not None else None
+        out.setdefault(getattr(d, "platform", None) or "nrf52840", []).append(device_id)
+    return out
+
+
+def _store_build(
+    store_firmware: Callable[[Path, str], Path],
+    rel: dict[str, Any],
+    version: str,
+    esp32_targets: Sequence[str],
+) -> tuple[Path, Path | None]:
+    """The build's hex, and its ESP32-S3 image when it has one, stored and linked (the hex is
+    what the deploy names; each chip takes its platform's image). ESP32-S3 targets and no
+    ESP32-S3 image: refused before anything is flashed."""
+    if esp32_targets and not rel.get("esp32s3"):
+        raise DeployError(
+            "release",
+            f"{rel.get('tag')} has no ESP32-S3 image, and {list(esp32_targets)} are ESP32-S3s",
+        )
+    if not rel.get("esp32s3"):
+        return store_firmware(Path(rel["hex"]), version), None
+    # The S3 image first: the store's last write is the server's "current firmware" record
+    # (GET /api/fleet/firmware), which stays the hex the deploy names.
+    s3 = store_firmware(Path(rel["esp32s3"]), version)
+    firmware = store_firmware(Path(rel["hex"]), version)
+    if images.platform_of_file(s3) != "esp32s3":
+        raise DeployError("store", f"{rel['esp32s3']} is not an ESP32-S3 image")
+    try:
+        images.link(firmware, s3)
+    except ValueError as e:
+        raise DeployError("store", str(e)) from e
+    return firmware, s3
 
 
 @durable.step
-async def _store_only(store_firmware: Callable[[Path, str], Path], rel: dict[str, Any]) -> str:
+async def _store_only(
+    store_firmware: Callable[[Path, str], Path],
+    rel: dict[str, Any],
+    fleet: Any = None,
+    target_ids: Sequence[str] = (),
+) -> str:
     # Not stable, so never armed for auto-recovery (#251): a test chip that a bad staging
     # build leaves in its bootloader is recovered with the stable image armed before.
-    return str(store_firmware(Path(rel["hex"]), rel["version"]))
+    esp32 = _platforms(fleet, target_ids).get("esp32s3", [])
+    return str(_store_build(store_firmware, rel, rel["version"], esp32)[0])
 
 
 @durable.step
@@ -457,8 +516,14 @@ async def _store_and_arm(
     rel: dict[str, Any],
     target_ids: list[str],
 ) -> str:
-    firmware = store_firmware(Path(rel["hex"]), rel["tag"])
-    fleet.set_recovery_firmware(str(firmware), target_ids)
+    by_platform = _platforms(fleet, target_ids)
+    esp32 = by_platform.pop("esp32s3", [])
+    firmware, s3 = _store_build(store_firmware, rel, rel["tag"], esp32)
+    others = [i for ids in by_platform.values() for i in ids]
+    if others:
+        fleet.set_recovery_firmware(str(firmware), others)
+    if esp32 and s3 is not None:
+        fleet.set_recovery_firmware(str(s3), esp32)
     return str(firmware)
 
 
@@ -554,7 +619,7 @@ async def run_deploy(
             firmware = Path(await _store_and_arm(fleet, store_firmware, rel, target_ids))
             steps["store"] = {"status": "ok", "firmware_path": str(firmware)}
         else:
-            firmware = Path(await _store_only(store_firmware, rel))
+            firmware = Path(await _store_only(store_firmware, rel, fleet, target_ids))
             steps["store"] = {
                 "status": "ok",
                 "firmware_path": str(firmware),

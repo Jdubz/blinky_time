@@ -123,7 +123,7 @@ async def test_a_matching_chip_costs_one_device_show() -> None:
 async def test_nothing_off_the_box_or_for_a_chip_without_an_entry() -> None:
     off = FakeChip(GRID, None)
     await connect(off, FakeFleet(staging=False))
-    stranger = FakeChip("90:70:69:11:F8:10", None)
+    stranger = FakeChip("02:00:5E:10:00:02", None)
     await connect(stranger)
     assert off.sent == [] and stranger.sent == []
 

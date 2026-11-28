@@ -99,17 +99,34 @@ class Board:
     platform: str
     leds: int
     regions: str | None
-    ble_stack: bool  # the chip's `ble` report (nRF52840: NUS advertising, the fleet scanner)
+    # The chip's `ble` report must show each of these (empty: no BLE stack check). Per
+    # platform, from blinky-firmware's SerialConsole::handleBleCommand: the nRF52840 prints
+    # its NUS advertising and its fleet scanner, the ESP32-S3 its fleet advertiser.
+    ble_report: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def ble_stack(self) -> bool:
+        return bool(self.ble_report)
 
 
-# Per board. The ESP32-S3 on the box (fw#50) has no device config and no flash path yet; its
-# entry comes with them (P3).
+# Per board, keyed by the box's device config entry (box_config).
 BOARDS: dict[str, Board] = {
     "testbox_grid": Board(
         platform="nrf52840",
         leds=64,
         regions="~/.local/share/blinky-camera/regions-grid-1000us.npz",
-        ble_stack=True,
+        ble_report=(("advertising", r"advertising=yes"), ("scanner", r"role=scanner state=active")),
+    ),
+    # The XIAO ESP32-S3 Sense (PDM mic board and antenna fitted, owner 2026-11-27) with its own
+    # 8x8 grid on D0 (fw#50, P3). Its checks are informational until the owner makes them
+    # count (docs/TEST_BOX.md, "ESP32-S3 flash and recovery"). No camera region map of its
+    # grid yet, so the lights walk is not applicable; every other check applies, audio
+    # included: no mic or no audio on it is a fault, not "no mic fitted".
+    "testbox_esp32": Board(
+        platform="esp32s3",
+        leds=64,
+        regions=None,
+        ble_report=(("advertiser", r"role=advertiser state=ready"),),
     ),
 }
 
@@ -1217,7 +1234,7 @@ async def _interfaces(
         out.append(await _stream(d))
         out.append(await _settings(d))
         if board is not None and board.ble_stack:
-            out.append(await _ble_stack(d))
+            out.append(await _ble_stack(d, board))
         out.append(await _ble_scan(d, adapter))
         info = await _info(d)
         loop[d.id].append(strict_rules.window(info, time.time(), "interfaces"))
@@ -1346,21 +1363,20 @@ async def _settings(d: Any) -> dict[str, Any]:
     )
 
 
-async def _ble_stack(d: Any) -> dict[str, Any]:
-    rule = "the chip's `ble` report: advertising, its fleet scanner active"
+async def _ble_stack(d: Any, board: Board) -> dict[str, Any]:
+    rule = "the chip's `ble` report: " + ", ".join(name for name, _ in board.ble_report)
     try:
         r = await _reply(d, "ble")
     except Exception as e:
         return check("interfaces", "ble stack", d.id, NO, rule, f"failed: {e}")
-    adv = "advertising=yes" in r
-    scan = re.search(r"role=scanner state=active", r) is not None
+    seen = {name: re.search(pattern, r) is not None for name, pattern in board.ble_report}
     return check(
         "interfaces",
         "ble stack",
         d.id,
-        YES if adv and scan else NO,
+        YES if all(seen.values()) else NO,
         rule,
-        f"advertising {'yes' if adv else 'no'}, scanner {'active' if scan else 'not active'}",
+        ", ".join(f"{name} {'yes' if ok else 'no'}" for name, ok in seen.items()),
     )
 
 

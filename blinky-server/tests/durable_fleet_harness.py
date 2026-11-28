@@ -184,7 +184,9 @@ routes_firmware._store_dev_hex = _store_dev  # type: ignore[assignment]
 testing_workflows.acquire_audio_lock = lambda ids: effect("audio lock") or True  # type: ignore[func-returns-value]
 testing_workflows.release_audio_lock = lambda: effect("audio unlock")
 WORKFLOW = os.environ.get("WORKFLOW", "flash")
-fleet_workflows.images.load = lambda path: SimpleNamespace(version=NEW)
+fleet_workflows.images.load = lambda path: SimpleNamespace(
+    version=NEW, platform="nrf52840", companions=None, path=Path(path)
+)
 fleet_workflows.VERSION_SETTLE_S = 0
 fleet_workflows.VERSION_POLL_S = 0
 fleet_workflows.DEVICE_WAIT_S = 4
