@@ -202,18 +202,30 @@ def require_test_devices(fleet: Any, devices: Sequence[Any]) -> None:
     serves is a test chip (a fleet device is never plugged into the box), so it takes staging
     builds on any of them, with no list to keep in sync with the firmware repo's master (that
     list gated its own first test chip: the box could not test the change that listed it).
-    Each target must be configured: the suite runs on its layout. Anywhere else, refused.
+    Each target must be configured (the suite runs on its layout), or enrolled: a chip with
+    its line in the box's ``box_chips.json`` is configured from its entry when it next connects
+    (testing/box_config.py), so a new chip whose old firmware can't take its entry is flashed
+    first and configured after (the ESP32-S3's first flash, fw#50). Anywhere else, refused.
     """
+    from ..testing import box_config
+
     if not fleet.staging_enabled:
         raise DeployError(
             "targets",
             "staging firmware goes only to the test box's chips (a server started with --staging)",
         )
-    unconfigured = [d.id for d in devices if not d.device_type]
+    unconfigured = [d.id for d in devices if not d.device_type and not _enrolled(box_config, d)]
     if unconfigured:
         raise DeployError(
-            "targets", f"unconfigured chips: {unconfigured}; upload a device config first"
+            "targets",
+            f"unconfigured chips: {unconfigured}; enrol them (box_chips.json) or upload a "
+            "device config first",
         )
+
+
+def _enrolled(box_config: Any, device: Any) -> bool:
+    chips = box_config.box_chips()
+    return bool(chips.get(device.id) or chips.get(getattr(device, "hardware_sn", None) or ""))
 
 
 def resolve_targets(fleet: Any, device_ids: Sequence[str] | str) -> list[Any]:

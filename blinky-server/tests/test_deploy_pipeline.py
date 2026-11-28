@@ -464,6 +464,24 @@ async def test_staging_deploy_refuses_unconfigured_chips_and_all(
     assert match in result["message"] and flashed == [] and stored == []
 
 
+async def test_an_enrolled_chip_is_flashed_before_it_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A new chip whose old firmware can't take its entry (the ESP32-S3's first flash): enrolled
+    in box_chips.json, it takes the staging build and is configured when it next connects."""
+    from blinky_server.testing import box_config
+
+    cfg = tmp_path / "devices"
+    cfg.mkdir()
+    (cfg / "box_chips.json").write_text(json.dumps({"porkpie_hat": "testbox_esp32"}))
+    monkeypatch.setattr(box_config, "CONFIG_DIR", cfg)
+    fleet = _fleet()
+    fleet.devices["porkpie_hat"].device_type = None  # unconfigured, but enrolled
+    result, flashed, _ = await _staging_deploy(fleet, monkeypatch, tmp_path)
+    assert result["status"] == "ok", result
+    assert flashed and flashed[0][0] == ["porkpie_hat"]
+
+
 async def test_staging_deploy_takes_any_configured_chip_on_the_box(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
