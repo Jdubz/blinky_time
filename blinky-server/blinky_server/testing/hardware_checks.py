@@ -453,6 +453,12 @@ async def _lights(
         board = BOARDS.get(board_of.get(d.id) or "")
         path = regions or (board.regions if board else None)
         if path is None:
+            try:
+                out.append(await _leds_applies(d, brightness))
+            finally:
+                if brightness != leds.TEST_BRIGHTNESS:
+                    with contextlib.suppress(Exception):  # the run's level for what follows
+                        await leds.send(d, str(leds.TEST_BRIGHTNESS))
             out.append(
                 check("lights", "walk", d.id, NA, "every LED lights", "no camera view of its LEDs")
             )
@@ -470,15 +476,24 @@ async def _lights(
     return {"checks": out, "rig_error": None, "seconds": round(time.monotonic() - t0, 1)}
 
 
-async def _lights_one(d: Any, regions: str, brightness: int) -> list[dict[str, Any]]:
+async def _leds_applies(d: Any, brightness: int) -> dict[str, Any]:
+    """The runtime ``leds`` override applies (never saved): the lights check's first half, run
+    on every chip, with or without a camera view of its LEDs."""
     rule_leds = f"`leds {brightness}` applies (runtime override)"
     try:
         status = await leds.send(d, str(brightness))
     except (ValueError, OSError, TimeoutError) as e:
-        return [check("lights", "leds", d.id, NO, rule_leds, f"`leds` failed: {e}")]
+        return check("lights", "leds", d.id, NO, rule_leds, f"`leds` failed: {e}")
     if status is None or status.get("brightness") != brightness or not status.get("override"):
-        return [check("lights", "leds", d.id, NO, rule_leds, f"`leds {brightness}` left {status}")]
-    out = [check("lights", "leds", d.id, YES, rule_leds, f"{status}")]
+        return check("lights", "leds", d.id, NO, rule_leds, f"`leds {brightness}` left {status}")
+    return check("lights", "leds", d.id, YES, rule_leds, f"{status}")
+
+
+async def _lights_one(d: Any, regions: str, brightness: int) -> list[dict[str, Any]]:
+    applied = await _leds_applies(d, brightness)
+    if applied["result"] == NO:
+        return [applied]
+    out = [applied]
     info = await _info(d)
     dev = info.get("device") or {}
     width, height = int(dev.get("width") or 0), int(dev.get("height") or 0)
